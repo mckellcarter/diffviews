@@ -109,8 +109,8 @@ class DMD2Visualizer:
             # Fallback to legacy paths
             label_path = self.data_dir / "imagenet_class_labels.json"
         if not label_path.exists():
-            # Fallback to visualizer/data directory
-            label_path = Path(__file__).parent / "data" / "imagenet_standard_class_index.json"
+            # Fallback to package data directory
+            label_path = Path(__file__).parent.parent / "data" / "imagenet_standard_class_index.json"
 
         if label_path.exists():
             with open(label_path, 'r', encoding='utf-8') as f:
