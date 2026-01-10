@@ -89,6 +89,7 @@ class DMD2Visualizer:
         self.load_class_labels()
 
         # Load data
+        print(f"Data directory: {self.data_dir.absolute()}")
         self.load_data()
 
         # Create Dash app
@@ -222,7 +223,12 @@ class DMD2Visualizer:
 
     def load_data(self):
         """Load embeddings or prepare for generation."""
-        if self.embeddings_path and Path(self.embeddings_path).exists():
+        if self.embeddings_path:
+            if not Path(self.embeddings_path).exists():
+                print(f"ERROR: Embeddings file not found: {self.embeddings_path}")
+                print(f"  Absolute path: {Path(self.embeddings_path).absolute()}")
+                self.df = pd.DataFrame()
+                return
             print(f"Loading embeddings from {self.embeddings_path}")
             self.df = pd.read_csv(self.embeddings_path)
 
@@ -261,8 +267,14 @@ class DMD2Visualizer:
         activation_dir = self.data_dir / "activations" / model_type
         metadata_path = self.data_dir / "metadata" / model_type / "dataset_info.json"
 
+        if not activation_dir.exists():
+            print(f"Warning: Activation dir not found: {activation_dir}")
+            print(f"  Expected structure: {self.data_dir}/activations/{model_type}/")
+            return None, None
+
         if not metadata_path.exists():
-            print(f"Warning: No metadata found for {model_type}")
+            print(f"Warning: No metadata found: {metadata_path}")
+            print(f"  Expected: {self.data_dir}/metadata/{model_type}/dataset_info.json")
             return None, None
 
         activations, metadata_df = load_dataset_activations(
