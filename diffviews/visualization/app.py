@@ -40,7 +40,7 @@ class DMD2Visualizer:
                  device: str = 'cuda', num_steps: int = 1, mask_steps: int = None,
                  guidance_scale: float = 1.0, sigma_max: float = 80.0, sigma_min: float = 0.002,
                  label_dropout: float = 0.0, adapter_name: str = 'dmd2-imagenet-64',
-                 umap_n_neighbors: int = 15, umap_min_dist: float = 0.1):
+                 umap_n_neighbors: int = 15, umap_min_dist: float = 0.1, max_classes: int = None):
         """
         Args:
             data_dir: Root data directory
@@ -56,6 +56,7 @@ class DMD2Visualizer:
             adapter_name: Adapter name for model loading (default: dmd2-imagenet-64)
             umap_n_neighbors: UMAP n_neighbors parameter
             umap_min_dist: UMAP min_dist parameter
+            max_classes: Maximum number of classes to load (None=all)
         """
         self.data_dir = Path(data_dir)
         self.embeddings_path = embeddings_path
@@ -70,6 +71,7 @@ class DMD2Visualizer:
         self.adapter_name = adapter_name
         self.umap_n_neighbors = umap_n_neighbors
         self.umap_min_dist = umap_min_dist
+        self.max_classes = max_classes
         self.df = None
         self.umap_params = None
         self.activations = None
@@ -252,6 +254,15 @@ class DMD2Visualizer:
             else:
                 print(f"Note: UMAP pkl not found at {model_path}")
                 print("(Generation still works - uses neighbor averaging)")
+
+            # Filter by max_classes if specified
+            if self.max_classes is not None and 'class_label' in self.df.columns:
+                unique_classes = self.df['class_label'].unique()
+                if len(unique_classes) > self.max_classes:
+                    classes_to_keep = unique_classes[:self.max_classes]
+                    original_count = len(self.df)
+                    self.df = self.df[self.df['class_label'].isin(classes_to_keep)].reset_index(drop=True)
+                    print(f"Filtered to {self.max_classes} classes: {original_count} -> {len(self.df)} samples")
 
             # Always load activations for generation
             if self.activations is None:
@@ -1655,6 +1666,13 @@ def main():
         default=0.1,
         help="UMAP min_dist parameter"
     )
+    parser.add_argument(
+        "--max_classes",
+        "-c",
+        type=int,
+        default=None,
+        help="Maximum classes to load (default: all)"
+    )
     args = parser.parse_args()
 
     visualizer = DMD2Visualizer(
@@ -1670,7 +1688,8 @@ def main():
         label_dropout=args.label_dropout,
         adapter_name=args.adapter,
         umap_n_neighbors=args.umap_n_neighbors,
-        umap_min_dist=args.umap_min_dist
+        umap_min_dist=args.umap_min_dist,
+        max_classes=args.max_classes
     )
 
     visualizer.run(debug=args.debug, port=args.port)
