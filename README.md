@@ -114,6 +114,35 @@ class MyModelAdapter(HookMixin, GeneratorAdapter):
         return {'resolution': 256, 'channels': 3}
 ```
 
+## Visualization App
+
+Launch the interactive dashboard:
+
+```bash
+python -m diffviews.visualization.app \
+  --adapter dmd2-imagenet-64 \
+  --checkpoint_path /path/to/checkpoint/ \
+  --embeddings /path/to/umap_embeddings.csv \
+  --data_dir /path/to/image_data/ \
+  --device cuda \
+  --port 8050
+```
+
+### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--adapter` | Registered adapter name (e.g., `dmd2-imagenet-64`) |
+| `--checkpoint_path` | Path to model checkpoint file/directory |
+| `--embeddings` | Pre-computed UMAP embeddings CSV |
+| `--data_dir` | Directory containing image data (NPZ/JPEG/LMDB) |
+| `--device` | `cuda`, `mps`, or `cpu` |
+| `--num_steps` | Denoising steps (1=single-step, 4/10=multi-step) |
+| `--guidance_scale` | CFG scale (0=uncond, 1=class-cond, >1=amplified) |
+| `--label_dropout` | Use 0.1 for CFG-trained models |
+| `--umap_n_neighbors` | UMAP n_neighbors parameter |
+| `--umap_min_dist` | UMAP min_dist parameter |
+
 ## Package Structure
 
 ```
@@ -131,7 +160,7 @@ diffviews/
 ├── data/               # Data loading
 │   ├── sources.py      # NPZ/JPEG/LMDB sources
 │   └── class_labels.py
-├── visualization/      # Dash app (TODO)
+├── visualization/      # Dash interactive app
 └── utils/              # Utilities
     ├── device.py
     └── checkpoint.py
