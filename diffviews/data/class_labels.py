@@ -14,8 +14,8 @@ _imagenet64_to_standard: Optional[Dict[int, int]] = None
 
 
 def get_data_dir() -> Path:
-    """Get bundled data directory."""
-    return Path(__file__).parent.parent.parent / "data"
+    """Get bundled data directory (diffviews/data/)."""
+    return Path(__file__).parent
 
 
 def load_class_labels(labels_path: Optional[Path] = None) -> Dict[int, str]:
