@@ -5,12 +5,10 @@ Adapted from DMD2/visualizer/test_generate_from_activation.py
 
 import pytest
 import torch
-import numpy as np
 from pathlib import Path
 from PIL import Image
 import tempfile
-import json
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Any
 
 from diffviews.core.generator import (
     generate_with_mask,
@@ -284,7 +282,7 @@ class TestGenerateWithMaskMultistep:
             extract_layers=['encoder_bottleneck']
         )
 
-        images, labels, trajectory = result
+        images, labels, trajectory = result  # pylint: disable=unbalanced-tuple-unpacking
         assert images.shape == (1, 64, 64, 3)
         # Trajectory may be empty if no hooks actually extract
         assert isinstance(trajectory, list)
@@ -304,7 +302,7 @@ class TestGenerateWithMaskMultistep:
             return_intermediates=True
         )
 
-        images, labels, intermediates = result
+        images, labels, intermediates = result  # pylint: disable=unbalanced-tuple-unpacking
         assert len(intermediates) == 4  # One per step
 
     def test_mask_steps_parameter(self):

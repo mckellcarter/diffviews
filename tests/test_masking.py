@@ -100,8 +100,8 @@ class TestActivationMasker:
         adapter = MockAdapter()
         masker = ActivationMasker(adapter)
         assert masker.adapter is adapter
-        assert masker.masks == {}
-        assert masker._handles == []
+        assert not masker.masks
+        assert not masker._handles
 
     def test_set_mask(self):
         """Test setting activation masks."""

@@ -20,7 +20,7 @@ import torch
 from sklearn.neighbors import NearestNeighbors
 
 # For loading dataset activations (UMAP pre-computed via CLI or embeddings CSV)
-from process_embeddings import load_dataset_activations
+from diffviews.processing.umap import load_dataset_activations
 
 # For generation from activations - using diffviews adapter interface
 from diffviews.adapters import get_adapter
@@ -112,7 +112,7 @@ class DMD2Visualizer:
             label_path = Path(__file__).parent / "data" / "imagenet_standard_class_index.json"
 
         if label_path.exists():
-            with open(label_path, 'r') as f:
+            with open(label_path, 'r', encoding='utf-8') as f:
                 raw_labels = json.load(f)
                 # Convert to dict: {class_id: class_name}
                 self.class_labels = {int(k): v[1] for k, v in raw_labels.items()}
@@ -229,7 +229,7 @@ class DMD2Visualizer:
             # Load UMAP params
             param_path = Path(self.embeddings_path).with_suffix('.json')
             if param_path.exists():
-                with open(param_path, 'r') as f:
+                with open(param_path, 'r', encoding='utf-8') as f:
                     self.umap_params = json.load(f)
             else:
                 self.umap_params = {}
@@ -1228,6 +1228,7 @@ class DMD2Visualizer:
                 if self.num_steps > 1:
                     mask_info = f", mask_steps={self.mask_steps or self.num_steps}"
                     print(f"Using {self.num_steps}-step generation{mask_info}")
+                    # pylint: disable=unbalanced-tuple-unpacking
                     images, labels, trajectory_acts, intermediate_imgs = generate_with_mask_multistep(
                         self.adapter,
                         masker,
