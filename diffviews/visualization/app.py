@@ -1199,12 +1199,12 @@ class DMD2Visualizer:
                 if self.activations is None:
                     return "Error: Activations not loaded", dash.no_update, dash.no_update
 
-                # Validate/default generation parameters
-                num_steps = num_steps if num_steps is not None else self.num_steps
-                mask_steps = mask_steps if mask_steps is not None else self.mask_steps
-                guidance_scale = guidance_scale if guidance_scale is not None else self.guidance_scale
-                sigma_max = sigma_max if sigma_max is not None else self.sigma_max
-                sigma_min = sigma_min if sigma_min is not None else self.sigma_min
+                # Validate/default generation parameters and ensure correct types
+                num_steps = int(num_steps) if num_steps is not None else self.num_steps
+                mask_steps = int(mask_steps) if mask_steps is not None else self.mask_steps
+                guidance_scale = float(guidance_scale) if guidance_scale is not None else self.guidance_scale
+                sigma_max = float(sigma_max) if sigma_max is not None else self.sigma_max
+                sigma_min = float(sigma_min) if sigma_min is not None else self.sigma_min
 
                 # NEW: Average neighbors directly in high-D activation space (no inverse_transform!)
                 print(f"[GEN] Neighbors: {all_neighbors}")
