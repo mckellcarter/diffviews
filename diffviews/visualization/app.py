@@ -494,7 +494,7 @@ class DMD2Visualizer:
                                         id="sigma-min-input",
                                         type="number",
                                         min=0.0001,
-                                        max=10,
+                                        max=80,
                                         step=0.001,
                                         value=self.sigma_min,
                                         size="sm"
