@@ -6,6 +6,8 @@ Model-agnostic diffusion activation visualizer.
 
 DiffViews provides tools for visualizing and exploring the internal activations of diffusion models through UMAP embeddings. It uses an adapter interface to support different model architectures.
 
+<img width="1943" height="1284" alt="image" src="https://github.com/user-attachments/assets/e3861312-e7a8-48ca-a37b-7278f011d287" />
+
 ## Features
 
 - **Model-agnostic**: Works with any diffusion model via the `GeneratorAdapter` interface
