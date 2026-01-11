@@ -1161,77 +1161,6 @@ class DMD2Visualizer:
             # Dropdown cleared
             return None, True, "", dash.no_update
 
-        # Validation callback: cap mask_steps when num_steps decreases
-        @self.app.callback(
-            Output("mask-steps-input", "value"),
-            Input("num-steps-input", "value"),
-            State("mask-steps-input", "value"),
-            prevent_initial_call=True
-        )
-        def cap_mask_steps_on_num_change(num_steps, mask_steps):
-            """Cap mask_steps to num_steps when num_steps decreases."""
-            if num_steps is None or mask_steps is None:
-                return dash.no_update
-            num_steps = int(num_steps)
-            mask_steps = int(mask_steps)
-            if mask_steps > num_steps:
-                return num_steps
-            return dash.no_update
-
-        # Validation callback: cap mask_steps when user enters too high value
-        @self.app.callback(
-            Output("mask-steps-input", "value", allow_duplicate=True),
-            Input("mask-steps-input", "n_blur"),
-            State("mask-steps-input", "value"),
-            State("num-steps-input", "value"),
-            prevent_initial_call=True
-        )
-        def cap_mask_steps_on_blur(n_blur, mask_steps, num_steps):
-            """Cap mask_steps to num_steps on blur."""
-            if num_steps is None or mask_steps is None:
-                return dash.no_update
-            num_steps = int(num_steps)
-            mask_steps = int(mask_steps)
-            if mask_steps > num_steps:
-                return num_steps
-            return dash.no_update
-
-        # Validation callback: fix sigma_max when user enters too low value
-        @self.app.callback(
-            Output("sigma-max-input", "value"),
-            Input("sigma-max-input", "n_blur"),
-            State("sigma-max-input", "value"),
-            State("sigma-min-input", "value"),
-            prevent_initial_call=True
-        )
-        def fix_sigma_max_on_blur(n_blur, sigma_max, sigma_min):
-            """Ensure sigma_max > sigma_min on blur."""
-            if sigma_max is None or sigma_min is None:
-                return dash.no_update
-            sigma_max = float(sigma_max)
-            sigma_min = float(sigma_min)
-            if sigma_max <= sigma_min:
-                return round(sigma_min + 0.01, 4)
-            return dash.no_update
-
-        # Validation callback: fix sigma_min when user enters too high value
-        @self.app.callback(
-            Output("sigma-min-input", "value"),
-            Input("sigma-min-input", "n_blur"),
-            State("sigma-min-input", "value"),
-            State("sigma-max-input", "value"),
-            prevent_initial_call=True
-        )
-        def fix_sigma_min_on_blur(n_blur, sigma_min, sigma_max):
-            """Ensure sigma_min < sigma_max on blur."""
-            if sigma_max is None or sigma_min is None:
-                return dash.no_update
-            sigma_max = float(sigma_max)
-            sigma_min = float(sigma_min)
-            if sigma_min >= sigma_max:
-                return round(sigma_max - 0.001, 4)
-            return dash.no_update
-
         @self.app.callback(
             Output("generation-status", "children"),
             Output("umap-scatter", "figure", allow_duplicate=True),
@@ -1276,6 +1205,18 @@ class DMD2Visualizer:
                 guidance_scale = float(guidance_scale) if guidance_scale is not None else self.guidance_scale
                 sigma_max = float(sigma_max) if sigma_max is not None else self.sigma_max
                 sigma_min = float(sigma_min) if sigma_min is not None else self.sigma_min
+
+                # Enforce constraints with auto-correction
+                corrections = []
+                if mask_steps > num_steps:
+                    corrections.append(f"mask_steps {mask_steps}→{num_steps}")
+                    mask_steps = num_steps
+                if sigma_max <= sigma_min:
+                    new_sigma_max = sigma_min + 1.0
+                    corrections.append(f"σ_max {sigma_max}→{new_sigma_max}")
+                    sigma_max = new_sigma_max
+                if corrections:
+                    print(f"[GEN] Auto-corrected: {', '.join(corrections)}")
 
                 # NEW: Average neighbors directly in high-D activation space (no inverse_transform!)
                 print(f"[GEN] Neighbors: {all_neighbors}")
