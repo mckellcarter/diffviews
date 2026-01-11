@@ -1168,11 +1168,15 @@ class DMD2Visualizer:
                 if knn_neighbors:
                     all_neighbors.extend([n for n in knn_neighbors if n not in all_neighbors])
 
-                if not all_neighbors:
-                    return "Error: No neighbors selected", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
                 if self.activations is None:
                     return "Error: Activations not loaded", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+                # If no neighbors, use selected sample with small random shift
+                use_selected_with_noise = False
+                if not all_neighbors:
+                    all_neighbors = [selected_idx]
+                    use_selected_with_noise = True
+                    print("[GEN] No neighbors selected, using selected sample with random noise")
 
                 # Validate/default generation parameters and ensure correct types
                 print(f"[GEN] Raw inputs: steps={num_steps}, mask_steps={mask_steps}")
@@ -1214,7 +1218,15 @@ class DMD2Visualizer:
                 print(f"[GEN] Neighbors: {all_neighbors}")
                 neighbor_activations = self.activations[all_neighbors]
                 center_activation = np.mean(neighbor_activations, axis=0, keepdims=True)
-                print(f"[GEN] Averaged {len(all_neighbors)} neighbor activations in high-D space")
+
+                # Add small random noise when generating from selected sample only
+                if use_selected_with_noise:
+                    noise_scale = 0.01 * np.std(center_activation)
+                    noise = np.random.randn(*center_activation.shape) * noise_scale
+                    center_activation = center_activation + noise
+                    print(f"[GEN] Added random noise (scale={noise_scale:.4f}) to selected sample activation")
+                else:
+                    print(f"[GEN] Averaged {len(all_neighbors)} neighbor activations in high-D space")
                 print(f"[GEN] Center activation shape: {center_activation.shape}")
 
                 # Forward transform to get intended 2D position for visualization
