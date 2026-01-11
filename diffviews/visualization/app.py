@@ -1200,11 +1200,13 @@ class DMD2Visualizer:
                     return "Error: Activations not loaded", dash.no_update, dash.no_update
 
                 # Validate/default generation parameters and ensure correct types
+                print(f"[GEN] Raw inputs: steps={num_steps}, mask={mask_steps}, guidance={guidance_scale}, σ_max={sigma_max}, σ_min={sigma_min}")
                 num_steps = int(num_steps) if num_steps is not None else self.num_steps
                 mask_steps = int(mask_steps) if mask_steps is not None else self.mask_steps
                 guidance_scale = float(guidance_scale) if guidance_scale is not None else self.guidance_scale
                 sigma_max = float(sigma_max) if sigma_max is not None else self.sigma_max
                 sigma_min = float(sigma_min) if sigma_min is not None else self.sigma_min
+                print(f"[GEN] After defaults: steps={num_steps}, mask={mask_steps}, guidance={guidance_scale}, σ_max={sigma_max}, σ_min={sigma_min}")
 
                 # Enforce constraints with auto-correction
                 corrections = []
