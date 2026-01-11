@@ -1169,6 +1169,9 @@ class DMD2Visualizer:
             Output("generation-status", "children"),
             Output("umap-scatter", "figure", allow_duplicate=True),
             Output("selected-point-store", "data", allow_duplicate=True),
+            Output("mask-steps-input", "value", allow_duplicate=True),
+            Output("sigma-max-input", "value", allow_duplicate=True),
+            Output("sigma-min-input", "value", allow_duplicate=True),
             Input("generate-from-neighbors-btn", "n_clicks"),
             State("manual-neighbors-store", "data"),
             State("neighbor-indices-store", "data"),
@@ -1188,7 +1191,7 @@ class DMD2Visualizer:
             try:
                 # Validate inputs
                 if selected_idx is None:
-                    return "Error: No point selected", dash.no_update, dash.no_update
+                    return "Error: No point selected", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
                 # Combine all neighbors
                 all_neighbors = []
@@ -1198,10 +1201,10 @@ class DMD2Visualizer:
                     all_neighbors.extend([n for n in knn_neighbors if n not in all_neighbors])
 
                 if not all_neighbors:
-                    return "Error: No neighbors selected", dash.no_update, dash.no_update
+                    return "Error: No neighbors selected", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
                 if self.activations is None:
-                    return "Error: Activations not loaded", dash.no_update, dash.no_update
+                    return "Error: Activations not loaded", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
                 # Validate/default generation parameters and ensure correct types
                 print(f"[GEN] Raw inputs: steps={num_steps}, mask_steps={mask_steps}")
@@ -1262,7 +1265,7 @@ class DMD2Visualizer:
                 # Load adapter if not already loaded
                 if self.adapter is None:
                     if self.checkpoint_path is None:
-                        return "Error: No checkpoint path provided", dash.no_update, dash.no_update
+                        return "Error: No checkpoint path provided", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
                     print(f"Loading adapter '{self.adapter_name}' ({num_steps}-step)...")
                     AdapterClass = get_adapter(self.adapter_name)
@@ -1579,14 +1582,14 @@ class DMD2Visualizer:
                 )
 
                 success_msg = f"✓ Generated image saved as {next_sample_id}"
-                return success_msg, fig, new_idx
+                return success_msg, fig, new_idx, mask_steps, sigma_max, sigma_min
 
             except Exception as e:
                 import traceback
                 error_msg = f"Error: {str(e)}"
                 print(error_msg)
                 print(traceback.format_exc())
-                return error_msg, dash.no_update, dash.no_update
+                return error_msg, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
         # Clear Generated callback
         @self.app.callback(
