@@ -99,7 +99,7 @@ class DMD2Visualizer:
             __name__,
             external_stylesheets=[dbc.themes.BOOTSTRAP]
         )
-        self.app.title = "DMD2 Activation Visualizer"
+        self.app.title = "Diffusion Generation Visualizer"
         self.build_layout()
         self.register_callbacks()
 
@@ -1160,6 +1160,48 @@ class DMD2Visualizer:
 
             # Dropdown cleared
             return None, True, "", dash.no_update
+
+        # Validation callback: mask_steps <= num_steps
+        @self.app.callback(
+            Output("mask-steps-input", "value"),
+            Input("num-steps-input", "value"),
+            Input("mask-steps-input", "value"),
+            prevent_initial_call=True
+        )
+        def validate_mask_steps(num_steps, mask_steps):
+            """Ensure mask_steps <= num_steps."""
+            if num_steps is None or mask_steps is None:
+                return dash.no_update
+            num_steps = int(num_steps)
+            mask_steps = int(mask_steps)
+            if mask_steps > num_steps:
+                return num_steps
+            return dash.no_update
+
+        # Validation callback: sigma_max > sigma_min
+        @self.app.callback(
+            Output("sigma-max-input", "value"),
+            Output("sigma-min-input", "value"),
+            Input("sigma-max-input", "value"),
+            Input("sigma-min-input", "value"),
+            prevent_initial_call=True
+        )
+        def validate_sigma_range(sigma_max, sigma_min):
+            """Ensure sigma_max > sigma_min."""
+            if sigma_max is None or sigma_min is None:
+                return dash.no_update, dash.no_update
+            sigma_max = float(sigma_max)
+            sigma_min = float(sigma_min)
+            ctx = callback_context
+            trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+            if sigma_max <= sigma_min:
+                if trigger_id == "sigma-max-input":
+                    # User changed sigma_max to be too low, bump it up
+                    return sigma_min + 0.01, dash.no_update
+                else:
+                    # User changed sigma_min to be too high, lower it
+                    return dash.no_update, sigma_max - 0.001
+            return dash.no_update, dash.no_update
 
         @self.app.callback(
             Output("generation-status", "children"),
