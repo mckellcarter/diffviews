@@ -1161,15 +1161,15 @@ class DMD2Visualizer:
             # Dropdown cleared
             return None, True, "", dash.no_update
 
-        # Validation callback: mask_steps <= num_steps
+        # Validation callback: cap mask_steps when num_steps decreases
         @self.app.callback(
             Output("mask-steps-input", "value"),
             Input("num-steps-input", "value"),
-            Input("mask-steps-input", "value"),
+            State("mask-steps-input", "value"),
             prevent_initial_call=True
         )
-        def validate_mask_steps(num_steps, mask_steps):
-            """Ensure mask_steps <= num_steps."""
+        def cap_mask_steps_on_num_change(num_steps, mask_steps):
+            """Cap mask_steps to num_steps when num_steps decreases."""
             if num_steps is None or mask_steps is None:
                 return dash.no_update
             num_steps = int(num_steps)
@@ -1178,30 +1178,59 @@ class DMD2Visualizer:
                 return num_steps
             return dash.no_update
 
-        # Validation callback: sigma_max > sigma_min
+        # Validation callback: cap mask_steps when user enters too high value
         @self.app.callback(
-            Output("sigma-max-input", "value"),
-            Output("sigma-min-input", "value"),
-            Input("sigma-max-input", "value"),
-            Input("sigma-min-input", "value"),
+            Output("mask-steps-input", "value", allow_duplicate=True),
+            Input("mask-steps-input", "n_blur"),
+            State("mask-steps-input", "value"),
+            State("num-steps-input", "value"),
             prevent_initial_call=True
         )
-        def validate_sigma_range(sigma_max, sigma_min):
-            """Ensure sigma_max > sigma_min."""
+        def cap_mask_steps_on_blur(n_blur, mask_steps, num_steps):
+            """Cap mask_steps to num_steps on blur."""
+            if num_steps is None or mask_steps is None:
+                return dash.no_update
+            num_steps = int(num_steps)
+            mask_steps = int(mask_steps)
+            if mask_steps > num_steps:
+                return num_steps
+            return dash.no_update
+
+        # Validation callback: fix sigma_max when user enters too low value
+        @self.app.callback(
+            Output("sigma-max-input", "value"),
+            Input("sigma-max-input", "n_blur"),
+            State("sigma-max-input", "value"),
+            State("sigma-min-input", "value"),
+            prevent_initial_call=True
+        )
+        def fix_sigma_max_on_blur(n_blur, sigma_max, sigma_min):
+            """Ensure sigma_max > sigma_min on blur."""
             if sigma_max is None or sigma_min is None:
-                return dash.no_update, dash.no_update
+                return dash.no_update
             sigma_max = float(sigma_max)
             sigma_min = float(sigma_min)
-            ctx = callback_context
-            trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
             if sigma_max <= sigma_min:
-                if trigger_id == "sigma-max-input":
-                    # User changed sigma_max to be too low, bump it up
-                    return sigma_min + 0.01, dash.no_update
-                else:
-                    # User changed sigma_min to be too high, lower it
-                    return dash.no_update, sigma_max - 0.001
-            return dash.no_update, dash.no_update
+                return round(sigma_min + 0.01, 4)
+            return dash.no_update
+
+        # Validation callback: fix sigma_min when user enters too high value
+        @self.app.callback(
+            Output("sigma-min-input", "value"),
+            Input("sigma-min-input", "n_blur"),
+            State("sigma-min-input", "value"),
+            State("sigma-max-input", "value"),
+            prevent_initial_call=True
+        )
+        def fix_sigma_min_on_blur(n_blur, sigma_min, sigma_max):
+            """Ensure sigma_min < sigma_max on blur."""
+            if sigma_max is None or sigma_min is None:
+                return dash.no_update
+            sigma_max = float(sigma_max)
+            sigma_min = float(sigma_min)
+            if sigma_min >= sigma_max:
+                return round(sigma_max - 0.001, 4)
+            return dash.no_update
 
         @self.app.callback(
             Output("generation-status", "children"),
