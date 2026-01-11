@@ -114,6 +114,34 @@ class MyModelAdapter(HookMixin, GeneratorAdapter):
         return {'resolution': 256, 'channels': 3}
 ```
 
+## Demo
+
+Quick start with included demo data (16 ImageNet classes, ~1168 samples):
+
+```bash
+# Install with visualization extras
+pip install diffviews[viz]
+
+# Download checkpoint from HuggingFace (~3.4GB)
+python scripts/download_checkpoint.py --output_dir checkpoints/dmd2
+
+# Run demo (visualization only)
+python -m diffviews.visualization.app \
+  --data_dir demo_data \
+  --embeddings demo_data/embeddings/demo_embeddings.csv \
+  --device mps  # or cuda/cpu
+
+# Run demo with generation
+python -m diffviews.visualization.app \
+  --data_dir demo_data \
+  --embeddings demo_data/embeddings/demo_embeddings.csv \
+  --checkpoint_path checkpoints/dmd2 \
+  --adapter dmd2-imagenet-64 \
+  --num_steps 6 --mask_steps 1 \
+  --guidance_scale 1.0 --label_dropout 0.1 \
+  --device mps
+```
+
 ## Visualization App
 
 Launch the interactive dashboard:
