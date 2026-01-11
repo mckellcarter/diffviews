@@ -87,6 +87,10 @@ class DMD2Visualizer:
         self.adapter = None       # GeneratorAdapter instance
         self.layer_shapes = {}    # Cache of layer activation shapes
 
+        # Track last used values for detecting which field changed
+        self._last_sigma_max = self.sigma_max
+        self._last_sigma_min = self.sigma_min
+
         # Load class labels
         self.load_class_labels()
 
@@ -1214,10 +1218,24 @@ class DMD2Visualizer:
                     corrections.append(f"mask_steps {mask_steps}→{num_steps}")
                     mask_steps = num_steps
                 if sigma_max <= sigma_min:
-                    # Cap sigma_min to 90% of sigma_max (or 0.001 minimum)
-                    new_sigma_min = max(0.001, sigma_max * 0.9)
-                    corrections.append(f"σ_min {sigma_min}→{new_sigma_min:.4f} (capped to 90% of σ_max)")
-                    sigma_min = new_sigma_min
+                    # Detect which field changed and correct that one
+                    max_changed = (sigma_max != self._last_sigma_max)
+                    min_changed = (sigma_min != self._last_sigma_min)
+
+                    if max_changed and not min_changed:
+                        # User lowered max below min → raise max to min + 10%
+                        new_sigma_max = sigma_min * 1.1
+                        corrections.append(f"σ_max {sigma_max}→{new_sigma_max:.4f}")
+                        sigma_max = new_sigma_max
+                    else:
+                        # User raised min above max (or both changed) → lower min
+                        new_sigma_min = max(0.001, sigma_max * 0.9)
+                        corrections.append(f"σ_min {sigma_min}→{new_sigma_min:.4f}")
+                        sigma_min = new_sigma_min
+
+                # Update tracked values
+                self._last_sigma_max = sigma_max
+                self._last_sigma_min = sigma_min
                 if corrections:
                     print(f"[GEN] Auto-corrected: {', '.join(corrections)}")
 
