@@ -479,7 +479,7 @@ class DMD2Visualizer:
                                         type="number",
                                         min=0.01,
                                         max=200,
-                                        step=1,
+                                        step="any",
                                         value=self.sigma_max,
                                         size="sm"
                                     ),
