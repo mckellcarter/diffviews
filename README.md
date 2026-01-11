@@ -207,4 +207,4 @@ sdxl = "my_package.adapters:SDXLAdapter"
 
 ## License
 
-MIT
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
