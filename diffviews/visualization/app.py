@@ -419,7 +419,11 @@ class DMD2Visualizer:
                             html.Label("Generation Settings", className="fw-bold"),
                             dbc.Row([
                                 dbc.Col([
-                                    html.Label("Steps", className="small"),
+                                    html.Label("Steps", className="small", id="steps-label"),
+                                    dbc.Tooltip(
+                                        "Number of denoising steps. 1=single-step, 4-10=multi-step for higher quality.",
+                                        target="steps-label", placement="top"
+                                    ),
                                     dbc.Input(
                                         id="num-steps-input",
                                         type="number",
@@ -431,7 +435,11 @@ class DMD2Visualizer:
                                     ),
                                 ], width=6),
                                 dbc.Col([
-                                    html.Label("Mask Steps", className="small"),
+                                    html.Label("Mask Steps", className="small", id="mask-steps-label"),
+                                    dbc.Tooltip(
+                                        "Steps to apply activation mask. Default=all steps. Use 1 for first-step-only masking.",
+                                        target="mask-steps-label", placement="top"
+                                    ),
                                     dbc.Input(
                                         id="mask-steps-input",
                                         type="number",
@@ -445,7 +453,11 @@ class DMD2Visualizer:
                             ], className="mb-2"),
                             dbc.Row([
                                 dbc.Col([
-                                    html.Label("Guidance", className="small"),
+                                    html.Label("Guidance", className="small", id="guidance-label"),
+                                    dbc.Tooltip(
+                                        "CFG scale. 0=unconditional, 1=class-conditional, >1=amplified, <0=negative guidance.",
+                                        target="guidance-label", placement="top"
+                                    ),
                                     dbc.Input(
                                         id="guidance-scale-input",
                                         type="number",
@@ -457,7 +469,11 @@ class DMD2Visualizer:
                                     ),
                                 ], width=4),
                                 dbc.Col([
-                                    html.Label("σ max", className="small"),
+                                    html.Label("σ max", className="small", id="sigma-max-label"),
+                                    dbc.Tooltip(
+                                        "Maximum noise level (start of denoising). Higher=more noise.",
+                                        target="sigma-max-label", placement="top"
+                                    ),
                                     dbc.Input(
                                         id="sigma-max-input",
                                         type="number",
@@ -469,7 +485,11 @@ class DMD2Visualizer:
                                     ),
                                 ], width=4),
                                 dbc.Col([
-                                    html.Label("σ min", className="small"),
+                                    html.Label("σ min", className="small", id="sigma-min-label"),
+                                    dbc.Tooltip(
+                                        "Minimum noise level (end of denoising). Lower=cleaner output.",
+                                        target="sigma-min-label", placement="top"
+                                    ),
                                     dbc.Input(
                                         id="sigma-min-input",
                                         type="number",
