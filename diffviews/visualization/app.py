@@ -1,5 +1,5 @@
 """
-Interactive Dash application for DMD2 activation visualization.
+Interactive Dash application for diffusion activation visualization.
 """
 
 import dash
@@ -314,12 +314,40 @@ class DMD2Visualizer:
             print(f"Error loading image {image_path}: {e}")
             return None
 
+    def get_composite_image_base64(self, main_path: str, inset_path: str, size: tuple = (150, 150), inset_ratio: float = 0.35):
+        """Create composite image with inset in upper-left corner."""
+        try:
+            full_main_path = self.data_dir / main_path
+            full_inset_path = self.data_dir / inset_path
+
+            # Load main image
+            main_img = Image.open(full_main_path)
+            main_img = main_img.resize(size, Image.Resampling.LANCZOS)
+
+            # Load and resize inset image
+            inset_img = Image.open(full_inset_path)
+            inset_size = (int(size[0] * inset_ratio), int(size[1] * inset_ratio))
+            inset_img = inset_img.resize(inset_size, Image.Resampling.LANCZOS)
+
+            # Paste inset in upper-left with small margin
+            margin = 4
+            main_img.paste(inset_img, (margin, margin))
+
+            # Convert to base64
+            buffer = BytesIO()
+            main_img.save(buffer, format="PNG")
+            img_str = base64.b64encode(buffer.getvalue()).decode()
+            return f"data:image/png;base64,{img_str}"
+        except Exception as e:
+            print(f"Error compositing images {main_path}, {inset_path}: {e}")
+            return None
+
     def build_layout(self):
         """Build Dash layout."""
         self.app.layout = dbc.Container([
             dbc.Row([
                 dbc.Col([
-                    html.H1("DMD2 Activation Visualizer", className="mb-4")
+                    html.H1("Diffusion Activation Visualizer", className="mb-4")
                 ])
             ]),
 
@@ -573,7 +601,7 @@ class DMD2Visualizer:
                 y='umap_y',
                 color=color_col,
                 hover_data=hover_data + ['sample_id'],
-                title="DMD2 Activation UMAP",
+                title="Activation UMAP",
                 labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
             )
 
@@ -605,10 +633,12 @@ class DMD2Visualizer:
             if curve_number > 0 and 'customdata' in point_data:
                 first_elem = point_data['customdata'][0]
 
-                # Trajectory point: customdata = [sample_id_str, step_str, img_path]
+                # Trajectory point: customdata = [sample_id_str, step_str, img_path, noised_path]
                 if isinstance(first_elem, str):
                     customdata = point_data['customdata']
                     sample_id, step, img_path = customdata[0], customdata[1], customdata[2]
+                    # noised_path may not exist in older data
+                    noised_path = customdata[3] if len(customdata) > 3 else None
 
                     # Look up full trajectory for this sample
                     full_trajectory = None
@@ -624,6 +654,7 @@ class DMD2Visualizer:
                         for traj_point in full_trajectory:
                             traj_step_num = traj_point['step']
                             traj_img_path = traj_point.get('image_path')
+                            traj_noised_path = traj_point.get('noised_path')
                             traj_sigma = traj_point.get('sigma')
                             # Compare step numbers (step string may include sigma suffix like "step 0, σ=80.0")
                             step_prefix = f"step {traj_step_num}"
@@ -636,7 +667,11 @@ class DMD2Visualizer:
                                 step_label = f"Step {traj_point['step']}"
 
                             if traj_img_path:
-                                img_b64 = self.get_image_base64(traj_img_path, size=(150, 150))
+                                # Use composite image if noised input available
+                                if traj_noised_path:
+                                    img_b64 = self.get_composite_image_base64(traj_img_path, traj_noised_path, size=(150, 150))
+                                else:
+                                    img_b64 = self.get_image_base64(traj_img_path, size=(150, 150))
                                 border_style = "3px solid red" if is_hovered else "1px solid #ccc"
                                 opacity = "1" if is_hovered else "0.7"
                                 grid_items.append(html.Div([
@@ -1309,7 +1344,7 @@ class DMD2Visualizer:
                     mask_info = f", mask_steps={mask_steps or num_steps}"
                     print(f"Using {num_steps}-step generation{mask_info}")
                     # pylint: disable=unbalanced-tuple-unpacking
-                    images, labels, trajectory_acts, intermediate_imgs = generate_with_mask_multistep(
+                    images, labels, trajectory_acts, intermediate_imgs, noised_inputs = generate_with_mask_multistep(
                         self.adapter,
                         masker,
                         class_label=class_label,
@@ -1323,7 +1358,8 @@ class DMD2Visualizer:
                         device=self.device,
                         extract_layers=sorted(layers),
                         return_trajectory=True,
-                        return_intermediates=True
+                        return_intermediates=True,
+                        return_noised_inputs=True
                     )
                 else:
                     images, labels = generate_with_mask(
@@ -1336,6 +1372,7 @@ class DMD2Visualizer:
                     )
                     trajectory_acts = None  # No trajectory for single-step
                     intermediate_imgs = None  # No intermediates for single-step
+                    noised_inputs = None  # No noised inputs for single-step
 
                 # Clean up masker hooks
                 masker.remove_hooks()
@@ -1366,13 +1403,21 @@ class DMD2Visualizer:
                             # Project to 2D
                             coords = self.umap_reducer.transform(act_scaled)
 
-                            # Save intermediate image if available
+                            # Save intermediate image (denoised output) if available
                             img_path = None
                             if intermediate_imgs is not None and step_idx < len(intermediate_imgs):
                                 img_filename = f"sample_{len(self.df):06d}_step{step_idx}.png"
                                 img_path = f"images/intermediates/{img_filename}"
                                 full_path = self.data_dir / img_path
                                 Image.fromarray(intermediate_imgs[step_idx][0].numpy()).save(full_path)
+
+                            # Save noised input image if available
+                            noised_path = None
+                            if noised_inputs is not None and step_idx < len(noised_inputs):
+                                noised_filename = f"sample_{len(self.df):06d}_step{step_idx}_noised.png"
+                                noised_path = f"images/intermediates/{noised_filename}"
+                                full_noised_path = self.data_dir / noised_path
+                                Image.fromarray(noised_inputs[step_idx][0].numpy()).save(full_noised_path)
 
                             # Get sigma for this step
                             step_sigma = float(sigmas[step_idx]) if step_idx < len(sigmas) else None
@@ -1382,7 +1427,8 @@ class DMD2Visualizer:
                                 'sigma': step_sigma,
                                 'x': float(coords[0, 0]),
                                 'y': float(coords[0, 1]),
-                                'image_path': img_path
+                                'image_path': img_path,
+                                'noised_path': noised_path
                             })
                         print(f"[GEN] Trajectory: {[(t['step'], round(t['sigma'], 3), round(t['x'], 3), round(t['y'], 3)) for t in trajectory_coords]}")
                     else:
@@ -1394,6 +1440,13 @@ class DMD2Visualizer:
                                 img_path = f"images/intermediates/{img_filename}"
                                 full_path = self.data_dir / img_path
                                 Image.fromarray(intermediate_imgs[step_idx][0].numpy()).save(full_path)
+
+                            # Save noised input image if available
+                            if noised_inputs is not None and step_idx < len(noised_inputs):
+                                noised_filename = f"sample_{len(self.df):06d}_step{step_idx}_noised.png"
+                                noised_path = f"images/intermediates/{noised_filename}"
+                                full_noised_path = self.data_dir / noised_path
+                                Image.fromarray(noised_inputs[step_idx][0].numpy()).save(full_noised_path)
 
                 # Save the generated sample
                 model_type = self.umap_params.get('model', 'imagenet')
@@ -1469,7 +1522,7 @@ class DMD2Visualizer:
                     y='umap_y',
                     color=color_col,
                     hover_data=hover_data + ['sample_id'],
-                    title="DMD2 Activation UMAP",
+                    title="Activation UMAP",
                     labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
                 )
 
@@ -1497,6 +1550,8 @@ class DMD2Visualizer:
                             steps = ['intended'] + step_labels
                             # Image paths: None for intended, then step images
                             img_paths = [None] + [t.get('image_path') for t in trajectory]
+                            # Noised input paths: None for intended, then noised images
+                            noised_paths = [None] + [t.get('noised_path') for t in trajectory]
 
                             # Add trajectory line (dotted)
                             fig.add_trace(go.Scatter(
@@ -1507,7 +1562,7 @@ class DMD2Visualizer:
                                 marker=dict(size=8, color='rgba(0, 180, 0, 0.8)'),
                                 name=f'Trajectory: {sample_id}',
                                 text=steps,
-                                customdata=[[sample_id, step, img] for step, img in zip(steps, img_paths)],
+                                customdata=[[sample_id, step, img, noised] for step, img, noised in zip(steps, img_paths, noised_paths)],
                                 hovertemplate=f'{sample_id}<br>%{{text}}<br>(%{{x:.3f}}, %{{y:.3f}})<extra></extra>',
                                 showlegend=False
                             ))
@@ -1523,7 +1578,7 @@ class DMD2Visualizer:
                                     line=dict(width=2, color='#00CC00')
                                 ),
                                 name='Intended',
-                                customdata=[[sample_id, 'intended', None]],  # Match trajectory format
+                                customdata=[[sample_id, 'intended', None, None]],  # Match trajectory format
                                 hovertemplate=f'{sample_id}<br>intended<br>(%{{x:.3f}}, %{{y:.3f}})<extra></extra>',
                                 showlegend=False
                             ))
@@ -1609,7 +1664,7 @@ class DMD2Visualizer:
                 y='umap_y',
                 color=color_col,
                 hover_data=hover_data + ['sample_id'],
-                title="DMD2 Activation UMAP",
+                title="Activation UMAP",
                 labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
             )
             fig.update_traces(marker=dict(size=5, opacity=0.7))
@@ -1631,7 +1686,7 @@ class DMD2Visualizer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DMD2 Activation Visualizer"
+        description="Diffusion Activation Visualizer"
     )
     parser.add_argument(
         "--data_dir",
