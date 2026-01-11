@@ -1214,9 +1214,9 @@ class DMD2Visualizer:
                     corrections.append(f"mask_steps {mask_steps}→{num_steps}")
                     mask_steps = num_steps
                 if sigma_max <= sigma_min:
-                    new_sigma_max = sigma_min + 1.0
-                    corrections.append(f"σ_max {sigma_max}→{new_sigma_max}")
-                    sigma_max = new_sigma_max
+                    new_sigma_min = max(0.001, sigma_max - 0.001)
+                    corrections.append(f"σ_min {sigma_min}→{new_sigma_min}")
+                    sigma_min = new_sigma_min
                 if corrections:
                     print(f"[GEN] Auto-corrected: {', '.join(corrections)}")
 
