@@ -415,32 +415,75 @@ class DMD2Visualizer:
                             html.Div(id="selected-details", className="mt-2"),
                             html.Hr(),
 
-                            # Neighbor search
-                            html.Label("Find Similar Samples"),
-                            dcc.Slider(
-                                id="k-neighbors-slider",
-                                min=1,
-                                max=20,
-                                step=1,
-                                value=5,
-                                marks={1: "1", 5: "5", 10: "10", 15: "15", 20: "20"},
-                                tooltip={"placement": "bottom", "always_visible": True}
-                            ),
-                            dbc.Button(
-                                "Find Neighbors",
-                                id="find-neighbors-btn",
-                                color="info",
-                                size="sm",
-                                className="w-100 mt-2 mb-2",
-                                disabled=True
-                            ),
+                            # Generation controls
+                            html.Label("Generation Settings", className="fw-bold"),
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Steps", className="small"),
+                                    dbc.Input(
+                                        id="num-steps-input",
+                                        type="number",
+                                        min=1,
+                                        max=50,
+                                        step=1,
+                                        value=self.num_steps,
+                                        size="sm"
+                                    ),
+                                ], width=6),
+                                dbc.Col([
+                                    html.Label("Mask Steps", className="small"),
+                                    dbc.Input(
+                                        id="mask-steps-input",
+                                        type="number",
+                                        min=1,
+                                        max=50,
+                                        step=1,
+                                        value=self.mask_steps or self.num_steps,
+                                        size="sm"
+                                    ),
+                                ], width=6),
+                            ], className="mb-2"),
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Guidance", className="small"),
+                                    dbc.Input(
+                                        id="guidance-scale-input",
+                                        type="number",
+                                        min=-10,
+                                        max=20,
+                                        step=0.1,
+                                        value=self.guidance_scale,
+                                        size="sm"
+                                    ),
+                                ], width=4),
+                                dbc.Col([
+                                    html.Label("σ max", className="small"),
+                                    dbc.Input(
+                                        id="sigma-max-input",
+                                        type="number",
+                                        min=0.01,
+                                        max=200,
+                                        step=1,
+                                        value=self.sigma_max,
+                                        size="sm"
+                                    ),
+                                ], width=4),
+                                dbc.Col([
+                                    html.Label("σ min", className="small"),
+                                    dbc.Input(
+                                        id="sigma-min-input",
+                                        type="number",
+                                        min=0.0001,
+                                        max=10,
+                                        step=0.001,
+                                        value=self.sigma_min,
+                                        size="sm"
+                                    ),
+                                ], width=4),
+                            ], className="mb-2"),
 
                             html.Hr(),
                             html.Label("Generate from Neighbors"),
-                            html.Div(
-                                "Generate new image from neighbor center activation",
-                                className="text-muted small mb-2"
-                            ),
                             dbc.Button(
                                 "Generate Image",
                                 id="generate-from-neighbors-btn",
@@ -664,7 +707,6 @@ class DMD2Visualizer:
         @self.app.callback(
             Output("selected-image", "children"),
             Output("selected-details", "children"),
-            Output("find-neighbors-btn", "disabled"),
             Output("generate-from-neighbors-btn", "disabled"),
             Output("selected-point-store", "data"),
             Output("manual-neighbors-store", "data"),
@@ -681,7 +723,7 @@ class DMD2Visualizer:
             """Handle point selection and neighbor toggling."""
             ctx = callback_context
             if not ctx.triggered:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
             trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
@@ -690,7 +732,6 @@ class DMD2Visualizer:
                 return (
                     "Click a point to select",
                     html.Div("No point selected", className="text-muted small"),
-                    True,  # Disable find neighbors
                     True,  # Disable generate button
                     None,  # Clear selected point
                     [],    # Clear manual neighbors
@@ -700,7 +741,7 @@ class DMD2Visualizer:
 
             # Handle click on plot
             if not clickData or self.df.empty:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
             point_data = clickData['points'][0]
             curve_number = point_data.get('curveNumber', 0)
@@ -710,7 +751,7 @@ class DMD2Visualizer:
                 first_elem = point_data['customdata'][0]
                 # Trajectory point (string customdata) - ignore clicks
                 if isinstance(first_elem, str):
-                    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+                    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
                 # Generated overlay (int customdata)
                 point_idx = first_elem
             else:
@@ -755,8 +796,7 @@ class DMD2Visualizer:
                 return (
                     img_element,
                     html.Div(details),
-                    False,  # Enable find neighbors
-                    not generate_enabled,  # Enable generate if checkpoint and UMAP available
+                    not generate_enabled,  # Enable generate if checkpoint available
                     point_idx,
                     [],     # Reset manual neighbors
                     {"fontSize": "20px", "lineHeight": "1", "display": "inline"},  # Show clear button
@@ -765,7 +805,7 @@ class DMD2Visualizer:
 
             # If clicking the same point, do nothing
             if point_idx == current_selected:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
             # Toggle neighbor: check if in manual or KNN list
             # Priority: if in manual list, remove from manual; if in KNN list, move to manual (for removal); if in neither, add to manual
@@ -785,7 +825,6 @@ class DMD2Visualizer:
 
             # Keep the current display but return updated neighbor lists
             return (
-                dash.no_update,
                 dash.no_update,
                 dash.no_update,
                 dash.no_update,
@@ -841,37 +880,6 @@ class DMD2Visualizer:
                 ))
 
             return img_element, html.Div(details)
-
-        @self.app.callback(
-            Output("neighbor-indices-store", "data"),
-            Input("find-neighbors-btn", "n_clicks"),
-            State("selected-point-store", "data"),
-            State("k-neighbors-slider", "value"),
-            State("manual-neighbors-store", "data"),
-            prevent_initial_call=True
-        )
-        def find_neighbors(n_clicks, selected_idx, k, manual_neighbors):
-            """Find k nearest neighbors in UMAP space (visually intuitive selection)."""
-            if selected_idx is None or self.nn_model is None or self.df.empty:
-                return None
-
-            # Get UMAP coordinates of selected point
-            selected_umap = self.df.iloc[selected_idx:selected_idx+1][['umap_x', 'umap_y']].values
-
-            # Find neighbors in UMAP 2D space (k+1 to exclude the point itself)
-            distances, indices = self.nn_model.kneighbors(selected_umap, n_neighbors=k+1)
-
-            # Remove the point itself (first result)
-            neighbor_indices = indices[0][1:].tolist()
-
-            # Merge with manual neighbors (manual neighbors take priority)
-            if manual_neighbors:
-                # Add manual neighbors that aren't already in the KNN list
-                for manual_idx in manual_neighbors:
-                    if manual_idx not in neighbor_indices:
-                        neighbor_indices.append(manual_idx)
-
-            return neighbor_indices
 
         @self.app.callback(
             Output("neighbor-list", "children"),
@@ -1143,9 +1151,15 @@ class DMD2Visualizer:
             State("selected-point-store", "data"),
             State("umap-scatter", "figure"),
             State("highlighted-class-store", "data"),
+            State("num-steps-input", "value"),
+            State("mask-steps-input", "value"),
+            State("guidance-scale-input", "value"),
+            State("sigma-max-input", "value"),
+            State("sigma-min-input", "value"),
             prevent_initial_call=True
         )
-        def generate_from_neighbors(n_clicks, manual_neighbors, knn_neighbors, selected_idx, current_figure, highlighted_class):
+        def generate_from_neighbors(n_clicks, manual_neighbors, knn_neighbors, selected_idx, current_figure, highlighted_class,
+                                    num_steps, mask_steps, guidance_scale, sigma_max, sigma_min):
             """Generate new image from neighbor center activation."""
             try:
                 # Validate inputs
@@ -1190,7 +1204,7 @@ class DMD2Visualizer:
                     if self.checkpoint_path is None:
                         return "Error: No checkpoint path provided", dash.no_update, dash.no_update
 
-                    print(f"Loading adapter '{self.adapter_name}' ({self.num_steps}-step)...")
+                    print(f"Loading adapter '{self.adapter_name}' ({num_steps}-step)...")
                     AdapterClass = get_adapter(self.adapter_name)
                     self.adapter = AdapterClass.from_checkpoint(
                         self.checkpoint_path,
@@ -1248,19 +1262,19 @@ class DMD2Visualizer:
                     print(f"Using class_label: {class_label} ({self.get_class_name(class_label)})")
 
                 # Use multi-step or single-step generation based on config
-                if self.num_steps > 1:
-                    mask_info = f", mask_steps={self.mask_steps or self.num_steps}"
-                    print(f"Using {self.num_steps}-step generation{mask_info}")
+                if num_steps > 1:
+                    mask_info = f", mask_steps={mask_steps or num_steps}"
+                    print(f"Using {num_steps}-step generation{mask_info}")
                     # pylint: disable=unbalanced-tuple-unpacking
                     images, labels, trajectory_acts, intermediate_imgs = generate_with_mask_multistep(
                         self.adapter,
                         masker,
                         class_label=class_label,
-                        num_steps=self.num_steps,
-                        mask_steps=self.mask_steps,
-                        sigma_max=self.sigma_max,
-                        sigma_min=self.sigma_min,
-                        guidance_scale=self.guidance_scale,
+                        num_steps=num_steps,
+                        mask_steps=mask_steps,
+                        sigma_max=sigma_max,
+                        sigma_min=sigma_min,
+                        guidance_scale=guidance_scale,
                         stochastic=True,
                         num_samples=1,
                         device=self.device,
@@ -1273,7 +1287,7 @@ class DMD2Visualizer:
                         self.adapter,
                         masker,
                         class_label=class_label,
-                        conditioning_sigma=self.sigma_max,
+                        conditioning_sigma=sigma_max,
                         num_samples=1,
                         device=self.device
                     )
@@ -1294,7 +1308,7 @@ class DMD2Visualizer:
 
                     # Compute sigma schedule for this trajectory
                     sigmas = get_denoising_sigmas(
-                        self.num_steps, self.sigma_max, self.sigma_min
+                        num_steps, sigma_max, sigma_min
                     ).cpu().numpy()
 
                     # Only do UMAP projection if reducer is available
