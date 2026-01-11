@@ -493,9 +493,9 @@ class DMD2Visualizer:
                                     dbc.Input(
                                         id="sigma-min-input",
                                         type="number",
-                                        min=0.0001,
+                                        min=0.001,
                                         max=80,
-                                        step=0.001,
+                                        step="any",
                                         value=self.sigma_min,
                                         size="sm"
                                     ),
