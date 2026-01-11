@@ -320,27 +320,10 @@ class DMD2Visualizer:
             ]),
 
             dbc.Row([
-                # Left sidebar - controls + hover preview
+                # Left sidebar - hover preview + class filter
                 dbc.Col([
-                    # Controls card
-                    dbc.Card([
-                        dbc.CardHeader("Controls"),
-                        dbc.CardBody([
-                            # Export button
-                            dbc.Button(
-                                "Export Data",
-                                id="export-btn",
-                                color="secondary",
-                                className="w-100",
-                                disabled=True
-                            ),
-                            dcc.Download(id="download-data"),
-
-                            # Status
-                            html.Hr(),
-                            html.Div(id="status-text", className="text-muted small")
-                        ])
-                    ], className="mb-3"),
+                    # Status line
+                    html.Div(id="status-text", className="text-muted small mb-3"),
 
                     # Hover preview card
                     dbc.Card([
@@ -1058,21 +1041,6 @@ class DMD2Visualizer:
 
             return fig
 
-        @self.app.callback(
-            Output("download-data", "data"),
-            Input("export-btn", "n_clicks"),
-            prevent_initial_call=True
-        )
-        def export_data(n_clicks):
-            """Export current embeddings to CSV."""
-            if self.df.empty:
-                return None
-
-            return dcc.send_data_frame(
-                self.df.to_csv,
-                "dmd2_embeddings_export.csv",
-                index=False
-            )
 
         @self.app.callback(
             Output("class-filter-dropdown", "options"),
