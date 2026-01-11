@@ -114,7 +114,8 @@ def generate_with_mask_multistep(
     seed: Optional[int] = None,
     extract_layers: Optional[List[str]] = None,
     return_trajectory: bool = False,
-    return_intermediates: bool = False
+    return_intermediates: bool = False,
+    return_noised_inputs: bool = False
 ):
     """
     Generate images using multi-step denoising with optional activation masking.
@@ -136,10 +137,12 @@ def generate_with_mask_multistep(
         extract_layers: Layers to extract for trajectory
         return_trajectory: Return activations at each step
         return_intermediates: Return intermediate images
+        return_noised_inputs: Return noised input x_t at each step
 
     Returns:
         (images, labels) or (images, labels, trajectory) or
-        (images, labels, trajectory, intermediates)
+        (images, labels, trajectory, intermediates) or
+        (images, labels, trajectory, intermediates, noised_inputs)
     """
     if mask_steps is None:
         mask_steps = num_steps
@@ -151,6 +154,7 @@ def generate_with_mask_multistep(
 
     trajectory_activations = []
     intermediate_images = []
+    noised_input_images = []
     extractor = None
 
     if return_trajectory and extract_layers:
@@ -180,6 +184,10 @@ def generate_with_mask_multistep(
 
     # Iterative denoising
     for i, sigma in enumerate(sigmas):
+        # Capture noised input before denoising
+        if return_noised_inputs:
+            noised_input_images.append(tensor_to_uint8_image(x))
+
         # Remove mask after mask_steps
         if i == mask_steps and masker is not None:
             masker.remove_hooks()
@@ -236,6 +244,8 @@ def generate_with_mask_multistep(
         result.append(trajectory_activations)
     if return_intermediates:
         result.append(intermediate_images)
+    if return_noised_inputs:
+        result.append(noised_input_images)
 
     return tuple(result) if len(result) > 2 else (result[0], result[1])
 
