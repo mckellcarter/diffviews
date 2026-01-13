@@ -40,10 +40,11 @@ class DMD2Visualizer:
                  device: str = 'cuda', num_steps: int = 1, mask_steps: int = None,
                  guidance_scale: float = 1.0, sigma_max: float = 80.0, sigma_min: float = 0.002,
                  label_dropout: float = 0.0, adapter_name: str = 'dmd2-imagenet-64',
-                 umap_n_neighbors: int = 15, umap_min_dist: float = 0.1, max_classes: int = None):
+                 umap_n_neighbors: int = 15, umap_min_dist: float = 0.1, max_classes: int = None,
+                 edm_data_dir: Path = None, edm_embeddings_path: Path = None):
         """
         Args:
-            data_dir: Root data directory
+            data_dir: Root data directory (DMD2 data)
             embeddings_path: Optional path to precomputed embeddings CSV
             checkpoint_path: Optional path to checkpoint for generation
             device: Device for generation ('cuda', 'mps', or 'cpu')
@@ -57,10 +58,27 @@ class DMD2Visualizer:
             umap_n_neighbors: UMAP n_neighbors parameter
             umap_min_dist: UMAP min_dist parameter
             max_classes: Maximum number of classes to load (None=all)
+            edm_data_dir: Optional EDM data directory
+            edm_embeddings_path: Optional EDM embeddings CSV path
         """
         self.data_dir = Path(data_dir)
         self.embeddings_path = embeddings_path
         self.checkpoint_path = checkpoint_path
+
+        # Model-specific data paths
+        self.model_configs = {
+            'dmd2': {
+                'data_dir': Path(data_dir),
+                'embeddings_path': embeddings_path,
+                'adapter_name': adapter_name,
+            },
+            'edm': {
+                'data_dir': Path(edm_data_dir) if edm_data_dir else None,
+                'embeddings_path': edm_embeddings_path,
+                'adapter_name': 'edm-imagenet-64',
+            }
+        }
+        self.current_model = 'dmd2'
         self.device = device
         self.num_steps = num_steps
         self.mask_steps = mask_steps
@@ -298,6 +316,43 @@ class DMD2Visualizer:
         )
         return activations, metadata_df
 
+    def switch_model(self, model_name: str):
+        """Switch to a different model's data."""
+        if model_name not in self.model_configs:
+            print(f"Unknown model: {model_name}")
+            return False
+
+        config = self.model_configs[model_name]
+        if config['data_dir'] is None or config['embeddings_path'] is None:
+            print(f"Model {model_name} not configured (missing data_dir or embeddings_path)")
+            return False
+
+        print(f"\n=== Switching to {model_name} ===")
+        self.current_model = model_name
+        self.data_dir = config['data_dir']
+        self.embeddings_path = config['embeddings_path']
+        self.adapter_name = config['adapter_name']
+
+        # Reset model-specific state
+        self.adapter = None
+        self.layer_shapes = {}
+        self.umap_reducer = None
+        self.umap_scaler = None
+        self.nn_model = None
+        self.activations = None
+        self.metadata_df = None
+        if hasattr(self, 'generated_trajectories'):
+            self.generated_trajectories = []
+
+        # Reload data
+        self.load_data()
+
+        # Refit KNN
+        if self.df is not None and not self.df.empty:
+            self.fit_nearest_neighbors()
+
+        return True
+
     def get_image_base64(self, image_path: str, size: tuple = (256, 256)):
         """Convert image to base64 for hover display."""
         try:
@@ -348,7 +403,20 @@ class DMD2Visualizer:
             dbc.Row([
                 dbc.Col([
                     html.H1("Diffusion Activation Visualizer", className="mb-4")
-                ])
+                ], width=8),
+                dbc.Col([
+                    html.Label("Model", className="small fw-bold"),
+                    dcc.Dropdown(
+                        id="model-selector",
+                        options=[
+                            {"label": "DMD2 (1-step)", "value": "dmd2"},
+                            {"label": "EDM (multi-step)", "value": "edm"},
+                        ],
+                        value=self.current_model,
+                        clearable=False,
+                        className="mb-2"
+                    )
+                ], width=4, className="d-flex flex-column justify-content-center")
             ]),
 
             dbc.Row([
@@ -553,7 +621,8 @@ class DMD2Visualizer:
             dcc.Store(id="selected-point-store", data=None),
             dcc.Store(id="neighbor-indices-store", data=None),
             dcc.Store(id="manual-neighbors-store", data=[]),
-            dcc.Store(id="highlighted-class-store", data=None)
+            dcc.Store(id="highlighted-class-store", data=None),
+            dcc.Store(id="current-model-store", data=self.current_model)
         ], fluid=True, className="p-4")
 
     def fit_nearest_neighbors(self):
@@ -574,18 +643,29 @@ class DMD2Visualizer:
         @self.app.callback(
             Output("umap-scatter", "figure"),
             Output("status-text", "children"),
+            Output("current-model-store", "data"),
+            Output("selected-point-store", "data"),
+            Output("manual-neighbors-store", "data"),
+            Output("neighbor-indices-store", "data"),
+            Input("model-selector", "value"),
             Input("status-text", "id"),  # Dummy input to trigger on load
+            State("current-model-store", "data"),
             prevent_initial_call=False
         )
-        def update_plot(_):
-            """Display pre-loaded UMAP embeddings."""
+        def update_plot(selected_model, _, current_model):
+            """Display pre-loaded UMAP embeddings, switch model if changed."""
+            # Check if model changed
+            if selected_model and selected_model != current_model:
+                print(f"Model changed: {current_model} -> {selected_model}")
+                self.switch_model(selected_model)
+
             # Fit NN model if not already done
             if self.nn_model is None and not self.df.empty:
                 self.fit_nearest_neighbors()
 
             # Create plot
             if self.df.empty:
-                return go.Figure(), "No data loaded"
+                return go.Figure(), "No data loaded", self.current_model, None, [], None
 
             # Determine color column
             if 'class_label' in self.df.columns:
@@ -595,13 +675,15 @@ class DMD2Visualizer:
                 color_col = None
                 hover_data = []
 
+            # Model-specific title
+            model_label = "DMD2" if self.current_model == "dmd2" else "EDM"
             fig = px.scatter(
                 self.df,
                 x='umap_x',
                 y='umap_y',
                 color=color_col,
                 hover_data=hover_data + ['sample_id'],
-                title="Activation UMAP",
+                title=f"{model_label} Activation UMAP",
                 labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
             )
 
@@ -611,8 +693,9 @@ class DMD2Visualizer:
                 template='plotly_white'
             )
 
-            status = f"Showing {len(self.df)} samples"
-            return fig, status
+            status = f"[{model_label}] {len(self.df)} samples"
+            # Reset selection state on model change
+            return fig, status, self.current_model, None, [], None
 
         @self.app.callback(
             Output("hover-image", "children"),
@@ -1785,6 +1868,18 @@ def main():
         default=None,
         help="Maximum classes to load (default: all)"
     )
+    parser.add_argument(
+        "--edm_data_dir",
+        type=str,
+        default=None,
+        help="EDM data directory (enables model switching)"
+    )
+    parser.add_argument(
+        "--edm_embeddings",
+        type=str,
+        default=None,
+        help="EDM embeddings CSV path"
+    )
     args = parser.parse_args()
 
     visualizer = DMD2Visualizer(
@@ -1801,7 +1896,9 @@ def main():
         adapter_name=args.adapter,
         umap_n_neighbors=args.umap_n_neighbors,
         umap_min_dist=args.umap_min_dist,
-        max_classes=args.max_classes
+        max_classes=args.max_classes,
+        edm_data_dir=args.edm_data_dir,
+        edm_embeddings_path=args.edm_embeddings
     )
 
     visualizer.run(debug=args.debug, port=args.port)
