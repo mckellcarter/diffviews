@@ -116,32 +116,77 @@ class MyModelAdapter(HookMixin, GeneratorAdapter):
         return {'resolution': 256, 'channels': 3}
 ```
 
-## Demo
+## Supported Models
 
-Quick start with included demo data (16 ImageNet classes, ~1168 samples):
+DiffViews supports multiple diffusion models via the adapter interface:
+
+| Model | Adapter | Steps | Description |
+|-------|---------|-------|-------------|
+| DMD2 | `dmd2-imagenet-64` | 1-10 | Distribution Matching Distillation (single/few-step) |
+| EDM | `edm-imagenet-64` | 50-256 | Elucidating Diffusion Models (multi-step) |
+
+## Setup
+
+### 1. Install
 
 ```bash
-# Install with visualization extras
 pip install diffviews[viz]
+```
 
-# Download checkpoint from HuggingFace (~3.4GB)
-python scripts/download_checkpoint.py --output_dir checkpoints/dmd2
+### 2. Download Data & Checkpoints
 
-# Run demo (visualization only)
-python -m diffviews.visualization.app \
-  --data_dir demo_data \
-  --embeddings demo_data/embeddings/demo_embeddings.csv \
-  --device mps  # or cuda/cpu
+All data is hosted on HuggingFace. One command downloads everything:
 
-# Run demo with generation
-python -m diffviews.visualization.app \
-  --data_dir demo_data \
-  --embeddings demo_data/embeddings/demo_embeddings.csv \
-  --checkpoint_path checkpoints/dmd2 \
-  --adapter dmd2-imagenet-64 \
-  --num_steps 6 --mask_steps 1 \
-  --guidance_scale 1.0 --label_dropout 0.1 \
-  --device mps
+```bash
+# Downloads data (~1.7GB) + checkpoints (~2.4GB)
+python scripts/download_data.py
+```
+
+> **Security Warning**: Model checkpoints are pickle (`.pkl`) files which can execute arbitrary code. The checkpoints downloaded by this script are from official sources (NVIDIA EDM, converted DMD2).
+
+**Options:**
+```bash
+# Skip checkpoints (visualization only, no generation)
+python scripts/download_data.py --checkpoints none
+
+# Download only specific checkpoint
+python scripts/download_data.py --checkpoints dmd2
+python scripts/download_data.py --checkpoints edm
+```
+
+### 3. Run
+
+```bash
+python -m diffviews.visualization.app --data_dir data
+```
+
+Device is auto-detected (CUDA > MPS > CPU). Override with `--device cuda|mps|cpu`.
+
+### Data Directory Structure
+
+After download, the `data/` directory contains:
+
+```
+data/
+├── dmd2/
+│   ├── config.json           # Model config (adapter, defaults)
+│   ├── checkpoints/          # Model weights (.pkl)
+│   ├── embeddings/           # UMAP coordinates (.csv) + model (.pkl)
+│   ├── activations/          # Raw activations (.npz)
+│   ├── images/               # Source images
+│   └── metadata/             # Class labels
+└── edm/
+    └── (same structure)
+```
+
+## Demo
+
+Quick start (16 ImageNet classes, ~1168 samples per model):
+
+```bash
+pip install diffviews[viz]
+python scripts/download_data.py
+python -m diffviews.visualization.app --data_dir data
 ```
 
 ## Visualization App
@@ -149,29 +194,37 @@ python -m diffviews.visualization.app \
 Launch the interactive dashboard:
 
 ```bash
+# Multi-model (recommended)
+python -m diffviews.visualization.app --data_dir data
+
+# Single model with explicit paths
 python -m diffviews.visualization.app \
-  --adapter dmd2-imagenet-64 \
-  --checkpoint_path /path/to/checkpoint/ \
-  --embeddings /path/to/umap_embeddings.csv \
-  --data_dir /path/to/image_data/ \
-  --device cuda \
-  --port 8050
+  --data_dir /path/to/model_data/ \
+  --embeddings /path/to/embeddings.csv \
+  --checkpoint_path /path/to/model.pkl \
+  --adapter dmd2-imagenet-64
 ```
+
+### Features
+
+- **Model Switching**: Dropdown to switch between discovered models
+- **Point Selection**: Click points to select, click neighbors to add/remove
+- **Generation**: Generate from averaged neighbor activations
+- **Trajectory View**: Hover generated points to see denoising trajectory
 
 ### CLI Options
 
 | Option | Description |
 |--------|-------------|
-| `--adapter` | Registered adapter name (e.g., `dmd2-imagenet-64`) |
-| `--checkpoint_path` | Path to model checkpoint file/directory |
-| `--embeddings` | Pre-computed UMAP embeddings CSV |
-| `--data_dir` | Directory containing image data (NPZ/JPEG/LMDB) |
-| `--device` | `cuda`, `mps`, or `cpu` |
-| `--num_steps` | Denoising steps (1=single-step, 4/10=multi-step) |
+| `--data_dir` | Root data directory (parent with model subdirs, or single model dir) |
+| `--embeddings` | Pre-computed UMAP embeddings CSV (optional in multi-model mode) |
+| `--checkpoint_path` | Path to model checkpoint pkl (optional if in config.json) |
+| `--adapter` | Adapter name: `dmd2-imagenet-64`, `edm-imagenet-64` |
+| `--device` | `cuda`, `mps`, or `cpu` (auto-detected if omitted) |
+| `--num_steps` | Denoising steps (overrides config default) |
 | `--guidance_scale` | CFG scale (0=uncond, 1=class-cond, >1=amplified) |
-| `--label_dropout` | Use 0.1 for CFG-trained models |
-| `--umap_n_neighbors` | UMAP n_neighbors parameter |
-| `--umap_min_dist` | UMAP min_dist parameter |
+| `--model` | Initial model to load (e.g., `dmd2`, `edm`) |
+| `--port` | Server port (default: 8050) |
 
 ## Package Structure
 

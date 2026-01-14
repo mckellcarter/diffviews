@@ -1,9 +1,0 @@
-{
-  "n_neighbors": 15,
-  "min_dist": 0.1,
-  "layers": [
-    "encoder_bottleneck",
-    "midblock"
-  ],
-  "model": "imagenet_real"
-}

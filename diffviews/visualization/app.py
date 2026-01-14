@@ -31,6 +31,7 @@ from diffviews.core.generator import (
     get_denoising_sigmas,
     save_generated_sample
 )
+from diffviews.utils.device import get_device
 
 
 class DMD2Visualizer:
@@ -41,10 +42,10 @@ class DMD2Visualizer:
                  guidance_scale: float = 1.0, sigma_max: float = 80.0, sigma_min: float = 0.002,
                  label_dropout: float = 0.0, adapter_name: str = 'dmd2-imagenet-64',
                  umap_n_neighbors: int = 15, umap_min_dist: float = 0.1, max_classes: int = None,
-                 edm_data_dir: Path = None, edm_embeddings_path: Path = None):
+                 initial_model: str = None):
         """
         Args:
-            data_dir: Root data directory (DMD2 data)
+            data_dir: Root data directory (parent containing model subdirs or single model dir)
             embeddings_path: Optional path to precomputed embeddings CSV
             checkpoint_path: Optional path to checkpoint for generation
             device: Device for generation ('cuda', 'mps', or 'cpu')
@@ -58,27 +59,11 @@ class DMD2Visualizer:
             umap_n_neighbors: UMAP n_neighbors parameter
             umap_min_dist: UMAP min_dist parameter
             max_classes: Maximum number of classes to load (None=all)
-            edm_data_dir: Optional EDM data directory
-            edm_embeddings_path: Optional EDM embeddings CSV path
+            initial_model: Initial model to load (default: dmd2 or first discovered)
         """
-        self.data_dir = Path(data_dir)
+        self.root_data_dir = Path(data_dir)  # Parent dir containing model subdirs
         self.embeddings_path = embeddings_path
         self.checkpoint_path = checkpoint_path
-
-        # Model-specific data paths
-        self.model_configs = {
-            'dmd2': {
-                'data_dir': Path(data_dir),
-                'embeddings_path': embeddings_path,
-                'adapter_name': adapter_name,
-            },
-            'edm': {
-                'data_dir': Path(edm_data_dir) if edm_data_dir else None,
-                'embeddings_path': edm_embeddings_path,
-                'adapter_name': 'edm-imagenet-64',
-            }
-        }
-        self.current_model = 'dmd2'
         self.device = device
         self.num_steps = num_steps
         self.mask_steps = mask_steps
@@ -105,9 +90,47 @@ class DMD2Visualizer:
         self.adapter = None       # GeneratorAdapter instance
         self.layer_shapes = {}    # Cache of layer activation shapes
 
+        # Multi-model support
+        self.model_configs = {}  # {model_name: {data_dir, adapter, checkpoint, ...}}
+        self.current_model = None
+
         # Track last used values for detecting which field changed
         self._last_sigma_max = self.sigma_max
         self._last_sigma_min = self.sigma_min
+
+        # Discover available models
+        self.discover_models()
+
+        # Set initial model
+        if initial_model and initial_model in self.model_configs:
+            self.current_model = initial_model
+        elif 'dmd2' in self.model_configs:
+            self.current_model = 'dmd2'
+        elif self.model_configs:
+            self.current_model = list(self.model_configs.keys())[0]
+
+        # Set data_dir to current model's directory (or root if single model)
+        if self.current_model and self.current_model in self.model_configs:
+            config = self.model_configs[self.current_model]
+            self.data_dir = config['data_dir']
+            self.adapter_name = config['adapter']
+            if config.get('checkpoint'):
+                # Resolve checkpoint path relative to model dir
+                ckpt = Path(config['checkpoint'])
+                if not ckpt.is_absolute():
+                    candidate = config['data_dir'] / ckpt
+                    if candidate.exists():
+                        ckpt = candidate
+                self.checkpoint_path = ckpt
+            # Use discovered embeddings if no explicit embeddings_path provided
+            if self.embeddings_path is None and config.get('embeddings_path'):
+                self.embeddings_path = config['embeddings_path']
+            # Use model-specific sigma defaults
+            self.sigma_max = config.get('sigma_max', self.sigma_max)
+            self.sigma_min = config.get('sigma_min', self.sigma_min)
+            self.num_steps = config.get('default_steps', self.num_steps)
+        else:
+            self.data_dir = self.root_data_dir
 
         # Load class labels
         self.load_class_labels()
@@ -125,10 +148,101 @@ class DMD2Visualizer:
         self.build_layout()
         self.register_callbacks()
 
+    def discover_models(self):
+        """Discover available models in the data directory."""
+        # Look for subdirectories with config.json + embeddings/
+        for subdir in self.root_data_dir.iterdir():
+            if not subdir.is_dir():
+                continue
+            config_path = subdir / "config.json"
+            embeddings_dir = subdir / "embeddings"
+            if config_path.exists() and embeddings_dir.exists():
+                # Load config
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                # Find embeddings file
+                embeddings_files = list(embeddings_dir.glob("*.csv"))
+                if not embeddings_files:
+                    continue
+                model_name = subdir.name
+                self.model_configs[model_name] = {
+                    'data_dir': subdir,
+                    'adapter': config.get('adapter', 'dmd2-imagenet-64'),
+                    'checkpoint': config.get('checkpoint'),
+                    'sigma_max': config.get('sigma_max', 80.0),
+                    'sigma_min': config.get('sigma_min', 0.002),
+                    'default_steps': config.get('default_steps', 1),
+                    'embeddings_path': embeddings_files[0]  # Use first CSV found
+                }
+                print(f"Discovered model: {model_name} (adapter={config.get('adapter')})")
+
+    def switch_model(self, model_name: str) -> bool:
+        """Switch to a different model.
+
+        Args:
+            model_name: Name of the model to switch to
+
+        Returns:
+            True if switch succeeded, False otherwise
+        """
+        if model_name not in self.model_configs:
+            print(f"Warning: Model '{model_name}' not found in configs")
+            return False
+
+        config = self.model_configs[model_name]
+        print(f"Switching to model: {model_name}")
+
+        # Reset model-specific state
+        self.adapter = None
+        self.layer_shapes = {}
+        self.umap_reducer = None
+        self.umap_scaler = None
+        self.nn_model = None
+        self.activations = None
+        self.metadata_df = None
+
+        # Clear generated samples/trajectories
+        if hasattr(self, 'generated_trajectories'):
+            self.generated_trajectories = []
+
+        # Update paths and config
+        self.current_model = model_name
+        self.data_dir = config['data_dir']
+        self.adapter_name = config['adapter']
+        if config.get('checkpoint'):
+            # Try to resolve checkpoint path - check model dir, root dir, then cwd
+            ckpt = Path(config['checkpoint'])
+            if not ckpt.is_absolute():
+                for base in [config['data_dir'], self.root_data_dir, Path.cwd()]:
+                    candidate = base / ckpt
+                    if candidate.exists():
+                        ckpt = candidate
+                        break
+            self.checkpoint_path = ckpt
+        self.embeddings_path = config['embeddings_path']
+
+        # Apply model-specific defaults
+        self.sigma_max = config.get('sigma_max', 80.0)
+        self.sigma_min = config.get('sigma_min', 0.5)
+        self.num_steps = config.get('default_steps', 5)
+
+        # Reset tracked sigma values
+        self._last_sigma_max = self.sigma_max
+        self._last_sigma_min = self.sigma_min
+
+        # Reload data
+        self.load_data()
+        self.fit_nearest_neighbors()
+
+        return True
+
     def load_class_labels(self):
         """Load ImageNet class labels (Standard ordering)."""
         # All data now uses Standard ImageNet ordering - no remapping needed
-        label_path = self.data_dir / "imagenet_standard_class_index.json"
+        # Check root_data_dir first, then data_dir, then package data
+        label_path = self.root_data_dir / "imagenet_standard_class_index.json"
+        if not label_path.exists():
+            label_path = self.data_dir / "imagenet_standard_class_index.json"
         if not label_path.exists():
             # Fallback to legacy paths
             label_path = self.data_dir / "imagenet_class_labels.json"
@@ -316,43 +430,6 @@ class DMD2Visualizer:
         )
         return activations, metadata_df
 
-    def switch_model(self, model_name: str):
-        """Switch to a different model's data."""
-        if model_name not in self.model_configs:
-            print(f"Unknown model: {model_name}")
-            return False
-
-        config = self.model_configs[model_name]
-        if config['data_dir'] is None or config['embeddings_path'] is None:
-            print(f"Model {model_name} not configured (missing data_dir or embeddings_path)")
-            return False
-
-        print(f"\n=== Switching to {model_name} ===")
-        self.current_model = model_name
-        self.data_dir = config['data_dir']
-        self.embeddings_path = config['embeddings_path']
-        self.adapter_name = config['adapter_name']
-
-        # Reset model-specific state
-        self.adapter = None
-        self.layer_shapes = {}
-        self.umap_reducer = None
-        self.umap_scaler = None
-        self.nn_model = None
-        self.activations = None
-        self.metadata_df = None
-        if hasattr(self, 'generated_trajectories'):
-            self.generated_trajectories = []
-
-        # Reload data
-        self.load_data()
-
-        # Refit KNN
-        if self.df is not None and not self.df.empty:
-            self.fit_nearest_neighbors()
-
-        return True
-
     def get_image_base64(self, image_path: str, size: tuple = (256, 256)):
         """Convert image to base64 for hover display."""
         try:
@@ -403,25 +480,27 @@ class DMD2Visualizer:
             dbc.Row([
                 dbc.Col([
                     html.H1("Diffusion Activation Visualizer", className="mb-4")
-                ], width=8),
-                dbc.Col([
-                    html.Label("Model", className="small fw-bold"),
-                    dcc.Dropdown(
-                        id="model-selector",
-                        options=[
-                            {"label": "DMD2 (1-step)", "value": "dmd2"},
-                            {"label": "EDM (multi-step)", "value": "edm"},
-                        ],
-                        value=self.current_model,
-                        clearable=False,
-                        className="mb-2"
-                    )
-                ], width=4, className="d-flex flex-column justify-content-center")
+                ])
             ]),
 
             dbc.Row([
                 # Left sidebar - hover preview + class filter
                 dbc.Col([
+                    # Model selector card (only show if multiple models)
+                    dbc.Card([
+                        dbc.CardHeader("Model"),
+                        dbc.CardBody([
+                            dcc.Dropdown(
+                                id="model-selector",
+                                options=[{"label": m, "value": m} for m in self.model_configs.keys()],
+                                value=self.current_model,
+                                clearable=False,
+                                className="mb-2"
+                            ),
+                            html.Div(id="model-status", className="text-muted small")
+                        ])
+                    ], className="mb-3", style={"display": "block" if len(self.model_configs) > 1 else "none"}),
+
                     # Status line
                     html.Div(id="status-text", className="text-muted small mb-3"),
 
@@ -622,6 +701,7 @@ class DMD2Visualizer:
             dcc.Store(id="neighbor-indices-store", data=None),
             dcc.Store(id="manual-neighbors-store", data=[]),
             dcc.Store(id="highlighted-class-store", data=None),
+            dcc.Store(id="model-switch-trigger", data=None),
             dcc.Store(id="current-model-store", data=self.current_model)
         ], fluid=True, className="p-4")
 
@@ -640,32 +720,75 @@ class DMD2Visualizer:
     def register_callbacks(self):
         """Register Dash callbacks."""
 
+        # Model switching callback - handles switch, resets stores, and updates figure
+        @self.app.callback(
+            Output("umap-scatter", "figure", allow_duplicate=True),
+            Output("status-text", "children", allow_duplicate=True),
+            Output("model-status", "children"),
+            Output("selected-point-store", "data", allow_duplicate=True),
+            Output("manual-neighbors-store", "data", allow_duplicate=True),
+            Output("neighbor-indices-store", "data", allow_duplicate=True),
+            Output("current-model-store", "data", allow_duplicate=True),
+            Output("highlighted-class-store", "data", allow_duplicate=True),
+            Output("class-filter-dropdown", "value", allow_duplicate=True),
+            Output("clear-class-highlight-btn", "disabled", allow_duplicate=True),
+            Output("selected-image", "children", allow_duplicate=True),
+            Output("selected-details", "children", allow_duplicate=True),
+            Output("clear-selection-btn", "style", allow_duplicate=True),
+            Input("model-selector", "value"),
+            State("current-model-store", "data"),
+            prevent_initial_call=True
+        )
+        def handle_model_switch(new_model, current_model):
+            """Handle model switching - updates figure, resets all state."""
+            if new_model != current_model and new_model in self.model_configs:
+                success = self.switch_model(new_model)
+                if success:
+                    # Build new figure from updated self.df
+                    if self.df.empty:
+                        fig = go.Figure()
+                    else:
+                        color_col = 'class_label' if 'class_label' in self.df.columns else None
+                        hover_data = ['class_label'] if 'class_label' in self.df.columns else []
+                        fig = px.scatter(
+                            self.df,
+                            x='umap_x',
+                            y='umap_y',
+                            color=color_col,
+                            hover_data=hover_data + ['sample_id'],
+                            title="Activation UMAP",
+                            labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
+                        )
+                        fig.update_traces(marker=dict(size=5, opacity=0.7))
+                        fig.update_layout(hovermode='closest', template='plotly_white')
+
+                    status = f"Showing {len(self.df)} samples ({new_model})"
+                    clear_btn_style = {"fontSize": "20px", "lineHeight": "1", "display": "none"}
+                    return (fig, status, f"Switched to {new_model}",
+                            None, [], None, new_model,  # selection stores
+                            None, None, True,  # class filter reset
+                            "Click a point to select",  # selected-image
+                            html.Div("No sample selected", className="text-muted small"),  # selected-details
+                            clear_btn_style)  # hide clear button
+                no_update = dash.no_update
+                return (no_update,) * 13
+            return (dash.no_update,) * 13
+
         @self.app.callback(
             Output("umap-scatter", "figure"),
             Output("status-text", "children"),
-            Output("current-model-store", "data"),
-            Output("selected-point-store", "data"),
-            Output("manual-neighbors-store", "data"),
-            Output("neighbor-indices-store", "data"),
-            Input("model-selector", "value"),
             Input("status-text", "id"),  # Dummy input to trigger on load
-            State("current-model-store", "data"),
             prevent_initial_call=False
         )
-        def update_plot(selected_model, _, current_model):
-            """Display pre-loaded UMAP embeddings, switch model if changed."""
-            # Check if model changed
-            if selected_model and selected_model != current_model:
-                print(f"Model changed: {current_model} -> {selected_model}")
-                self.switch_model(selected_model)
-
+        def update_plot(_):
+            """Display pre-loaded UMAP embeddings."""
             # Fit NN model if not already done
             if self.nn_model is None and not self.df.empty:
                 self.fit_nearest_neighbors()
 
             # Create plot
             if self.df.empty:
-                return go.Figure(), "No data loaded", self.current_model, None, [], None
+                return go.Figure(), "No data loaded"
 
             # Determine color column
             if 'class_label' in self.df.columns:
@@ -675,15 +798,13 @@ class DMD2Visualizer:
                 color_col = None
                 hover_data = []
 
-            # Model-specific title
-            model_label = "DMD2" if self.current_model == "dmd2" else "EDM"
             fig = px.scatter(
                 self.df,
                 x='umap_x',
                 y='umap_y',
                 color=color_col,
                 hover_data=hover_data + ['sample_id'],
-                title=f"{model_label} Activation UMAP",
+                title="Activation UMAP",
                 labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
             )
 
@@ -693,9 +814,9 @@ class DMD2Visualizer:
                 template='plotly_white'
             )
 
-            status = f"[{model_label}] {len(self.df)} samples"
-            # Reset selection state on model change
-            return fig, status, self.current_model, None, [], None
+            model_info = f" ({self.current_model})" if self.current_model else ""
+            status = f"Showing {len(self.df)} samples{model_info}"
+            return fig, status
 
         @self.app.callback(
             Output("hover-image", "children"),
@@ -1584,6 +1705,9 @@ class DMD2Visualizer:
                     self.df['is_generated'] = False
                 self.df = pd.concat([self.df, new_row], ignore_index=True)
 
+                # Append center_activation to activations so generated samples can be re-used
+                self.activations = np.vstack([self.activations, center_activation])
+
                 # Refit nearest neighbors
                 self.fit_nearest_neighbors()
 
@@ -1726,9 +1850,14 @@ class DMD2Visualizer:
             if not n_clicks:
                 return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
-            # Remove generated samples from dataframe
+            # Remove generated samples from dataframe and activations
             if 'is_generated' in self.df.columns:
+                # Count original (non-generated) samples to trim activations
+                n_original = (~self.df['is_generated']).sum()
                 self.df = self.df[~self.df['is_generated']].reset_index(drop=True)
+                # Trim activations to match (generated were appended at end)
+                if self.activations is not None and len(self.activations) > n_original:
+                    self.activations = self.activations[:n_original]
 
             # Clear stored trajectories
             if hasattr(self, 'generated_trajectories'):
@@ -1803,9 +1932,9 @@ def main():
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default=None,
         choices=["cuda", "mps", "cpu"],
-        help="Device for generation"
+        help="Device for generation (auto-detected if not specified)"
     )
     parser.add_argument(
         "--num_steps",
@@ -1869,16 +1998,11 @@ def main():
         help="Maximum classes to load (default: all)"
     )
     parser.add_argument(
-        "--edm_data_dir",
+        "--model",
+        "-m",
         type=str,
         default=None,
-        help="EDM data directory (enables model switching)"
-    )
-    parser.add_argument(
-        "--edm_embeddings",
-        type=str,
-        default=None,
-        help="EDM embeddings CSV path"
+        help="Initial model to load (e.g., dmd2, edm)"
     )
     args = parser.parse_args()
 
@@ -1886,7 +2010,7 @@ def main():
         data_dir=args.data_dir,
         embeddings_path=args.embeddings,
         checkpoint_path=args.checkpoint_path,
-        device=args.device,
+        device=get_device(args.device),
         num_steps=args.num_steps,
         mask_steps=args.mask_steps,
         guidance_scale=args.guidance_scale,
@@ -1897,8 +2021,7 @@ def main():
         umap_n_neighbors=args.umap_n_neighbors,
         umap_min_dist=args.umap_min_dist,
         max_classes=args.max_classes,
-        edm_data_dir=args.edm_data_dir,
-        edm_embeddings_path=args.edm_embeddings
+        initial_model=args.model
     )
 
     visualizer.run(debug=args.debug, port=args.port)
