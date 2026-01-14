@@ -41,9 +41,14 @@ Thumbs.db
 *.lmdb
 *.mdb
 
+# Model data (download via scripts/download_data.py)
+data/
+demo_data/
+demo_data_edm/
+checkpoints/
+
 # Logs
 *.log
 
 # Generated images
 *_generated.png
-demo_data/images/intermediates/
