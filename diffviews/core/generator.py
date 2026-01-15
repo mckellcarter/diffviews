@@ -2,16 +2,17 @@
 Image generation with activation masking using adapter interface.
 """
 
-import torch
-import numpy as np
-from pathlib import Path
-from PIL import Image
 import json
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+import torch
+from PIL import Image
+
 from ..adapters.base import GeneratorAdapter
-from .masking import ActivationMasker
 from .extractor import ActivationExtractor
+from .masking import ActivationMasker
 
 
 def tensor_to_uint8_image(tensor: torch.Tensor) -> torch.Tensor:

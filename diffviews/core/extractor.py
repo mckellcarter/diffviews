@@ -2,11 +2,12 @@
 Activation extraction using adapter interface.
 """
 
-import torch
-import numpy as np
-from typing import Dict, List, Optional
-from pathlib import Path
 import json
+from pathlib import Path
+from typing import Dict, List
+
+import numpy as np
+import torch
 
 from ..adapters.base import GeneratorAdapter
 
@@ -134,3 +135,62 @@ def load_activations(activation_path: Path):
             metadata = json.load(f)
 
     return activations, metadata
+
+
+def convert_to_fast_format(
+    npz_path: Path,
+    output_path: Path = None,
+    layers: List[str] = None
+) -> Path:
+    """
+    Convert compressed .npz to fast-loading .npy format.
+
+    Concatenates specified layers into single pre-flattened array.
+
+    Args:
+        npz_path: Path to .npz file
+        output_path: Output .npy path (default: same name with .npy)
+        layers: Layer names to include (default: all, sorted)
+
+    Returns:
+        Path to created .npy file
+    """
+    npz_path = Path(npz_path)
+    if output_path is None:
+        output_path = npz_path.with_suffix('.npy')
+
+    data = np.load(str(npz_path))
+    layer_names = layers or sorted(data.keys())
+
+    # Concatenate layers in sorted order
+    arrays = [data[name] for name in layer_names]
+    combined = np.concatenate(arrays, axis=1).astype(np.float32)
+
+    np.save(str(output_path), combined)
+
+    # Save layer info for reconstruction
+    info_path = output_path.with_suffix('.npy.json')
+    info = {
+        'layers': layer_names,
+        'shapes': {name: list(data[name].shape) for name in layer_names},
+        'total_features': combined.shape[1],
+        'num_samples': combined.shape[0]
+    }
+    with open(info_path, 'w') as f:
+        json.dump(info, f, indent=2)
+
+    return output_path
+
+
+def load_fast_activations(npy_path: Path, mmap_mode: str = 'r') -> np.ndarray:
+    """
+    Load pre-concatenated activations with memory mapping.
+
+    Args:
+        npy_path: Path to .npy file
+        mmap_mode: 'r' for read-only mmap, None for full load
+
+    Returns:
+        Activation matrix (N, D)
+    """
+    return np.load(str(npy_path), mmap_mode=mmap_mode)

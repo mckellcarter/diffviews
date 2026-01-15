@@ -1,6 +1,7 @@
 """Hook management utilities for adapters."""
 
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, List, Optional
+
 import torch
 
 

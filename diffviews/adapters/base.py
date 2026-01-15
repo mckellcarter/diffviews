@@ -1,7 +1,8 @@
 """Abstract base class for diffusion model adapters."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 
 

@@ -1,7 +1,8 @@
 """DMD2 ImageNet 64x64 adapter implementing the GeneratorAdapter interface."""
 
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
-from typing import Dict, List, Tuple, Optional, Any
 
 from .base import GeneratorAdapter
 from .hooks import HookMixin

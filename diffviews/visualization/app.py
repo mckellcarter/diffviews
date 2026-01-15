@@ -2,35 +2,36 @@
 Interactive Dash application for diffusion activation visualization.
 """
 
+import argparse
+import base64
+import json
+import pickle
+from io import BytesIO
+from pathlib import Path
+
 import dash
-from dash import dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
+import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from PIL import Image
-import base64
-from io import BytesIO
-import json
-import argparse
-import pickle
 import torch
+from dash import Input, Output, State, callback_context, dcc, html
+from PIL import Image
 from sklearn.neighbors import NearestNeighbors
-
-# For loading dataset activations (UMAP pre-computed via CLI or embeddings CSV)
-from diffviews.processing.umap import load_dataset_activations
 
 # For generation from activations - using diffviews adapter interface
 from diffviews.adapters import get_adapter
-from diffviews.core.masking import ActivationMasker, unflatten_activation
 from diffviews.core.generator import (
     generate_with_mask,
     generate_with_mask_multistep,
     get_denoising_sigmas,
-    save_generated_sample
+    save_generated_sample,
 )
+from diffviews.core.masking import ActivationMasker, unflatten_activation
+
+# For loading dataset activations (UMAP pre-computed via CLI or embeddings CSV)
+from diffviews.processing.umap import load_dataset_activations
 from diffviews.utils.device import get_device
 
 
@@ -841,8 +842,8 @@ class DMD2Visualizer:
                 if isinstance(first_elem, str):
                     customdata = point_data['customdata']
                     sample_id, step, img_path = customdata[0], customdata[1], customdata[2]
-                    # noised_path may not exist in older data
-                    noised_path = customdata[3] if len(customdata) > 3 else None
+                    # noised_path may not exist in older data (unused but kept for future)
+                    _noised_path = customdata[3] if len(customdata) > 3 else None  # noqa: F841
 
                     # Look up full trajectory for this sample
                     full_trajectory = None

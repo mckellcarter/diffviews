@@ -1,6 +1,7 @@
 """Adapter registration and discovery."""
 
-from typing import Dict, Type, Optional
+from typing import Dict, Optional, Type
+
 from .base import GeneratorAdapter
 
 _ADAPTERS: Dict[str, Type[GeneratorAdapter]] = {}

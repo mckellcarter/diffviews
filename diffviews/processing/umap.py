@@ -2,17 +2,18 @@
 UMAP embedding computation for activation visualization.
 """
 
-import numpy as np
-import pandas as pd
-from pathlib import Path
-from tqdm import tqdm
 import json
 import pickle
-from umap import UMAP
-from sklearn.preprocessing import StandardScaler
+from pathlib import Path
 from typing import Optional, Tuple
 
-from ..core.extractor import load_activations, flatten_activations
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
+from umap import UMAP
+
+from ..core.extractor import flatten_activations, load_activations, load_fast_activations
 
 
 def load_dataset_activations(
@@ -20,29 +21,74 @@ def load_dataset_activations(
     metadata_path: Path,
     max_samples: Optional[int] = None,
     batch_size: int = 500,
-    low_memory: bool = False
+    low_memory: bool = False,
+    use_mmap: bool = True
 ) -> Tuple[np.ndarray, pd.DataFrame]:
     """
-    Load all activations from dataset using batched loading.
+    Load all activations from dataset.
+
+    Prefers fast .npy format if available, falls back to .npz.
 
     Args:
-        activation_dir: Directory containing activation .npz files
+        activation_dir: Directory containing activation files
         metadata_path: Path to dataset_info.json
         max_samples: Optional limit on samples
-        batch_size: Samples per batch
-        low_memory: Use memory-mapped temp file
+        batch_size: Samples per batch (only for .npz fallback)
+        low_memory: Use memory-mapped temp file (only for .npz)
+        use_mmap: Use memory mapping for .npy files (fast)
 
     Returns:
         (activation_matrix, metadata_df)
     """
-    import tempfile
-
     with open(metadata_path, 'r') as f:
         dataset_info = json.load(f)
 
     samples = dataset_info['samples'][:max_samples] if max_samples else dataset_info['samples']
 
-    print(f"Loading {len(samples)} samples in batches of {batch_size}...")
+    # Check for fast .npy format first
+    npy_files = list(activation_dir.glob("*.npy"))
+    if npy_files:
+        return _load_fast_format(activation_dir, samples, npy_files[0], use_mmap)
+
+    # Fallback to slow .npz loading
+    return _load_npz_format(activation_dir, samples, batch_size, low_memory)
+
+
+def _load_fast_format(
+    activation_dir: Path,
+    samples: list,
+    npy_path: Path,
+    use_mmap: bool
+) -> Tuple[np.ndarray, pd.DataFrame]:
+    """Load from pre-concatenated .npy file."""
+    import time
+    start = time.time()
+
+    mmap_mode = 'r' if use_mmap else None
+    activation_matrix = load_fast_activations(npy_path, mmap_mode=mmap_mode)
+
+    # If mmap, copy to regular array for modification safety
+    if use_mmap:
+        activation_matrix = np.array(activation_matrix)
+
+    elapsed = time.time() - start
+    print(f"Fast-loaded {len(samples)} samples in {elapsed:.2f}s from {npy_path.name}")
+
+    metadata_df = pd.DataFrame(samples)
+    return activation_matrix, metadata_df
+
+
+def _load_npz_format(
+    activation_dir: Path,
+    samples: list,
+    batch_size: int,
+    low_memory: bool
+) -> Tuple[np.ndarray, pd.DataFrame]:
+    """Load from compressed .npz files (slow fallback)."""
+    import tempfile
+
+    print(f"Loading {len(samples)} samples in batches of {batch_size} (slow .npz format)...")
+    print("Tip: Run 'diffviews convert-activations' for 30x faster loading")
 
     # Determine activation shape from first sample
     first_sample = samples[0]
@@ -50,10 +96,8 @@ def load_dataset_activations(
     if 'activation_path' in first_sample:
         data_root = activation_dir.parent.parent
         first_path = data_root / first_sample['activation_path']
-        first_batch_index = first_sample['batch_index']
     else:
         first_path = activation_dir / f"{first_sample['sample_id']}.npz"
-        first_batch_index = 0
 
     first_act, _ = load_activations(first_path)
     first_flat = flatten_activations(first_act)
