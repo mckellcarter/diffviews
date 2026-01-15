@@ -139,7 +139,7 @@ All data is hosted on HuggingFace. One command downloads everything:
 
 ```bash
 # Downloads data (~1.7GB) + checkpoints (~2.4GB)
-python scripts/download_data.py
+diffviews download
 ```
 
 > **Security Warning**: Model checkpoints are pickle (`.pkl`) files which can execute arbitrary code. The checkpoints downloaded by this script are from official sources (NVIDIA EDM, converted DMD2).
@@ -147,18 +147,20 @@ python scripts/download_data.py
 **Options:**
 ```bash
 # Skip checkpoints (visualization only, no generation)
-python scripts/download_data.py --checkpoints none
+diffviews download --checkpoints none
 
 # Download only specific checkpoint
-python scripts/download_data.py --checkpoints dmd2
-python scripts/download_data.py --checkpoints edm
+diffviews download --checkpoints dmd2
+diffviews download --checkpoints edm
 ```
 
 ### 3. Run
 
 ```bash
-python -m diffviews.visualization.app --data_dir data
+diffviews viz --data-dir data
 ```
+
+Or without install: `python -m diffviews.scripts.cli viz --data-dir data`
 
 Device is auto-detected (CUDA > MPS > CPU). Override with `--device cuda|mps|cpu`.
 
@@ -172,7 +174,7 @@ data/
 │   ├── config.json           # Model config (adapter, defaults)
 │   ├── checkpoints/          # Model weights (.pkl)
 │   ├── embeddings/           # UMAP coordinates (.csv) + model (.pkl)
-│   ├── activations/          # Raw activations (.npz)
+│   ├── activations/          # Pre-concatenated activations (.npy)
 │   ├── images/               # Source images
 │   └── metadata/             # Class labels
 └── edm/
@@ -185,8 +187,8 @@ Quick start (16 ImageNet classes, ~1168 samples per model):
 
 ```bash
 pip install diffviews[viz]
-python scripts/download_data.py
-python -m diffviews.visualization.app --data_dir data
+diffviews download
+diffviews viz
 ```
 
 ## Visualization App
@@ -195,13 +197,13 @@ Launch the interactive dashboard:
 
 ```bash
 # Multi-model (recommended)
-python -m diffviews.visualization.app --data_dir data
+diffviews viz --data-dir data
 
 # Single model with explicit paths
-python -m diffviews.visualization.app \
-  --data_dir /path/to/model_data/ \
+diffviews viz \
+  --data-dir /path/to/model_data/ \
   --embeddings /path/to/embeddings.csv \
-  --checkpoint_path /path/to/model.pkl \
+  --checkpoint-path /path/to/model.pkl \
   --adapter dmd2-imagenet-64
 ```
 
@@ -214,17 +216,31 @@ python -m diffviews.visualization.app \
 
 ### CLI Options
 
+```bash
+diffviews viz --help
+```
+
 | Option | Description |
 |--------|-------------|
-| `--data_dir` | Root data directory (parent with model subdirs, or single model dir) |
+| `--data-dir` | Root data directory (parent with model subdirs, or single model dir) |
 | `--embeddings` | Pre-computed UMAP embeddings CSV (optional in multi-model mode) |
-| `--checkpoint_path` | Path to model checkpoint pkl (optional if in config.json) |
+| `--checkpoint-path` | Path to model checkpoint pkl (optional if in config.json) |
 | `--adapter` | Adapter name: `dmd2-imagenet-64`, `edm-imagenet-64` |
 | `--device` | `cuda`, `mps`, or `cpu` (auto-detected if omitted) |
-| `--num_steps` | Denoising steps (overrides config default) |
-| `--guidance_scale` | CFG scale (0=uncond, 1=class-cond, >1=amplified) |
-| `--model` | Initial model to load (e.g., `dmd2`, `edm`) |
+| `--num-steps` | Denoising steps (overrides config default) |
+| `--guidance-scale` | CFG scale (0=uncond, 1=class-cond, >1=amplified) |
+| `--model`, `-m` | Initial model to load (e.g., `dmd2`, `edm`) |
 | `--port` | Server port (default: 8050) |
+
+### Other Commands
+
+```bash
+# Convert .npz activations to fast .npy format (if you have old data)
+diffviews convert data/dmd2
+
+# Show all commands
+diffviews --help
+```
 
 ## Package Structure
 
@@ -235,14 +251,13 @@ diffviews/
 │   ├── hooks.py        # HookMixin utilities
 │   └── registry.py     # Adapter registration
 ├── core/               # Core functionality
-│   ├── extractor.py    # Activation extraction
+│   ├── extractor.py    # Activation extraction + fast format conversion
 │   ├── masking.py      # Activation masking
 │   └── generator.py    # Generation utilities
 ├── processing/         # UMAP computation
 │   └── umap.py
-├── data/               # Data loading
-│   ├── sources.py      # NPZ/JPEG/LMDB sources
-│   └── class_labels.py
+├── scripts/            # CLI entry points
+│   └── cli.py          # diffviews command (convert, viz)
 ├── visualization/      # Dash interactive app
 └── utils/              # Utilities
     ├── device.py

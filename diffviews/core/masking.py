@@ -2,10 +2,10 @@
 Activation masking using adapter interface.
 """
 
-import torch
+from typing import Dict, List
+
 import numpy as np
-from typing import Dict, List, Optional
-from pathlib import Path
+import torch
 
 from ..adapters.base import GeneratorAdapter
 
