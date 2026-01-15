@@ -235,7 +235,7 @@ def main():
     viz_parser.add_argument(
         "--num-steps",
         type=int,
-        default=1,
+        default=5,
         help="Number of denoising steps"
     )
     viz_parser.add_argument(
@@ -253,7 +253,7 @@ def main():
     viz_parser.add_argument(
         "--sigma-min",
         type=float,
-        default=0.002,
+        default=0.5,
         help="Minimum sigma for denoising"
     )
     viz_parser.add_argument(
@@ -265,7 +265,7 @@ def main():
     viz_parser.add_argument(
         "--mask-steps",
         type=int,
-        default=None,
+        default=1,
         help="Steps to apply activation mask"
     )
     viz_parser.add_argument(

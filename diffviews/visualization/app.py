@@ -39,8 +39,8 @@ class DMD2Visualizer:
     """Main visualizer application."""
 
     def __init__(self, data_dir: Path, embeddings_path: Path = None, checkpoint_path: Path = None,
-                 device: str = 'cuda', num_steps: int = 1, mask_steps: int = None,
-                 guidance_scale: float = 1.0, sigma_max: float = 80.0, sigma_min: float = 0.002,
+                 device: str = 'cuda', num_steps: int = 5, mask_steps: int = 1,
+                 guidance_scale: float = 1.0, sigma_max: float = 80.0, sigma_min: float = 0.5,
                  label_dropout: float = 0.0, adapter_name: str = 'dmd2-imagenet-64',
                  umap_n_neighbors: int = 15, umap_min_dist: float = 0.1, max_classes: int = None,
                  initial_model: str = None):
@@ -171,8 +171,8 @@ class DMD2Visualizer:
                     'adapter': config.get('adapter', 'dmd2-imagenet-64'),
                     'checkpoint': config.get('checkpoint'),
                     'sigma_max': config.get('sigma_max', 80.0),
-                    'sigma_min': config.get('sigma_min', 0.002),
-                    'default_steps': config.get('default_steps', 1),
+                    'sigma_min': config.get('sigma_min', 0.5),
+                    'default_steps': config.get('default_steps', 5),
                     'embeddings_path': embeddings_files[0]  # Use first CSV found
                 }
                 print(f"Discovered model: {model_name} (adapter={config.get('adapter')})")
@@ -1940,7 +1940,7 @@ def main():
     parser.add_argument(
         "--num_steps",
         type=int,
-        default=1,
+        default=5,
         help="Number of denoising steps (1=single-step, 4/10=multi-step)"
     )
     parser.add_argument(
@@ -1958,7 +1958,7 @@ def main():
     parser.add_argument(
         "--sigma_min",
         type=float,
-        default=0.002,
+        default=0.5,
         help="Minimum sigma for denoising schedule"
     )
     parser.add_argument(
@@ -1970,8 +1970,8 @@ def main():
     parser.add_argument(
         "--mask_steps",
         type=int,
-        default=None,
-        help="Steps to apply activation mask (default=num_steps, use 1 for first-step-only)"
+        default=1,
+        help="Steps to apply activation mask (default=1, first-step-only)"
     )
     parser.add_argument(
         "--adapter",
