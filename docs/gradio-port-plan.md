@@ -12,10 +12,10 @@ Port the Dash visualization app (`diffviews/visualization/app.py`) to Gradio for
 ```
 main (production-ready Dash app)
  └── feature/gradio-port (integration branch)
-      ├── feature/gradio-port-phase1-core    ✅ COMPLETE
-      ├── feature/gradio-port-phase2-selection (next)
-      ├── feature/gradio-port-phase3-generation
-      └── feature/gradio-port-phase4-polish
+      ├── feature/gradio-port-phase1-core        ✅ COMPLETE
+      ├── feature/gradio-port-phase2-selection   ✅ COMPLETE
+      ├── feature/gradio-port-phase3-generation  ✅ COMPLETE (merged)
+      └── feature/gradio-port-phase4-polish      (next)
 ```
 
 ## Phase Status
@@ -37,8 +37,9 @@ Completed:
 - [x] Add comprehensive tests (19 tests in test_gradio_visualizer.py)
 
 Files created/modified:
-- `diffviews/visualization/gradio_app.py` (new, ~750 lines)
-- `tests/test_gradio_visualizer.py` (new, 19 tests)
+- `diffviews/visualization/gradio_app.py` (new, ~1400 lines)
+- `tests/test_gradio_visualizer.py` (new, 30 tests)
+- `tests/test_generator.py` (24 tests including gradio generation)
 - `pyproject.toml` (added gradio optional dependency)
 - `tests/test_dmd2_adapter.py` (fixed checkpoint path)
 
@@ -80,40 +81,19 @@ Completed:
 - [x] Display generated image in UI
 - [x] Add 5 new tests for generation methods in `test_generator.py`
 
-Still TODO (Phase 3b - Trajectory):
-- [ ] Add trajectory visualization (see implementation notes below)
-- [ ] Show intermediate images during denoising
-- [ ] Add "Clear Generated" functionality
+**Phase 3b - Trajectory ✅ COMPLETE:**
+- [x] Add trajectory visualization on UMAP plot
+- [x] Add "Clear Generated" button
+- [x] Multiple trajectories accumulate until cleared
+- [x] Trajectory persists through selection/neighbor changes
+- [ ] Show intermediate images during denoising (deferred to Phase 4)
 
-**Trajectory Visualization Implementation:**
-```python
-# In on_generate(), call with trajectory options:
-images, labels, trajectory_acts, intermediates = generate_with_mask_multistep(
-    ...,
-    extract_layers=sorted(viz.umap_params.get("layers", [])),
-    return_trajectory=True,
-    return_intermediates=True,
-)
-
-# Project each step through UMAP:
-trajectory_coords = []
-for step_idx, act in enumerate(trajectory_acts):
-    if viz.umap_scaler:
-        act = viz.umap_scaler.transform(act)
-    coords = viz.umap_reducer.transform(act)
-    trajectory_coords.append((coords[0, 0], coords[0, 1]))
-
-# Add trajectory trace to Plotly figure:
-fig.add_trace(go.Scatter(
-    x=[c[0] for c in trajectory_coords],
-    y=[c[1] for c in trajectory_coords],
-    mode="lines+markers+text",
-    text=[f"σ={s:.1f}" for s in sigmas],
-    line=dict(color="red", width=2),
-    marker=dict(size=8),
-    name="trajectory",
-))
-```
+**Trajectory Implementation (completed):**
+- Lime green dashed line connecting points
+- Green gradient markers (light→medium) with sigma in hover
+- Star marker for start, diamond for end
+- Clicks on trajectory points ignored (only curve 0 handled)
+- State: `trajectory_coords = [[(x,y,σ),...], ...]` (list of trajectories)
 
 Key considerations:
 - Thread safety: Use `threading.Lock` for shared adapter ✅ implemented
@@ -125,6 +105,8 @@ Key considerations:
 
 TODO:
 - [ ] Add hover preview using JS bridge pattern (see below)
+- [ ] Show intermediate images during denoising (gallery)
+- [ ] Add sigma display to selection/generation/preview panels
 - [ ] Improve CSS styling (match Dash Bootstrap look)
 - [ ] Add authentication option for deployment
 - [ ] Configure queue settings for concurrent users
