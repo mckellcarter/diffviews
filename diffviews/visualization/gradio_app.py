@@ -653,12 +653,12 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-            # End marker (diamond)
+            # End marker (diamond) - matches gradient end color
             fig.add_trace(go.Scatter(
                 x=[traj_x[-1]],
                 y=[traj_y[-1]],
                 mode="markers",
-                marker=dict(symbol="diamond", size=14, color="lime", line=dict(width=1, color="white")),
+                marker=dict(symbol="diamond", size=14, color="#006400", line=dict(width=1, color="white")),
                 hovertemplate="End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
                 name="traj_end",
                 showlegend=False,
