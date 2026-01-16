@@ -623,21 +623,19 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-            # Markers with sigma labels
+            # Markers (sigma labels reserved for hover preview)
             fig.add_trace(go.Scatter(
                 x=traj_x,
                 y=traj_y,
-                mode="markers+text",
+                mode="markers",
                 marker=dict(
-                    size=12,
+                    size=10,
                     color=list(range(len(trajectory))),
                     colorscale="Viridis",
                     line=dict(width=1, color="white"),
                 ),
-                text=[f"σ={s:.1f}" for s in traj_sigma],
-                textposition="top center",
-                textfont=dict(size=9, color="white"),
-                hovertemplate="Step %{customdata}<br>σ=%{text}<br>(%{x:.2f}, %{y:.2f})<extra></extra>",
+                hovertemplate="Step %{customdata}<br>σ=%{text:.1f}<br>(%{x:.2f}, %{y:.2f})<extra></extra>",
+                text=traj_sigma,
                 customdata=list(range(len(trajectory))),
                 name="trajectory",
                 showlegend=False,
