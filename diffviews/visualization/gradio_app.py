@@ -617,7 +617,7 @@ class GradioVisualizer:
                 x=traj_x,
                 y=traj_y,
                 mode="lines",
-                line=dict(color="white", width=3, dash="dot"),
+                line=dict(color="lime", width=3),
                 hoverinfo="skip",
                 name="trajectory_line",
                 showlegend=False,
