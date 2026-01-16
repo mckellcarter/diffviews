@@ -42,7 +42,7 @@ Files created/modified:
 - `pyproject.toml` (added gradio optional dependency)
 - `tests/test_dmd2_adapter.py` (fixed checkpoint path)
 
-### Phase 2: Selection & Neighbors (IN PROGRESS)
+### Phase 2: Selection & Neighbors ✅ COMPLETE
 **Branch:** `feature/gradio-port-phase2-selection`
 
 Completed:
@@ -52,12 +52,21 @@ Completed:
 - [x] Add K slider for adjusting neighbor count
 - [x] Store neighbor distances in session state (`knn_distances`)
 - [x] Add 4 new tests for `find_knn_neighbors` (23 total tests now)
+- [x] Add plasma colormap for class colors
+- [x] **Switch from ScatterPlot to Plotly with JS bridge**
 
-TODO (optional):
-- [ ] Add neighbor removal via gallery click (requires custom JS)
-- [ ] Consider Plotly switch for richer trace overlays (staying with ScatterPlot for now)
+**Plotly Migration (completed):**
+- Replaced `gr.ScatterPlot` with `gr.Plot` + `go.Scattergl`
+- Added `create_umap_figure()` method for Plotly figure generation
+- Implemented JS bridge pattern for click handling (hidden textbox + plotly_click)
+- Updated all callbacks to return Plotly figures
 
-Key decision: Staying with ScatterPlot (Altair) for now - it provides working click events and the highlight column approach works well for distinguishing selected/neighbors.
+**JS Bridge Key Learnings:**
+1. Inject JS via `head=` param in `gr.Blocks()` (not `js=` on events)
+2. Use `.input()` event on textbox (not `.change()`)
+3. Include textbox in inputs list explicitly
+4. Use `go.Scattergl` with `.tolist()` for Gradio compatibility
+5. Benign "too many arguments" warning can be ignored
 
 ### Phase 3: Generation
 **Branch:** `feature/gradio-port-phase3-generation`
@@ -79,7 +88,7 @@ Key considerations:
 **Branch:** `feature/gradio-port-phase4-polish`
 
 TODO:
-- [ ] Add hover preview (may need custom JS or click-to-preview)
+- [ ] Add hover preview using JS bridge pattern (see below)
 - [ ] Improve CSS styling (match Dash Bootstrap look)
 - [ ] Add authentication option for deployment
 - [ ] Configure queue settings for concurrent users
@@ -89,10 +98,34 @@ TODO:
 
 ## Architecture Decisions
 
-### Why ScatterPlot over Plot?
-- `gr.ScatterPlot` has native `.select()` event for click handling
-- `gr.Plot` (Plotly) doesn't expose click events in Gradio 4.x
-- Trade-off: Less visual customization, but working interactions
+### Why Plotly with JS Bridge (updated)
+Initially used `gr.ScatterPlot` but hit blockers:
+- ScatterPlot `.select()` returns coordinates, not row indices
+- Cannot control plot size
+- Zoom triggers broken events
+
+**Solution:** `gr.Plot` with Plotly + custom JS bridge
+- JS `plotly_click` handler writes click data to hidden textbox
+- Textbox `.input()` event triggers Python callback
+- Full control over plot appearance and interactions
+- `customdata` field carries row indices for click handling
+
+### Hover Preview Implementation (Phase 4)
+Use same JS bridge pattern with debounce:
+```javascript
+let hoverTimeout;
+plotDiv.on('plotly_hover', function(data) {
+    clearTimeout(hoverTimeout);
+    hoverTimeout = setTimeout(() => {
+        hoverBox.value = JSON.stringify({pointIndex: point.customdata});
+        hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+    }, 150);  // debounce prevents flooding backend
+});
+plotDiv.on('plotly_unhover', () => clearTimeout(hoverTimeout));
+```
+- Add hidden `hover_data_box` textbox
+- Python handler updates `preview_image` and `preview_details` only
+- Keep click handler separate for selection
 
 ### State Management
 - Per-session: `gr.State` for selected_idx, neighbors, highlighted_class

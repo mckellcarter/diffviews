@@ -16,9 +16,7 @@ import pandas as pd
 from PIL import Image
 from sklearn.neighbors import NearestNeighbors
 
-# Plotly imports kept for future phases (trajectory visualization)
-# import plotly.express as px
-# import plotly.graph_objects as go
+import plotly.graph_objects as go
 
 from diffviews.processing.umap import load_dataset_activations
 from diffviews.utils.device import get_device
@@ -362,7 +360,7 @@ class GradioVisualizer:
         # Create copy with highlight column
         plot_df = self.df[["umap_x", "umap_y", "sample_id"]].copy()
         if "class_label" in self.df.columns:
-            plot_df["class_label"] = self.df["class_label"]
+            plot_df["class_label"] = self.df["class_label"].astype(str)
 
         # Add highlight column for visual distinction
         plot_df["highlight"] = "normal"
@@ -400,11 +398,234 @@ class GradioVisualizer:
 
         return [(f"{c}: {self.get_class_name(c)}", c) for c in unique_classes]
 
+    def get_color_map(self) -> dict:
+        """Generate color map for class labels using plasma colormap."""
+        if self.df.empty or "class_label" not in self.df.columns:
+            return {}
+
+        import matplotlib.pyplot as plt
+        unique_classes = self.df["class_label"].dropna().unique()
+        unique_classes = sorted([int(c) for c in unique_classes])
+
+        if not unique_classes:
+            return {}
+
+        cmap = plt.cm.plasma
+        color_map = {}
+        for i, cls in enumerate(unique_classes):
+            rgba = cmap(i / max(len(unique_classes) - 1, 1))
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+            )
+            color_map[str(cls)] = hex_color
+        return color_map
+
+    def create_umap_figure(
+        self,
+        selected_idx: Optional[int] = None,
+        manual_neighbors: Optional[List[int]] = None,
+        knn_neighbors: Optional[List[int]] = None,
+        highlighted_class: Optional[int] = None,
+    ) -> go.Figure:
+        """Create Plotly figure for UMAP scatter plot.
+
+        Args:
+            selected_idx: Index of currently selected point
+            manual_neighbors: List of manually selected neighbor indices
+            knn_neighbors: List of KNN neighbor indices
+            highlighted_class: Class ID to highlight
+
+        Returns:
+            Plotly Figure object
+        """
+        if self.df.empty:
+            fig = go.Figure()
+            fig.update_layout(title="No data loaded")
+            return fig
+
+        manual_neighbors = manual_neighbors or []
+        knn_neighbors = knn_neighbors or []
+
+        # Get color map for classes
+        color_map = self.get_color_map()
+
+        # Build customdata with df indices for click handling
+        customdata = list(range(len(self.df)))
+
+        # Determine point colors based on class
+        if "class_label" in self.df.columns:
+            colors = [color_map.get(str(int(c)), "#888888") for c in self.df["class_label"]]
+        else:
+            colors = ["#1f77b4"] * len(self.df)
+
+        # Create main scatter trace
+        fig = go.Figure()
+
+        # Add main data points (use scattergl for better performance)
+        fig.add_trace(go.Scattergl(
+            x=self.df["umap_x"].tolist(),
+            y=self.df["umap_y"].tolist(),
+            mode="markers",
+            marker=dict(
+                size=6,
+                color=colors,
+                opacity=0.7,
+            ),
+            customdata=customdata,
+            hovertemplate="<b>%{customdata}</b><br>x: %{x:.2f}<br>y: %{y:.2f}<extra></extra>",
+            name="samples",
+        ))
+
+        # Highlight class if specified
+        if highlighted_class is not None and "class_label" in self.df.columns:
+            class_mask = self.df["class_label"] == highlighted_class
+            class_indices = self.df[class_mask].index.tolist()
+            if class_indices:
+                fig.add_trace(go.Scattergl(
+                    x=self.df.loc[class_mask, "umap_x"].tolist(),
+                    y=self.df.loc[class_mask, "umap_y"].tolist(),
+                    mode="markers",
+                    marker=dict(size=10, color="yellow", line=dict(width=1, color="black")),
+                    customdata=[int(i) for i in class_indices],
+                    hoverinfo="skip",
+                    name="class_highlight",
+                    showlegend=False,
+                ))
+
+        # Highlight KNN neighbors (green ring)
+        if knn_neighbors:
+            knn_df = self.df.iloc[knn_neighbors]
+            fig.add_trace(go.Scattergl(
+                x=knn_df["umap_x"].tolist(),
+                y=knn_df["umap_y"].tolist(),
+                mode="markers",
+                marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=2, color="lime")),
+                customdata=knn_neighbors,
+                hoverinfo="skip",
+                name="knn_neighbors",
+                showlegend=False,
+            ))
+
+        # Highlight manual neighbors (blue ring)
+        if manual_neighbors:
+            man_df = self.df.iloc[manual_neighbors]
+            fig.add_trace(go.Scattergl(
+                x=man_df["umap_x"].tolist(),
+                y=man_df["umap_y"].tolist(),
+                mode="markers",
+                marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=2, color="cyan")),
+                customdata=manual_neighbors,
+                hoverinfo="skip",
+                name="manual_neighbors",
+                showlegend=False,
+            ))
+
+        # Highlight selected point (red ring, highest priority)
+        if selected_idx is not None and selected_idx < len(self.df):
+            sel_row = self.df.iloc[selected_idx]
+            fig.add_trace(go.Scattergl(
+                x=[float(sel_row["umap_x"])],
+                y=[float(sel_row["umap_y"])],
+                mode="markers",
+                marker=dict(size=16, color="rgba(0,0,0,0)", line=dict(width=3, color="red")),
+                customdata=[selected_idx],
+                hoverinfo="skip",
+                name="selected",
+                showlegend=False,
+            ))
+
+        # Layout
+        fig.update_layout(
+            title="Activation UMAP",
+            xaxis_title="UMAP 1",
+            yaxis_title="UMAP 2",
+            hovermode="closest",
+            template="plotly_white",
+            showlegend=False,
+            height=550,
+            margin=dict(l=50, r=20, t=40, b=50),
+        )
+
+        return fig
+
+
+# JavaScript for Plotly click handling - sends click data to hidden textbox
+CLICK_HANDLER_JS = """
+function attachPlotlyClickHandler() {
+    console.log('[PlotlyClick] Attempting to attach handler...');
+
+    // Find Plotly plot - try multiple selectors
+    let plotDiv = document.querySelector('#umap-plot .plotly-graph-div');
+    if (!plotDiv) plotDiv = document.querySelector('#umap-plot .js-plotly-plot');
+    if (!plotDiv) plotDiv = document.querySelector('#umap-plot [class*="plotly"]');
+
+    // Find textbox - Gradio may use input or textarea
+    let clickBox = document.querySelector('#click-data-box textarea');
+    if (!clickBox) clickBox = document.querySelector('#click-data-box input');
+
+    console.log('[PlotlyClick] plotDiv:', plotDiv);
+    console.log('[PlotlyClick] clickBox:', clickBox);
+
+    if (!plotDiv || !clickBox) {
+        console.log('[PlotlyClick] Elements not found, retrying in 200ms...');
+        setTimeout(attachPlotlyClickHandler, 200);
+        return;
+    }
+
+    // Avoid duplicate handlers
+    if (plotDiv._gradioClickHandlerAttached) {
+        console.log('[PlotlyClick] Handler already attached');
+        return;
+    }
+    plotDiv._gradioClickHandlerAttached = true;
+
+    plotDiv.on('plotly_click', function(data) {
+        console.log('[PlotlyClick] Click detected:', data);
+        if (!data || !data.points || data.points.length === 0) return;
+
+        const point = data.points[0];
+        const clickData = {
+            pointIndex: point.customdata,
+            x: point.x,
+            y: point.y,
+            curveNumber: point.curveNumber
+        };
+
+        console.log('[PlotlyClick] Sending:', clickData);
+
+        // Set value and trigger input event for Gradio
+        clickBox.value = JSON.stringify(clickData);
+        clickBox.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    console.log('[PlotlyClick] Handler attached successfully!');
+}
+
+// Attach handler after plot renders
+setTimeout(attachPlotlyClickHandler, 500);
+"""
+
 
 def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     """Create Gradio Blocks app."""
 
-    with gr.Blocks(title="Diffusion Activation Visualizer", theme=gr.themes.Soft()) as app:
+    # CSS for plot and hidden elements
+    custom_css = """
+    #umap-plot {
+        min-height: 550px !important;
+    }
+    #click-data-box {
+        display: none !important;
+    }
+    """
+
+    with gr.Blocks(
+        title="Diffusion Activation Visualizer",
+        theme=gr.themes.Soft(),
+        css=custom_css,
+        head=f"<script>{CLICK_HANDLER_JS}</script>",
+    ) as app:
+
         # Per-session state
         selected_idx = gr.State(value=None)
         manual_neighbors = gr.State(value=[])
@@ -453,17 +674,18 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_status = gr.Markdown("")
 
             # Center column (main plot)
-            with gr.Column(scale=2):
-                # Use ScatterPlot for native selection support
-                umap_plot = gr.ScatterPlot(
-                    value=visualizer.get_plot_dataframe(),
-                    x="umap_x",
-                    y="umap_y",
-                    color="class_label" if "class_label" in visualizer.df.columns else None,
-                    title="Activation UMAP",
-                    x_title="UMAP 1",
-                    y_title="UMAP 2",
-                    height=500,
+            with gr.Column(scale=3, min_width=600):
+                # Hidden textbox for JS bridge (receives click data from Plotly)
+                click_data_box = gr.Textbox(
+                    value="",
+                    elem_id="click-data-box",
+                    visible=False,
+                )
+                # Use Plotly via gr.Plot for proper click handling
+                umap_plot = gr.Plot(
+                    value=visualizer.create_umap_figure(),
+                    elem_id="umap-plot",
+                    show_label=False,
                 )
                 status_text = gr.Markdown(
                     f"Showing {len(visualizer.df)} samples"
@@ -525,18 +747,72 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if visualizer.nn_model is None and not visualizer.df.empty:
                 visualizer.fit_nearest_neighbors()
 
-        def on_plot_select(
-            evt: gr.SelectData, sel_idx, man_n, knn_n, high_class
-        ):
-            """Handle plot click - select point or toggle neighbor."""
-            if evt is None or evt.index is None:
-                return (gr.update(),) * 8
+        def build_neighbor_gallery(sel_idx, man_n, knn_n, knn_dist):
+            """Build neighbor gallery and info text."""
+            if sel_idx is None:
+                return [], "No neighbors selected"
 
-            # Get point index from selection event
-            # ScatterPlot select returns row index
-            point_idx = evt.index
-            if isinstance(point_idx, (list, tuple)):
-                point_idx = point_idx[0]
+            man_n = man_n or []
+            knn_n = knn_n or []
+            knn_dist = knn_dist or {}
+
+            # Combine neighbors: KNN first (sorted by distance), then manual
+            all_neighbors = []
+            knn_with_dist = [(idx, knn_dist.get(idx, 999)) for idx in knn_n if idx not in man_n]
+            knn_with_dist.sort(key=lambda x: x[1])
+            all_neighbors.extend([idx for idx, _ in knn_with_dist])
+            all_neighbors.extend(man_n)
+
+            if not all_neighbors:
+                return [], "Click points or use Suggest"
+
+            images = []
+            for idx in all_neighbors[:10]:
+                if idx < len(visualizer.df):
+                    sample = visualizer.df.iloc[idx]
+                    img = visualizer.get_image(sample["image_path"])
+                    if img is not None:
+                        if "class_label" in sample:
+                            cls_id = int(sample["class_label"])
+                            cls_name = visualizer.get_class_name(cls_id)
+                            label = f"{cls_id}: {cls_name}"
+                        else:
+                            label = f"#{idx}"
+                        if idx in knn_dist:
+                            label += f" (d={knn_dist[idx]:.2f})"
+                        elif idx in man_n:
+                            label += " (manual)"
+                        images.append((img, label))
+
+            knn_count = len([n for n in knn_n if n not in man_n])
+            man_count = len(man_n)
+            info = f"{len(all_neighbors)} neighbors"
+            if knn_count > 0:
+                info += f" ({knn_count} KNN"
+            if man_count > 0:
+                info += f", {man_count} manual" if knn_count > 0 else f" ({man_count} manual"
+            if knn_count > 0 or man_count > 0:
+                info += ")"
+            return images, info
+
+        def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class):
+            """Handle plot click via JS bridge - select point or toggle neighbor."""
+            if not click_json:
+                return (gr.update(),) * 10
+
+            try:
+                click_data = json.loads(click_json)
+                point_idx = click_data.get("pointIndex")
+                if point_idx is None:
+                    return (gr.update(),) * 10
+                point_idx = int(point_idx)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return (gr.update(),) * 10
+
+            if point_idx < 0 or point_idx >= len(visualizer.df):
+                return (gr.update(),) * 10
+
+            knn_dist = knn_dist or {}
 
             # First click: select this point
             if sel_idx is None:
@@ -553,8 +829,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
                 details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
-                # Build updated plot dataframe with selection
-                plot_df = visualizer.get_plot_dataframe(
+                # Build updated Plotly figure with selection
+                fig = visualizer.create_umap_figure(
                     selected_idx=point_idx,
                     highlighted_class=high_class
                 )
@@ -567,12 +843,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     point_idx,     # selected_idx
                     [],            # manual_neighbors
                     [],            # knn_neighbors
-                    plot_df,       # umap_plot
+                    fig,           # umap_plot
+                    [],            # neighbor_gallery
+                    "Click points or use Suggest",  # neighbor_info
                 )
 
             # Clicking same point: do nothing
             if point_idx == sel_idx:
-                return (gr.update(),) * 8
+                return (gr.update(),) * 10
 
             # Toggle neighbor
             man_n = list(man_n) if man_n else []
@@ -585,13 +863,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             else:
                 man_n.append(point_idx)
 
-            # Rebuild plot dataframe with updated highlights
-            plot_df = visualizer.get_plot_dataframe(
+            # Rebuild Plotly figure with updated highlights
+            fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
                 highlighted_class=high_class
             )
+
+            # Build gallery for neighbors
+            gallery, info = build_neighbor_gallery(sel_idx, man_n, knn_n, knn_dist)
 
             return (
                 gr.update(),   # preview_image
@@ -601,12 +882,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 sel_idx,       # selected_idx (unchanged)
                 man_n,         # manual_neighbors
                 knn_n,         # knn_neighbors
-                plot_df,       # umap_plot
+                fig,           # umap_plot
+                gallery,       # neighbor_gallery
+                info,          # neighbor_info
             )
 
         def on_clear_selection(high_class):
             """Clear selection and neighbors."""
-            plot_df = visualizer.get_plot_dataframe(highlighted_class=high_class)
+            fig = visualizer.create_umap_figure(highlighted_class=high_class)
             return (
                 None,                      # preview_image
                 "Click a point to preview", # preview_details
@@ -616,14 +899,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 [],                        # manual_neighbors
                 [],                        # knn_neighbors
                 {},                        # knn_distances
-                plot_df,                   # umap_plot
+                fig,                       # umap_plot
                 [],                        # neighbor_gallery
                 "No neighbors selected",   # neighbor_info
             )
 
         def on_class_filter(class_value, sel_idx, man_n, knn_n):
             """Handle class filter selection."""
-            plot_df = visualizer.get_plot_dataframe(
+            fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
@@ -636,16 +919,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             else:
                 status = ""
 
-            return plot_df, class_value, status
+            return fig, class_value, status
 
         def on_clear_class(sel_idx, man_n, knn_n):
             """Clear class highlight."""
-            plot_df = visualizer.get_plot_dataframe(
+            fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n
             )
-            return plot_df, None, None, ""
+            return fig, None, None, ""
 
         def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
             """Handle model switching (resets all state, inputs unused)."""
@@ -656,11 +939,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if not success:
                 return (gr.update(),) * 13
 
-            plot_df = visualizer.get_plot_dataframe()
+            fig = visualizer.create_umap_figure()
             status = f"Showing {len(visualizer.df)} samples ({model_name})"
 
             return (
-                plot_df,                           # umap_plot
+                fig,                               # umap_plot
                 status,                            # status_text
                 f"Switched to {model_name}",       # model_status
                 None,                              # selected_idx
@@ -675,68 +958,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 visualizer.get_class_options(),    # class_dropdown choices
             )
 
-        def update_neighbor_display(sel_idx, man_n, knn_n, knn_dist):
-            """Update neighbor gallery and info with distance info."""
-            if sel_idx is None:
-                return [], "No neighbors selected"
-
-            man_n = man_n or []
-            knn_n = knn_n or []
-            knn_dist = knn_dist or {}
-
-            # Combine neighbors: KNN first (sorted by distance), then manual
-            all_neighbors = []
-            # KNN neighbors sorted by distance
-            knn_with_dist = [(idx, knn_dist.get(idx, 999)) for idx in knn_n if idx not in man_n]
-            knn_with_dist.sort(key=lambda x: x[1])
-            all_neighbors.extend([idx for idx, _ in knn_with_dist])
-            # Manual neighbors at end
-            all_neighbors.extend(man_n)
-
-            if not all_neighbors:
-                return [], "Click points or use Suggest"
-
-            # Build gallery images with distance labels
-            images = []
-            for idx in all_neighbors[:10]:  # Limit to 10
-                if idx < len(visualizer.df):
-                    sample = visualizer.df.iloc[idx]
-                    img = visualizer.get_image(sample["image_path"])
-                    if img is not None:
-                        # Build label with class and distance
-                        if "class_label" in sample:
-                            cls_id = int(sample["class_label"])
-                            cls_name = visualizer.get_class_name(cls_id)
-                            label = f"{cls_id}: {cls_name}"
-                        else:
-                            label = f"#{idx}"
-
-                        # Add distance for KNN neighbors
-                        if idx in knn_dist:
-                            label += f" (d={knn_dist[idx]:.2f})"
-                        elif idx in man_n:
-                            label += " (manual)"
-
-                        images.append((img, label))
-
-            knn_count = len([n for n in knn_n if n not in man_n])
-            man_count = len(man_n)
-            info = f"{len(all_neighbors)} neighbors"
-            if knn_count > 0:
-                info += f" ({knn_count} KNN"
-            if man_count > 0:
-                info += f", {man_count} manual" if knn_count > 0 else f" ({man_count} manual"
-            if knn_count > 0 or man_count > 0:
-                info += ")"
-            return images, info
-
         # Wire up events
-        # on_load just initializes KNN model, no output needed
+        # on_load initializes KNN model
         app.load(on_load, outputs=[])
 
-        umap_plot.select(
-            on_plot_select,
-            inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class],
+        # Click handling via JS bridge (click_data_box receives JSON from Plotly click)
+        click_data_box.input(
+            on_click_data,
+            inputs=[
+                click_data_box, selected_idx, manual_neighbors,
+                knn_neighbors, knn_distances, highlighted_class
+            ],
             outputs=[
                 preview_image,
                 preview_details,
@@ -746,6 +978,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 manual_neighbors,
                 knn_neighbors,
                 umap_plot,
+                neighbor_gallery,
+                neighbor_info,
             ],
         )
 
@@ -803,13 +1037,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 ],
             )
 
-        # Update neighbor display when neighbors change
-        for state in [manual_neighbors, knn_neighbors, knn_distances]:
-            state.change(
-                update_neighbor_display,
-                inputs=[selected_idx, manual_neighbors, knn_neighbors, knn_distances],
-                outputs=[neighbor_gallery, neighbor_info],
-            )
+        # Note: neighbor display is updated directly in click/suggest handlers
+        # No need for state.change() listeners which can cause duplicate events
 
         # --- Suggest neighbors button ---
         def on_suggest_neighbors(sel_idx, k_val, high_class, man_n):
@@ -827,14 +1056,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             knn_dist = dict(neighbors)
 
             # Update plot
-            plot_df = visualizer.get_plot_dataframe(
+            fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_idx,
                 highlighted_class=high_class
             )
 
-            return plot_df, knn_idx, knn_dist, gr.update(), f"Found {len(knn_idx)} neighbors"
+            return fig, knn_idx, knn_dist, gr.update(), f"Found {len(knn_idx)} neighbors"
 
         suggest_btn.click(
             on_suggest_neighbors,
@@ -845,11 +1074,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # --- Clear neighbors button ---
         def on_clear_neighbors(sel_idx, high_class):
             """Clear all neighbors (both manual and KNN)."""
-            plot_df = visualizer.get_plot_dataframe(
+            fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 highlighted_class=high_class
             )
-            return plot_df, [], [], {}, [], "No neighbors selected"
+            return fig, [], [], {}, [], "No neighbors selected"
 
         clear_neighbors_btn.click(
             on_clear_neighbors,
