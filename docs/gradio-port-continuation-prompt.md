@@ -42,10 +42,15 @@ Start by reading @diffviews/visualization/gradio_app.py
 
 ## Current State
 
-- `gradio_app.py` has turbo colormap working
+- `gradio_app.py` (~950 lines) has plasma colormap working
 - KNN suggest + distance display working
 - Click selection BROKEN (ScatterPlot returns coords not indices)
-- 87 tests pass
+- 87 tests pass (23 gradio-specific)
+
+**Key files:**
+- `diffviews/visualization/gradio_app.py` - main app (modify this)
+- `diffviews/visualization/app.py` - Dash reference for Plotly patterns
+- `tests/test_gradio_visualizer.py` - tests
 
 ```bash
 python -m pytest tests/test_gradio_visualizer.py -v

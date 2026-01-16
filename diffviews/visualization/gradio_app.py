@@ -401,7 +401,7 @@ class GradioVisualizer:
         return [(f"{c}: {self.get_class_name(c)}", c) for c in unique_classes]
 
     def get_color_map(self) -> dict:
-        """Generate color map for class labels using turbo colormap."""
+        """Generate color map for class labels using plasma colormap."""
         if self.df.empty or "class_label" not in self.df.columns:
             return {}
 
@@ -412,7 +412,7 @@ class GradioVisualizer:
         if not unique_classes:
             return {}
 
-        cmap = plt.cm.turbo
+        cmap = plt.cm.plasma
         color_map = {}
         for i, cls in enumerate(unique_classes):
             rgba = cmap(i / max(len(unique_classes) - 1, 1))

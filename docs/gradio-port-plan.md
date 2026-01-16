@@ -52,7 +52,7 @@ Completed:
 - [x] Add K slider for adjusting neighbor count
 - [x] Store neighbor distances in session state (`knn_distances`)
 - [x] Add 4 new tests for `find_knn_neighbors` (23 total tests now)
-- [x] Add turbo colormap for class colors
+- [x] Add plasma colormap for class colors
 
 **BLOCKER: ScatterPlot limitations require Plotly switch**
 
