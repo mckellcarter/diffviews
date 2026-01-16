@@ -606,11 +606,19 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-        # Denoising trajectory (if available)
-        if trajectory and len(trajectory) > 1:
-            traj_x = [t[0] for t in trajectory]
-            traj_y = [t[1] for t in trajectory]
-            traj_sigma = [t[2] for t in trajectory]
+        # Denoising trajectories (supports multiple)
+        trajectories = trajectory if trajectory else []
+        # Handle both old format (single trajectory) and new format (list of trajectories)
+        if trajectories and isinstance(trajectories[0], tuple):
+            trajectories = [trajectories]  # Wrap single trajectory in list
+
+        for traj_idx, traj in enumerate(trajectories):
+            if len(traj) < 2:
+                continue
+
+            traj_x = [t[0] for t in traj]
+            traj_y = [t[1] for t in traj]
+            traj_sigma = [t[2] for t in traj]
 
             # Line trace for trajectory path
             fig.add_trace(go.Scatter(
@@ -619,7 +627,7 @@ class GradioVisualizer:
                 mode="lines",
                 line=dict(color="lime", width=3, dash="dash"),
                 hoverinfo="skip",
-                name="trajectory_line",
+                name=f"trajectory_line_{traj_idx}",
                 showlegend=False,
             ))
 
@@ -631,14 +639,14 @@ class GradioVisualizer:
                 mode="markers",
                 marker=dict(
                     size=10,
-                    color=list(range(len(trajectory))),
+                    color=list(range(len(traj))),
                     colorscale=[[0, "#90EE90"], [1, "#228B22"]],  # lightgreen -> forestgreen
                     line=dict(width=1, color="white"),
                 ),
-                hovertemplate="Step %{customdata}<br>σ=%{text:.1f}<br>(%{x:.2f}, %{y:.2f})<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>σ=%{{text:.1f}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
                 text=traj_sigma,
-                customdata=list(range(len(trajectory))),
-                name="trajectory",
+                customdata=list(range(len(traj))),
+                name=f"trajectory_{traj_idx}",
                 showlegend=False,
             ))
 
@@ -648,8 +656,8 @@ class GradioVisualizer:
                 y=[traj_y[0]],
                 mode="markers",
                 marker=dict(symbol="star", size=18, color="lime", line=dict(width=1, color="white")),
-                hovertemplate="Start (σ=%.1f)<extra></extra>" % traj_sigma[0],
-                name="traj_start",
+                hovertemplate=f"Traj {traj_idx + 1} Start (σ=%.1f)<extra></extra>" % traj_sigma[0],
+                name=f"traj_start_{traj_idx}",
                 showlegend=False,
             ))
 
@@ -659,8 +667,8 @@ class GradioVisualizer:
                 y=[traj_y[-1]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=14, color="#228B22", line=dict(width=1, color="white")),
-                hovertemplate="End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
-                name="traj_end",
+                hovertemplate=f"Traj {traj_idx + 1} End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
+                name=f"traj_end_{traj_idx}",
                 showlegend=False,
             ))
 
@@ -762,7 +770,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         knn_neighbors = gr.State(value=[])
         knn_distances = gr.State(value={})  # {idx: distance} for KNN neighbors
         highlighted_class = gr.State(value=None)
-        trajectory_coords = gr.State(value=[])  # [(x, y, sigma), ...] for denoising path
+        trajectory_coords = gr.State(value=[])  # [[(x, y, sigma), ...], ...] list of trajectories
 
         gr.Markdown("# Diffusion Activation Visualizer")
 
@@ -1241,16 +1249,18 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         # --- Generate button ---
         def on_generate(
-            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class
+            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class, existing_traj
         ):
             """Generate image from selected neighbors with trajectory visualization."""
+            existing_traj = existing_traj or []
+
             # Combine all neighbors
             all_neighbors = list(set((man_n or []) + (knn_n or [])))
             if sel_idx is not None and sel_idx not in all_neighbors:
                 all_neighbors.insert(0, sel_idx)
 
             if not all_neighbors:
-                return None, "Select neighbors first", gr.update(), []
+                return None, "Select neighbors first", gr.update(), existing_traj
 
             # Get class label from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
@@ -1332,29 +1342,34 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     except Exception as e:
                         print(f"[Trajectory] Failed to project step {i}: {e}")
 
-            # Build updated plot with trajectory
+            # Append new trajectory to existing list
+            all_trajectories = list(existing_traj)
+            if traj_coords:
+                all_trajectories.append(traj_coords)
+
+            # Build updated plot with all trajectories
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_n or [],
                 highlighted_class=high_class,
-                trajectory=traj_coords if traj_coords else None,
+                trajectory=all_trajectories if all_trajectories else None,
             )
 
             # Convert to numpy for gr.Image
             gen_img = images[0].numpy()
             class_name = visualizer.get_class_name(class_label) if class_label else "random"
-            traj_info = f", {len(traj_coords)} trajectory steps" if traj_coords else ""
+            traj_info = f", {len(all_trajectories)} trajectories" if all_trajectories else ""
             status = f"Generated (class {class_label}: {class_name}{traj_info})"
 
-            return gen_img, status, fig, traj_coords
+            return gen_img, status, fig, all_trajectories
 
         generate_btn.click(
             on_generate,
             inputs=[
                 selected_idx, manual_neighbors, knn_neighbors,
                 num_steps_slider, mask_steps_slider, guidance_slider,
-                sigma_max_input, sigma_min_input, highlighted_class,
+                sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords,
             ],
             outputs=[generated_image, gen_status, umap_plot, trajectory_coords],
         )

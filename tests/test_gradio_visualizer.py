@@ -548,21 +548,21 @@ class TestCreateUmapFigure:
                 trajectory=trajectory
             )
 
-            # Should have trajectory traces
+            # Should have trajectory traces (indexed for multi-trajectory support)
             trace_names = [t.name for t in fig.data]
-            assert "trajectory_line" in trace_names
-            assert "trajectory" in trace_names
-            assert "traj_start" in trace_names
-            assert "traj_end" in trace_names
+            assert "trajectory_line_0" in trace_names
+            assert "trajectory_0" in trace_names
+            assert "traj_start_0" in trace_names
+            assert "traj_end_0" in trace_names
 
             # Trajectory trace should have correct number of points
-            traj_trace = next(t for t in fig.data if t.name == "trajectory")
+            traj_trace = next(t for t in fig.data if t.name == "trajectory_0")
             assert len(traj_trace.x) == 4
             assert len(traj_trace.y) == 4
 
             # Start/end markers should have single point each
-            start_trace = next(t for t in fig.data if t.name == "traj_start")
-            end_trace = next(t for t in fig.data if t.name == "traj_end")
+            start_trace = next(t for t in fig.data if t.name == "traj_start_0")
+            end_trace = next(t for t in fig.data if t.name == "traj_end_0")
             assert len(start_trace.x) == 1
             assert len(end_trace.x) == 1
             assert start_trace.x[0] == 0.0  # First trajectory point
@@ -580,12 +580,12 @@ class TestCreateUmapFigure:
             # Empty trajectory
             fig = viz.create_umap_figure(trajectory=[])
             trace_names = [t.name for t in fig.data]
-            assert "trajectory" not in trace_names
+            assert "trajectory_0" not in trace_names
 
             # Single point (needs at least 2 for a path)
             fig = viz.create_umap_figure(trajectory=[(0.0, 0.0, 80.0)])
             trace_names = [t.name for t in fig.data]
-            assert "trajectory" not in trace_names
+            assert "trajectory_0" not in trace_names
 
 
 if __name__ == "__main__":
