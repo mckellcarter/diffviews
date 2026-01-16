@@ -932,6 +932,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             try:
                 click_data = json.loads(click_json)
+                # Only handle clicks on main samples trace (curve 0)
+                # Ignore trajectory and other overlay traces
+                if click_data.get("curveNumber", 0) != 0:
+                    return (gr.update(),) * 11
                 point_idx = click_data.get("pointIndex")
                 if point_idx is None:
                     return (gr.update(),) * 11
