@@ -965,10 +965,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
                 details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
-                # Build updated Plotly figure with selection (no trajectory)
+                # Build updated Plotly figure with selection (preserve trajectory)
                 fig = visualizer.create_umap_figure(
                     selected_idx=point_idx,
-                    highlighted_class=high_class
+                    highlighted_class=high_class,
+                    trajectory=traj if traj else None,
                 )
 
                 return (
@@ -982,7 +983,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     fig,           # umap_plot
                     [],            # neighbor_gallery
                     "Click points or use Suggest",  # neighbor_info
-                    [],            # trajectory_coords (cleared)
+                    traj,          # trajectory_coords (preserved)
                 )
 
             # Clicking same point: do nothing
@@ -1026,9 +1027,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 traj,          # trajectory_coords (preserved)
             )
 
-        def on_clear_selection(high_class):
-            """Clear selection, neighbors, and trajectory."""
-            fig = visualizer.create_umap_figure(highlighted_class=high_class)
+        def on_clear_selection(high_class, traj):
+            """Clear selection and neighbors (preserves trajectory)."""
+            fig = visualizer.create_umap_figure(
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
+            )
             return (
                 None,                      # preview_image
                 "Click a point to preview", # preview_details
@@ -1041,7 +1045,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 fig,                       # umap_plot
                 [],                        # neighbor_gallery
                 "No neighbors selected",   # neighbor_info
-                [],                        # trajectory_coords
             )
 
         def on_class_filter(class_value, sel_idx, man_n, knn_n, traj):
@@ -1129,7 +1132,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         clear_selection_btn.click(
             on_clear_selection,
-            inputs=[highlighted_class],
+            inputs=[highlighted_class, trajectory_coords],
             outputs=[
                 preview_image,
                 preview_details,
@@ -1142,7 +1145,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 umap_plot,
                 neighbor_gallery,
                 neighbor_info,
-                trajectory_coords,
             ],
         )
 
