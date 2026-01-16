@@ -15,15 +15,22 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def checkpoint_path():
-    """Path to test checkpoint. Override via --checkpoint flag or env var."""
+    """Path to test checkpoint. Override via DMD2_CHECKPOINT env var."""
     import os
-    path = os.environ.get(
-        'DMD2_CHECKPOINT',
-        '/Users/mckell/Documents/dmd2_data/training_data/10step_model_train_out/imagenet_10step_denoising/checkpoint_model_499500'
-    )
-    if not os.path.exists(path):
-        pytest.skip(f"Checkpoint not found: {path}")
-    return path
+    from pathlib import Path
+
+    # Check common locations in order of preference
+    candidates = [
+        os.environ.get('DMD2_CHECKPOINT', ''),
+        'data/dmd2/checkpoints/dmd2-imagenet-64-10step.pkl',
+        Path(__file__).parent.parent / 'data/dmd2/checkpoints/dmd2-imagenet-64-10step.pkl',
+    ]
+
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+
+    pytest.skip("No valid DMD2 checkpoint found. Set DMD2_CHECKPOINT env var.")
 
 
 @pytest.fixture(scope="module")
