@@ -4,68 +4,51 @@ Copy this prompt to continue work on the Gradio port in a new session:
 
 ---
 
-## Context
+I'm continuing a Gradio port of a Dash visualization app.
 
-I'm porting a Dash visualization app to Gradio for better multi-user support and deployment. The app visualizes diffusion model activations via UMAP scatter plots and allows generating new images from averaged neighbor activations.
+Repo: diffviews
+Branch: feature/gradio-port-phase2-selection (in progress)
+Next: feature/gradio-port-phase3-generation
 
-**Repository:** diffviews (diffusion activation visualizer)
-**Current branch:** `feature/gradio-port-phase1-core` (Phase 1 complete)
+Phase 1 done: Basic layout, ScatterPlot, model switching, class filtering.
+Phase 2 done: KNN suggest button, neighbor gallery with distances, 23 tests pass.
 
-## Completed Work (Phase 1)
+Phase 3 TODO: Enable generation from averaged neighbor activations.
 
-- Created `diffviews/visualization/gradio_app.py` with:
-  - `GradioVisualizer` class (data loading, model discovery, model switching)
-  - `create_gradio_app()` function with ScatterPlot layout
-  - Click selection, class filtering, neighbor display (basic)
-  - Generation controls as disabled placeholders
+See docs/gradio-port-plan.md for full context.
+Start by reading @diffviews/visualization/gradio_app.py
 
-- Added 19 tests in `tests/test_gradio_visualizer.py`
-- Fixed checkpoint path in `tests/test_dmd2_adapter.py`
-- All 83 tests pass
+---
 
-## Current State
+## Detailed Context (if needed)
 
-The Gradio app initializes and displays data, but:
-- Selection/neighbor toggling needs refinement
-- Generation is not yet implemented (placeholders only)
-- Using `gr.ScatterPlot` (Altair) instead of Plotly due to click event support
+**What exists:**
+- `diffviews/visualization/gradio_app.py` (~890 lines) - Gradio app with:
+  - `GradioVisualizer` class: data loading, model discovery, KNN fitting
+  - `find_knn_neighbors(idx, k)` returns (idx, distance) tuples
+  - ScatterPlot with click selection, class filtering
+  - Suggest button + K slider for auto-suggesting neighbors
+  - Gallery shows distances (d=X.XX) for KNN neighbors
+  - Generation controls disabled (placeholders)
 
-## Next Steps (Phase 2: Selection & Neighbors)
+- `tests/test_gradio_visualizer.py` - 23 tests
+- 87 total tests pass
 
-Please help me with Phase 2 on branch `feature/gradio-port-phase2-selection`:
+**Key technical notes:**
+- Using `gr.ScatterPlot` (Altair) not Plotly - has working `.select()` events
+- Per-session state: `selected_idx`, `manual_neighbors`, `knn_neighbors`, `knn_distances`
+- Thread lock scaffolded for generation: `_generation_lock`
 
-1. Improve point selection UX
-2. Add KNN-based automatic neighbor suggestions
-3. Enhance neighbor gallery with distance info
-4. Consider whether to switch to Plotly with custom JS for better trace overlays
-
-Key files:
-- `diffviews/visualization/gradio_app.py` - main Gradio app
-- `diffviews/visualization/app.py` - original Dash app (reference)
-- `docs/gradio-port-plan.md` - full implementation plan
-
-## Key Technical Notes
-
-- Gradio 4.44.1 installed
-- `gr.ScatterPlot.select()` works for click events
-- `gr.Plot` (Plotly) doesn't expose click events easily in Gradio
-- State is per-session via `gr.State`
-- Generation needs thread-safe locking (scaffolded with `_generation_lock`)
-
-## Commands
+**Phase 3 needs:**
+- Enable generate button when checkpoint available
+- Port `generate_from_neighbors` logic from Dash app
+- Progress indicator during generation
+- Save generated images to session temp dir
 
 ```bash
 # Run tests
 python -m pytest tests/test_gradio_visualizer.py -v
 
-# Run app locally
+# Run app
 python -m diffviews.visualization.gradio_app --data-dir data
-
-# Create phase 2 branch
-git checkout feature/gradio-port
-git checkout -b feature/gradio-port-phase2-selection
 ```
-
----
-
-End of continuation prompt.

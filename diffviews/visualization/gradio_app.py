@@ -310,6 +310,35 @@ class GradioVisualizer:
         self.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
         self.nn_model.fit(umap_coords)
 
+    def find_knn_neighbors(
+        self, idx: int, k: int = 5, exclude_selected: bool = True
+    ) -> List[Tuple[int, float]]:
+        """Find k nearest neighbors for a point.
+
+        Args:
+            idx: Index of the query point
+            k: Number of neighbors to return
+            exclude_selected: If True, exclude the query point from results
+
+        Returns:
+            List of (neighbor_idx, distance) tuples sorted by distance
+        """
+        if self.nn_model is None or idx >= len(self.df):
+            return []
+
+        # Query k+1 since the point itself is included
+        query_k = k + 1 if exclude_selected else k
+        query_point = self.df.iloc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
+        distances, indices = self.nn_model.kneighbors(query_point, n_neighbors=query_k)
+
+        results = []
+        for dist, neighbor_idx in zip(distances[0], indices[0]):
+            if exclude_selected and neighbor_idx == idx:
+                continue
+            results.append((int(neighbor_idx), float(dist)))
+
+        return results[:k]
+
     def get_image(self, image_path: str) -> Optional[np.ndarray]:
         """Load image as numpy array for gr.Image."""
         try:
@@ -380,6 +409,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         selected_idx = gr.State(value=None)
         manual_neighbors = gr.State(value=[])
         knn_neighbors = gr.State(value=[])
+        knn_distances = gr.State(value={})  # {idx: distance} for KNN neighbors
         highlighted_class = gr.State(value=None)
 
         gr.Markdown("# Diffusion Activation Visualizer")
@@ -473,6 +503,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 # Neighbor list
                 with gr.Group():
                     gr.Markdown("### Neighbors")
+                    with gr.Row():
+                        knn_k_slider = gr.Slider(
+                            1, 10, value=5, step=1, label="K neighbors"
+                        )
+                        suggest_btn = gr.Button("Suggest", size="sm")
                     neighbor_gallery = gr.Gallery(
                         label=None,
                         show_label=False,
@@ -481,6 +516,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         object_fit="contain",
                     )
                     neighbor_info = gr.Markdown("No neighbors selected")
+                    clear_neighbors_btn = gr.Button("Clear Neighbors", size="sm")
 
         # --- Event Handlers ---
 
@@ -579,6 +615,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 None,                      # selected_idx
                 [],                        # manual_neighbors
                 [],                        # knn_neighbors
+                {},                        # knn_distances
                 plot_df,                   # umap_plot
                 [],                        # neighbor_gallery
                 "No neighbors selected",   # neighbor_info
@@ -610,14 +647,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
             return plot_df, None, None, ""
 
-        def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _high_class):
+        def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
             """Handle model switching (resets all state, inputs unused)."""
             if model_name == visualizer.current_model:
-                return (gr.update(),) * 12
+                return (gr.update(),) * 13
 
             success = visualizer.switch_model(model_name)
             if not success:
-                return (gr.update(),) * 12
+                return (gr.update(),) * 13
 
             plot_df = visualizer.get_plot_dataframe()
             status = f"Showing {len(visualizer.df)} samples ({model_name})"
@@ -629,6 +666,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 None,                              # selected_idx
                 [],                                # manual_neighbors
                 [],                                # knn_neighbors
+                {},                                # knn_distances
                 None,                              # highlighted_class
                 None,                              # preview_image
                 "Click a point to preview",        # preview_details
@@ -637,31 +675,59 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 visualizer.get_class_options(),    # class_dropdown choices
             )
 
-        def update_neighbor_display(sel_idx, man_n, knn_n):
-            """Update neighbor gallery and info."""
+        def update_neighbor_display(sel_idx, man_n, knn_n, knn_dist):
+            """Update neighbor gallery and info with distance info."""
             if sel_idx is None:
                 return [], "No neighbors selected"
 
-            all_neighbors = list(set((man_n or []) + (knn_n or [])))
-            if not all_neighbors:
-                return [], "Click points to add neighbors"
+            man_n = man_n or []
+            knn_n = knn_n or []
+            knn_dist = knn_dist or {}
 
-            # Build gallery images
+            # Combine neighbors: KNN first (sorted by distance), then manual
+            all_neighbors = []
+            # KNN neighbors sorted by distance
+            knn_with_dist = [(idx, knn_dist.get(idx, 999)) for idx in knn_n if idx not in man_n]
+            knn_with_dist.sort(key=lambda x: x[1])
+            all_neighbors.extend([idx for idx, _ in knn_with_dist])
+            # Manual neighbors at end
+            all_neighbors.extend(man_n)
+
+            if not all_neighbors:
+                return [], "Click points or use Suggest"
+
+            # Build gallery images with distance labels
             images = []
             for idx in all_neighbors[:10]:  # Limit to 10
                 if idx < len(visualizer.df):
                     sample = visualizer.df.iloc[idx]
                     img = visualizer.get_image(sample["image_path"])
                     if img is not None:
+                        # Build label with class and distance
                         if "class_label" in sample:
                             cls_id = int(sample["class_label"])
                             cls_name = visualizer.get_class_name(cls_id)
                             label = f"{cls_id}: {cls_name}"
                         else:
-                            label = "?"
+                            label = f"#{idx}"
+
+                        # Add distance for KNN neighbors
+                        if idx in knn_dist:
+                            label += f" (d={knn_dist[idx]:.2f})"
+                        elif idx in man_n:
+                            label += " (manual)"
+
                         images.append((img, label))
 
-            info = f"{len(all_neighbors)} neighbors selected"
+            knn_count = len([n for n in knn_n if n not in man_n])
+            man_count = len(man_n)
+            info = f"{len(all_neighbors)} neighbors"
+            if knn_count > 0:
+                info += f" ({knn_count} KNN"
+            if man_count > 0:
+                info += f", {man_count} manual" if knn_count > 0 else f" ({man_count} manual"
+            if knn_count > 0 or man_count > 0:
+                info += ")"
             return images, info
 
         # Wire up events
@@ -694,6 +760,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 selected_idx,
                 manual_neighbors,
                 knn_neighbors,
+                knn_distances,
                 umap_plot,
                 neighbor_gallery,
                 neighbor_info,
@@ -717,7 +784,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 on_model_switch,
                 inputs=[
                     model_dropdown, selected_idx, manual_neighbors,
-                    knn_neighbors, highlighted_class
+                    knn_neighbors, knn_distances, highlighted_class
                 ],
                 outputs=[
                     umap_plot,
@@ -726,6 +793,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     selected_idx,
                     manual_neighbors,
                     knn_neighbors,
+                    knn_distances,
                     highlighted_class,
                     preview_image,
                     preview_details,
@@ -736,12 +804,61 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
 
         # Update neighbor display when neighbors change
-        for state in [manual_neighbors, knn_neighbors]:
+        for state in [manual_neighbors, knn_neighbors, knn_distances]:
             state.change(
                 update_neighbor_display,
-                inputs=[selected_idx, manual_neighbors, knn_neighbors],
+                inputs=[selected_idx, manual_neighbors, knn_neighbors, knn_distances],
                 outputs=[neighbor_gallery, neighbor_info],
             )
+
+        # --- Suggest neighbors button ---
+        def on_suggest_neighbors(sel_idx, k_val, high_class, man_n):
+            """Auto-suggest K nearest neighbors for selected point."""
+            if sel_idx is None:
+                return gr.update(), [], {}, gr.update(), "Select a point first"
+
+            # Find KNN neighbors
+            neighbors = visualizer.find_knn_neighbors(sel_idx, k=int(k_val))
+            if not neighbors:
+                return gr.update(), [], {}, gr.update(), "No neighbors found"
+
+            # Extract indices and distances
+            knn_idx = [idx for idx, _ in neighbors]
+            knn_dist = dict(neighbors)
+
+            # Update plot
+            plot_df = visualizer.get_plot_dataframe(
+                selected_idx=sel_idx,
+                manual_neighbors=man_n or [],
+                knn_neighbors=knn_idx,
+                highlighted_class=high_class
+            )
+
+            return plot_df, knn_idx, knn_dist, gr.update(), f"Found {len(knn_idx)} neighbors"
+
+        suggest_btn.click(
+            on_suggest_neighbors,
+            inputs=[selected_idx, knn_k_slider, highlighted_class, manual_neighbors],
+            outputs=[umap_plot, knn_neighbors, knn_distances, neighbor_gallery, neighbor_info],
+        )
+
+        # --- Clear neighbors button ---
+        def on_clear_neighbors(sel_idx, high_class):
+            """Clear all neighbors (both manual and KNN)."""
+            plot_df = visualizer.get_plot_dataframe(
+                selected_idx=sel_idx,
+                highlighted_class=high_class
+            )
+            return plot_df, [], [], {}, [], "No neighbors selected"
+
+        clear_neighbors_btn.click(
+            on_clear_neighbors,
+            inputs=[selected_idx, highlighted_class],
+            outputs=[
+                umap_plot, manual_neighbors, knn_neighbors,
+                knn_distances, neighbor_gallery, neighbor_info
+            ],
+        )
 
     return app
 

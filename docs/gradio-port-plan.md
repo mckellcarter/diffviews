@@ -42,21 +42,22 @@ Files created/modified:
 - `pyproject.toml` (added gradio optional dependency)
 - `tests/test_dmd2_adapter.py` (fixed checkpoint path)
 
-### Phase 2: Selection & Neighbors (NEXT)
+### Phase 2: Selection & Neighbors (IN PROGRESS)
 **Branch:** `feature/gradio-port-phase2-selection`
 
-TODO:
-- [ ] Improve point selection UX (click → select, click again → toggle neighbor)
-- [ ] Add KNN-based automatic neighbor suggestions
-- [ ] Enhance neighbor gallery display with distance info
-- [ ] Add neighbor removal functionality
-- [ ] Update plot highlighting for selected/neighbors (currently uses DataFrame column)
-- [ ] Consider switching back to Plotly for richer trace overlays
+Completed:
+- [x] Add KNN-based automatic neighbor suggestions (`find_knn_neighbors` + Suggest button)
+- [x] Enhance neighbor gallery display with distance info (shows d=X.XX for KNN, "manual" for clicked)
+- [x] Add Clear Neighbors button
+- [x] Add K slider for adjusting neighbor count
+- [x] Store neighbor distances in session state (`knn_distances`)
+- [x] Add 4 new tests for `find_knn_neighbors` (23 total tests now)
 
-Key challenge: Gradio's `ScatterPlot` uses Altair (not Plotly), limiting trace customization. Options:
-1. Stay with ScatterPlot, use color column for highlights (current approach)
-2. Switch to `gr.Plot` with Plotly + custom JS for click events
-3. Use Plotly figure with `plotly_click` event handling
+TODO (optional):
+- [ ] Add neighbor removal via gallery click (requires custom JS)
+- [ ] Consider Plotly switch for richer trace overlays (staying with ScatterPlot for now)
+
+Key decision: Staying with ScatterPlot (Altair) for now - it provides working click events and the highlight column approach works well for distinguishing selected/neighbors.
 
 ### Phase 3: Generation
 **Branch:** `feature/gradio-port-phase3-generation`

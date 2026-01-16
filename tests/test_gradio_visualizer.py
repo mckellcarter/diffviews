@@ -370,6 +370,68 @@ class TestNearestNeighbors:
             # Should not crash, nn_model stays None
             assert viz.nn_model is None
 
+    def test_find_knn_neighbors(self):
+        """Test finding KNN neighbors returns distances."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=30)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            viz.fit_nearest_neighbors()
+            neighbors = viz.find_knn_neighbors(0, k=5)
+
+            assert len(neighbors) == 5
+            # Each neighbor is (idx, distance) tuple
+            for idx, dist in neighbors:
+                assert isinstance(idx, int)
+                assert isinstance(dist, float)
+                assert idx != 0  # Shouldn't include the query point
+                assert dist >= 0
+
+    def test_find_knn_neighbors_sorted_by_distance(self):
+        """Test that neighbors are sorted by distance."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=30)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            viz.fit_nearest_neighbors()
+            neighbors = viz.find_knn_neighbors(0, k=5)
+
+            distances = [dist for _, dist in neighbors]
+            assert distances == sorted(distances)
+
+    def test_find_knn_neighbors_no_model(self):
+        """Test that find_knn_neighbors returns empty when no model fitted."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Don't fit the model
+            neighbors = viz.find_knn_neighbors(0, k=5)
+            assert neighbors == []
+
+    def test_find_knn_neighbors_invalid_idx(self):
+        """Test that find_knn_neighbors handles invalid index."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            viz.fit_nearest_neighbors()
+            # Index out of range
+            neighbors = viz.find_knn_neighbors(999, k=5)
+            assert neighbors == []
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
