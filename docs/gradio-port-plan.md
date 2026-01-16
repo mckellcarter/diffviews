@@ -68,21 +68,57 @@ Completed:
 4. Use `go.Scattergl` with `.tolist()` for Gradio compatibility
 5. Benign "too many arguments" warning can be ignored
 
-### Phase 3: Generation
-**Branch:** `feature/gradio-port-phase3-generation`
+### Phase 3: Generation ✅ COMPLETE
+**Branch:** `feature/gradio-port-phase2-selection` (combined with Phase 2)
 
-TODO:
-- [ ] Enable generation button when checkpoint available
-- [ ] Port `generate_from_neighbors` logic with thread-safe locking
-- [ ] Add progress indicator during generation
-- [ ] Save generated images to session-specific temp directory
-- [ ] Update plot with generated sample trajectory
+Completed:
+- [x] Enable generation button when checkpoint available
+- [x] Port `generate_from_neighbors` logic with thread-safe locking
+- [x] Add `load_adapter()` method for lazy adapter loading
+- [x] Add `prepare_activation_dict()` to split activations by layer (sorted order critical!)
+- [x] Wire up generation settings (steps, mask_steps, guidance, sigma_max/min)
+- [x] Display generated image in UI
+- [x] Add 5 new tests for generation methods in `test_generator.py`
+
+Still TODO (Phase 3b - Trajectory):
+- [ ] Add trajectory visualization (see implementation notes below)
+- [ ] Show intermediate images during denoising
 - [ ] Add "Clear Generated" functionality
 
+**Trajectory Visualization Implementation:**
+```python
+# In on_generate(), call with trajectory options:
+images, labels, trajectory_acts, intermediates = generate_with_mask_multistep(
+    ...,
+    extract_layers=sorted(viz.umap_params.get("layers", [])),
+    return_trajectory=True,
+    return_intermediates=True,
+)
+
+# Project each step through UMAP:
+trajectory_coords = []
+for step_idx, act in enumerate(trajectory_acts):
+    if viz.umap_scaler:
+        act = viz.umap_scaler.transform(act)
+    coords = viz.umap_reducer.transform(act)
+    trajectory_coords.append((coords[0, 0], coords[0, 1]))
+
+# Add trajectory trace to Plotly figure:
+fig.add_trace(go.Scatter(
+    x=[c[0] for c in trajectory_coords],
+    y=[c[1] for c in trajectory_coords],
+    mode="lines+markers+text",
+    text=[f"σ={s:.1f}" for s in sigmas],
+    line=dict(color="red", width=2),
+    marker=dict(size=8),
+    name="trajectory",
+))
+```
+
 Key considerations:
-- Thread safety: Use `threading.Lock` for shared adapter (already scaffolded)
+- Thread safety: Use `threading.Lock` for shared adapter ✅ implemented
 - Per-session state: Generated samples in `gr.State`, not shared DataFrame
-- Trajectory visualization: May need Plotly for line traces
+- UMAP reducer must be loaded (from .pkl file) for trajectory projection
 
 ### Phase 4: Polish & Production
 **Branch:** `feature/gradio-port-phase4-polish`
