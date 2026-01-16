@@ -20,6 +20,9 @@ import plotly.graph_objects as go
 
 from diffviews.processing.umap import load_dataset_activations
 from diffviews.utils.device import get_device
+from diffviews.adapters.registry import get_adapter
+from diffviews.core.masking import ActivationMasker, unflatten_activation
+from diffviews.core.generator import generate_with_mask_multistep
 
 
 class GradioVisualizer:
@@ -345,6 +348,73 @@ class GradioVisualizer:
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
             return None
+
+    def load_adapter(self):
+        """Lazily load the generation adapter."""
+        if self.adapter is not None:
+            return self.adapter
+
+        if not self.checkpoint_path or not Path(self.checkpoint_path).exists():
+            print(f"Error: checkpoint not found at {self.checkpoint_path}")
+            return None
+
+        print(f"Loading adapter: {self.adapter_name} from {self.checkpoint_path}")
+        AdapterClass = get_adapter(self.adapter_name)
+        self.adapter = AdapterClass.from_checkpoint(
+            self.checkpoint_path,
+            device=self.device,
+            label_dropout=self.label_dropout,
+        )
+        # Cache layer shapes
+        self.layer_shapes = self.adapter.get_layer_shapes()
+        print(f"Adapter loaded. Layers: {list(self.layer_shapes.keys())}")
+        return self.adapter
+
+    def prepare_activation_dict(
+        self, neighbor_indices: List[int]
+    ) -> Optional[Dict[str, "torch.Tensor"]]:
+        """Prepare activation dict for masked generation.
+
+        Args:
+            neighbor_indices: List of indices to average activations from
+
+        Returns:
+            Dict mapping layer_name -> (1, C, H, W) tensor, or None if error
+        """
+        import torch
+
+        if self.activations is None or len(neighbor_indices) == 0:
+            return None
+
+        # Get layers from UMAP params (must match order used during embedding)
+        layers = sorted(self.umap_params.get("layers", ["encoder_bottleneck", "midblock"]))
+        if not self.layer_shapes:
+            if self.adapter is None:
+                self.load_adapter()
+            if self.adapter is None:
+                return None
+
+        # Average neighbor activations in high-D space
+        neighbor_acts = self.activations[neighbor_indices]  # (N, D)
+        center_activation = np.mean(neighbor_acts, axis=0, keepdims=True)  # (1, D)
+
+        # Split into per-layer activations (MUST be sorted order!)
+        activation_dict = {}
+        offset = 0
+        for layer_name in layers:
+            if layer_name not in self.layer_shapes:
+                print(f"Warning: layer {layer_name} not in adapter shapes")
+                continue
+            shape = self.layer_shapes[layer_name]  # (C, H, W)
+            size = int(np.prod(shape))
+            layer_act_flat = center_activation[0, offset : offset + size]
+            layer_act = unflatten_activation(
+                torch.from_numpy(layer_act_flat).float(), shape
+            )
+            activation_dict[layer_name] = layer_act  # (1, C, H, W)
+            offset += size
+
+        return activation_dict
 
     def get_plot_dataframe(
         self,
@@ -700,27 +770,26 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     selected_details = gr.Markdown("Click a point to select")
                     clear_selection_btn = gr.Button("Clear Selection", size="sm")
 
-                # Generation settings (placeholders for phase 2)
+                # Generation settings
                 with gr.Group():
-                    gr.Markdown("### Generation Settings")
+                    gr.Markdown("### Generation")
+                    generated_image = gr.Image(label=None, show_label=False, height=200)
                     with gr.Row():
-                        _num_steps_slider = gr.Slider(
+                        num_steps_slider = gr.Slider(
                             1, 50, value=visualizer.num_steps, step=1, label="Steps"
                         )
-                        _mask_steps_slider = gr.Slider(
+                        mask_steps_slider = gr.Slider(
                             1, 50, value=visualizer.mask_steps, step=1, label="Mask Steps"
                         )
-                    _guidance_slider = gr.Slider(
+                    guidance_slider = gr.Slider(
                         -10, 20, value=visualizer.guidance_scale, step=0.1, label="Guidance"
                     )
                     with gr.Row():
-                        _sigma_max_input = gr.Number(value=visualizer.sigma_max, label="σ max")
-                        _sigma_min_input = gr.Number(value=visualizer.sigma_min, label="σ min")
+                        sigma_max_input = gr.Number(value=visualizer.sigma_max, label="σ max")
+                        sigma_min_input = gr.Number(value=visualizer.sigma_min, label="σ min")
 
-                    _generate_btn = gr.Button(
-                        "Generate Image", variant="primary", interactive=False
-                    )
-                    _gen_status = gr.Markdown("*Generation available in phase 2*")
+                    generate_btn = gr.Button("Generate from Neighbors", variant="primary")
+                    gen_status = gr.Markdown("Select neighbors, then generate")
 
                 # Neighbor list
                 with gr.Group():
@@ -1087,6 +1156,78 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 umap_plot, manual_neighbors, knn_neighbors,
                 knn_distances, neighbor_gallery, neighbor_info
             ],
+        )
+
+        # --- Generate button ---
+        def on_generate(
+            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min
+        ):
+            """Generate image from selected neighbors."""
+            # Combine all neighbors
+            all_neighbors = list(set((man_n or []) + (knn_n or [])))
+            if sel_idx is not None and sel_idx not in all_neighbors:
+                all_neighbors.insert(0, sel_idx)
+
+            if not all_neighbors:
+                return None, "Select neighbors first"
+
+            # Get class label from selected point (or first neighbor)
+            ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
+            if "class_label" in visualizer.df.columns:
+                class_label = int(visualizer.df.iloc[ref_idx]["class_label"])
+            else:
+                class_label = None
+
+            # Load adapter (lazy)
+            with visualizer._generation_lock:
+                adapter = visualizer.load_adapter()
+                if adapter is None:
+                    return None, "Checkpoint not found"
+
+                # Prepare activation dict
+                activation_dict = visualizer.prepare_activation_dict(all_neighbors)
+                if activation_dict is None:
+                    return None, "Failed to prepare activations"
+
+                # Create masker and register hooks
+                masker = ActivationMasker(adapter)
+                for layer_name, activation in activation_dict.items():
+                    masker.set_mask(layer_name, activation)
+                masker.register_hooks(list(activation_dict.keys()))
+
+                try:
+                    # Generate
+                    images, labels = generate_with_mask_multistep(
+                        adapter,
+                        masker,
+                        class_label=class_label,
+                        num_steps=int(n_steps),
+                        mask_steps=int(m_steps),
+                        sigma_max=float(s_max),
+                        sigma_min=float(s_min),
+                        guidance_scale=float(guidance),
+                        stochastic=True,
+                        num_samples=1,
+                        device=visualizer.device,
+                    )
+                finally:
+                    masker.remove_hooks()
+
+            # Convert to numpy for gr.Image
+            gen_img = images[0].numpy()
+            class_name = visualizer.get_class_name(class_label) if class_label else "random"
+            status = f"Generated (class {class_label}: {class_name})"
+
+            return gen_img, status
+
+        generate_btn.click(
+            on_generate,
+            inputs=[
+                selected_idx, manual_neighbors, knn_neighbors,
+                num_steps_slider, mask_steps_slider, guidance_slider,
+                sigma_max_input, sigma_min_input,
+            ],
+            outputs=[generated_image, gen_status],
         )
 
     return app
