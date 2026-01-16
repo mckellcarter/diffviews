@@ -496,6 +496,7 @@ class GradioVisualizer:
         manual_neighbors: Optional[List[int]] = None,
         knn_neighbors: Optional[List[int]] = None,
         highlighted_class: Optional[int] = None,
+        trajectory: Optional[List[Tuple[float, float, float]]] = None,
     ) -> go.Figure:
         """Create Plotly figure for UMAP scatter plot.
 
@@ -504,6 +505,7 @@ class GradioVisualizer:
             manual_neighbors: List of manually selected neighbor indices
             knn_neighbors: List of KNN neighbor indices
             highlighted_class: Class ID to highlight
+            trajectory: List of (x, y, sigma) tuples for denoising trajectory
 
         Returns:
             Plotly Figure object
@@ -601,6 +603,65 @@ class GradioVisualizer:
                 customdata=[selected_idx],
                 hoverinfo="skip",
                 name="selected",
+                showlegend=False,
+            ))
+
+        # Denoising trajectory (if available)
+        if trajectory and len(trajectory) > 1:
+            traj_x = [t[0] for t in trajectory]
+            traj_y = [t[1] for t in trajectory]
+            traj_sigma = [t[2] for t in trajectory]
+
+            # Line trace for trajectory path
+            fig.add_trace(go.Scatter(
+                x=traj_x,
+                y=traj_y,
+                mode="lines",
+                line=dict(color="white", width=3, dash="dot"),
+                hoverinfo="skip",
+                name="trajectory_line",
+                showlegend=False,
+            ))
+
+            # Markers with sigma labels
+            fig.add_trace(go.Scatter(
+                x=traj_x,
+                y=traj_y,
+                mode="markers+text",
+                marker=dict(
+                    size=12,
+                    color=list(range(len(trajectory))),
+                    colorscale="Viridis",
+                    line=dict(width=1, color="white"),
+                ),
+                text=[f"σ={s:.1f}" for s in traj_sigma],
+                textposition="top center",
+                textfont=dict(size=9, color="white"),
+                hovertemplate="Step %{customdata}<br>σ=%{text}<br>(%{x:.2f}, %{y:.2f})<extra></extra>",
+                customdata=list(range(len(trajectory))),
+                name="trajectory",
+                showlegend=False,
+            ))
+
+            # Start marker (star)
+            fig.add_trace(go.Scatter(
+                x=[traj_x[0]],
+                y=[traj_y[0]],
+                mode="markers",
+                marker=dict(symbol="star", size=18, color="lime", line=dict(width=1, color="white")),
+                hovertemplate="Start (σ=%.1f)<extra></extra>" % traj_sigma[0],
+                name="traj_start",
+                showlegend=False,
+            ))
+
+            # End marker (diamond)
+            fig.add_trace(go.Scatter(
+                x=[traj_x[-1]],
+                y=[traj_y[-1]],
+                mode="markers",
+                marker=dict(symbol="diamond", size=14, color="red", line=dict(width=1, color="white")),
+                hovertemplate="End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
+                name="traj_end",
                 showlegend=False,
             ))
 
@@ -702,6 +763,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         knn_neighbors = gr.State(value=[])
         knn_distances = gr.State(value={})  # {idx: distance} for KNN neighbors
         highlighted_class = gr.State(value=None)
+        trajectory_coords = gr.State(value=[])  # [(x, y, sigma), ...] for denoising path
 
         gr.Markdown("# Diffusion Activation Visualizer")
 
@@ -864,26 +926,26 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 info += ")"
             return images, info
 
-        def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class):
+        def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class, traj):
             """Handle plot click via JS bridge - select point or toggle neighbor."""
             if not click_json:
-                return (gr.update(),) * 10
+                return (gr.update(),) * 11
 
             try:
                 click_data = json.loads(click_json)
                 point_idx = click_data.get("pointIndex")
                 if point_idx is None:
-                    return (gr.update(),) * 10
+                    return (gr.update(),) * 11
                 point_idx = int(point_idx)
             except (json.JSONDecodeError, TypeError, ValueError):
-                return (gr.update(),) * 10
+                return (gr.update(),) * 11
 
             if point_idx < 0 or point_idx >= len(visualizer.df):
-                return (gr.update(),) * 10
+                return (gr.update(),) * 11
 
             knn_dist = knn_dist or {}
 
-            # First click: select this point
+            # First click: select this point (clears trajectory)
             if sel_idx is None:
                 sample = visualizer.df.iloc[point_idx]
                 img = visualizer.get_image(sample["image_path"])
@@ -898,7 +960,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
                 details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
-                # Build updated Plotly figure with selection
+                # Build updated Plotly figure with selection (no trajectory)
                 fig = visualizer.create_umap_figure(
                     selected_idx=point_idx,
                     highlighted_class=high_class
@@ -915,13 +977,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     fig,           # umap_plot
                     [],            # neighbor_gallery
                     "Click points or use Suggest",  # neighbor_info
+                    [],            # trajectory_coords (cleared)
                 )
 
             # Clicking same point: do nothing
             if point_idx == sel_idx:
-                return (gr.update(),) * 10
+                return (gr.update(),) * 11
 
-            # Toggle neighbor
+            # Toggle neighbor (preserve trajectory)
             man_n = list(man_n) if man_n else []
             knn_n = list(knn_n) if knn_n else []
 
@@ -932,12 +995,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             else:
                 man_n.append(point_idx)
 
-            # Rebuild Plotly figure with updated highlights
+            # Rebuild Plotly figure with updated highlights (preserve trajectory)
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
-                highlighted_class=high_class
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
             )
 
             # Build gallery for neighbors
@@ -954,10 +1018,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 fig,           # umap_plot
                 gallery,       # neighbor_gallery
                 info,          # neighbor_info
+                traj,          # trajectory_coords (preserved)
             )
 
         def on_clear_selection(high_class):
-            """Clear selection and neighbors."""
+            """Clear selection, neighbors, and trajectory."""
             fig = visualizer.create_umap_figure(highlighted_class=high_class)
             return (
                 None,                      # preview_image
@@ -971,15 +1036,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 fig,                       # umap_plot
                 [],                        # neighbor_gallery
                 "No neighbors selected",   # neighbor_info
+                [],                        # trajectory_coords
             )
 
-        def on_class_filter(class_value, sel_idx, man_n, knn_n):
-            """Handle class filter selection."""
+        def on_class_filter(class_value, sel_idx, man_n, knn_n, traj):
+            """Handle class filter selection (preserves trajectory)."""
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
-                highlighted_class=class_value
+                highlighted_class=class_value,
+                trajectory=traj if traj else None,
             )
 
             if class_value is not None and "class_label" in visualizer.df.columns:
@@ -990,23 +1057,24 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             return fig, class_value, status
 
-        def on_clear_class(sel_idx, man_n, knn_n):
-            """Clear class highlight."""
+        def on_clear_class(sel_idx, man_n, knn_n, traj):
+            """Clear class highlight (preserves trajectory)."""
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
-                knn_neighbors=knn_n
+                knn_neighbors=knn_n,
+                trajectory=traj if traj else None,
             )
             return fig, None, None, ""
 
         def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
             """Handle model switching (resets all state, inputs unused)."""
             if model_name == visualizer.current_model:
-                return (gr.update(),) * 13
+                return (gr.update(),) * 14
 
             success = visualizer.switch_model(model_name)
             if not success:
-                return (gr.update(),) * 13
+                return (gr.update(),) * 14
 
             fig = visualizer.create_umap_figure()
             status = f"Showing {len(visualizer.df)} samples ({model_name})"
@@ -1020,6 +1088,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 [],                                # knn_neighbors
                 {},                                # knn_distances
                 None,                              # highlighted_class
+                [],                                # trajectory_coords
                 None,                              # preview_image
                 "Click a point to preview",        # preview_details
                 None,                              # selected_image
@@ -1036,7 +1105,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             on_click_data,
             inputs=[
                 click_data_box, selected_idx, manual_neighbors,
-                knn_neighbors, knn_distances, highlighted_class
+                knn_neighbors, knn_distances, highlighted_class, trajectory_coords
             ],
             outputs=[
                 preview_image,
@@ -1049,6 +1118,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 umap_plot,
                 neighbor_gallery,
                 neighbor_info,
+                trajectory_coords,
             ],
         )
 
@@ -1067,18 +1137,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 umap_plot,
                 neighbor_gallery,
                 neighbor_info,
+                trajectory_coords,
             ],
         )
 
         class_dropdown.change(
             on_class_filter,
-            inputs=[class_dropdown, selected_idx, manual_neighbors, knn_neighbors],
+            inputs=[class_dropdown, selected_idx, manual_neighbors, knn_neighbors, trajectory_coords],
             outputs=[umap_plot, highlighted_class, class_status],
         )
 
         clear_class_btn.click(
             on_clear_class,
-            inputs=[selected_idx, manual_neighbors, knn_neighbors],
+            inputs=[selected_idx, manual_neighbors, knn_neighbors, trajectory_coords],
             outputs=[umap_plot, highlighted_class, class_dropdown, class_status],
         )
 
@@ -1098,6 +1169,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     knn_neighbors,
                     knn_distances,
                     highlighted_class,
+                    trajectory_coords,
                     preview_image,
                     preview_details,
                     selected_image,
@@ -1110,8 +1182,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # No need for state.change() listeners which can cause duplicate events
 
         # --- Suggest neighbors button ---
-        def on_suggest_neighbors(sel_idx, k_val, high_class, man_n):
-            """Auto-suggest K nearest neighbors for selected point."""
+        def on_suggest_neighbors(sel_idx, k_val, high_class, man_n, traj):
+            """Auto-suggest K nearest neighbors (preserves trajectory)."""
             if sel_idx is None:
                 return gr.update(), [], {}, gr.update(), "Select a point first"
 
@@ -1124,34 +1196,36 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             knn_idx = [idx for idx, _ in neighbors]
             knn_dist = dict(neighbors)
 
-            # Update plot
+            # Update plot (preserve trajectory)
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_idx,
-                highlighted_class=high_class
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
             )
 
             return fig, knn_idx, knn_dist, gr.update(), f"Found {len(knn_idx)} neighbors"
 
         suggest_btn.click(
             on_suggest_neighbors,
-            inputs=[selected_idx, knn_k_slider, highlighted_class, manual_neighbors],
+            inputs=[selected_idx, knn_k_slider, highlighted_class, manual_neighbors, trajectory_coords],
             outputs=[umap_plot, knn_neighbors, knn_distances, neighbor_gallery, neighbor_info],
         )
 
         # --- Clear neighbors button ---
-        def on_clear_neighbors(sel_idx, high_class):
-            """Clear all neighbors (both manual and KNN)."""
+        def on_clear_neighbors(sel_idx, high_class, traj):
+            """Clear all neighbors (preserves trajectory)."""
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
-                highlighted_class=high_class
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
             )
             return fig, [], [], {}, [], "No neighbors selected"
 
         clear_neighbors_btn.click(
             on_clear_neighbors,
-            inputs=[selected_idx, highlighted_class],
+            inputs=[selected_idx, highlighted_class, trajectory_coords],
             outputs=[
                 umap_plot, manual_neighbors, knn_neighbors,
                 knn_distances, neighbor_gallery, neighbor_info
@@ -1160,16 +1234,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         # --- Generate button ---
         def on_generate(
-            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min
+            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class
         ):
-            """Generate image from selected neighbors."""
+            """Generate image from selected neighbors with trajectory visualization."""
             # Combine all neighbors
             all_neighbors = list(set((man_n or []) + (knn_n or [])))
             if sel_idx is not None and sel_idx not in all_neighbors:
                 all_neighbors.insert(0, sel_idx)
 
             if not all_neighbors:
-                return None, "Select neighbors first"
+                return None, "Select neighbors first", gr.update(), []
 
             # Get class label from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
@@ -1178,16 +1252,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             else:
                 class_label = None
 
+            # Get layers for trajectory extraction
+            extract_layers = sorted(visualizer.umap_params.get("layers", []))
+            can_project = visualizer.umap_reducer is not None and len(extract_layers) > 0
+
             # Load adapter (lazy)
             with visualizer._generation_lock:
                 adapter = visualizer.load_adapter()
                 if adapter is None:
-                    return None, "Checkpoint not found"
+                    return None, "Checkpoint not found", gr.update(), []
 
                 # Prepare activation dict
                 activation_dict = visualizer.prepare_activation_dict(all_neighbors)
                 if activation_dict is None:
-                    return None, "Failed to prepare activations"
+                    return None, "Failed to prepare activations", gr.update(), []
 
                 # Create masker and register hooks
                 masker = ActivationMasker(adapter)
@@ -1196,8 +1274,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 masker.register_hooks(list(activation_dict.keys()))
 
                 try:
-                    # Generate
-                    images, labels = generate_with_mask_multistep(
+                    # Generate with trajectory extraction
+                    result = generate_with_mask_multistep(
                         adapter,
                         masker,
                         class_label=class_label,
@@ -1209,25 +1287,69 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         stochastic=True,
                         num_samples=1,
                         device=visualizer.device,
+                        extract_layers=extract_layers if can_project else None,
+                        return_trajectory=can_project,
                     )
                 finally:
                     masker.remove_hooks()
 
+            # Unpack results
+            if can_project and len(result) >= 3:
+                images, _labels, trajectory_acts = result[:3]
+            else:
+                images = result[0]
+                trajectory_acts = []
+
+            # Project trajectory through UMAP
+            traj_coords = []
+            if trajectory_acts and visualizer.umap_reducer:
+                # Compute sigma schedule (same as generator)
+                rho = 7.0
+                sigmas = []
+                for i in range(int(n_steps)):
+                    ramp = i / max(int(n_steps) - 1, 1)
+                    min_inv_rho = float(s_min) ** (1 / rho)
+                    max_inv_rho = float(s_max) ** (1 / rho)
+                    sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+                    sigmas.append(sigma)
+
+                for i, act in enumerate(trajectory_acts):
+                    try:
+                        # Scale if scaler exists
+                        if visualizer.umap_scaler is not None:
+                            act = visualizer.umap_scaler.transform(act)
+                        # Project to 2D
+                        coords = visualizer.umap_reducer.transform(act)
+                        sigma = sigmas[i] if i < len(sigmas) else 0.0
+                        traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
+                    except Exception as e:
+                        print(f"[Trajectory] Failed to project step {i}: {e}")
+
+            # Build updated plot with trajectory
+            fig = visualizer.create_umap_figure(
+                selected_idx=sel_idx,
+                manual_neighbors=man_n or [],
+                knn_neighbors=knn_n or [],
+                highlighted_class=high_class,
+                trajectory=traj_coords if traj_coords else None,
+            )
+
             # Convert to numpy for gr.Image
             gen_img = images[0].numpy()
             class_name = visualizer.get_class_name(class_label) if class_label else "random"
-            status = f"Generated (class {class_label}: {class_name})"
+            traj_info = f", {len(traj_coords)} trajectory steps" if traj_coords else ""
+            status = f"Generated (class {class_label}: {class_name}{traj_info})"
 
-            return gen_img, status
+            return gen_img, status, fig, traj_coords
 
         generate_btn.click(
             on_generate,
             inputs=[
                 selected_idx, manual_neighbors, knn_neighbors,
                 num_steps_slider, mask_steps_slider, guidance_slider,
-                sigma_max_input, sigma_min_input,
+                sigma_max_input, sigma_min_input, highlighted_class,
             ],
-            outputs=[generated_image, gen_status],
+            outputs=[generated_image, gen_status, umap_plot, trajectory_coords],
         )
 
     return app
