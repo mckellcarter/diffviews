@@ -526,6 +526,67 @@ class TestCreateUmapFigure:
             assert main_trace.customdata is not None
             assert list(main_trace.customdata) == list(range(10))
 
+    def test_figure_with_trajectory(self):
+        """Test figure with denoising trajectory has trajectory traces."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Sample trajectory with (x, y, sigma) tuples
+            trajectory = [
+                (0.0, 0.0, 80.0),  # Start (high noise)
+                (1.0, 1.0, 40.0),
+                (2.0, 2.0, 10.0),
+                (3.0, 3.0, 1.0),   # End (low noise)
+            ]
+
+            fig = viz.create_umap_figure(
+                selected_idx=0,
+                trajectory=trajectory
+            )
+
+            # Should have trajectory traces (indexed for multi-trajectory support)
+            trace_names = [t.name for t in fig.data]
+            assert "trajectory_line_0" in trace_names
+            assert "trajectory_0" in trace_names
+            assert "traj_start_0" in trace_names
+            assert "traj_end_0" in trace_names
+
+            # Trajectory trace should have correct number of points
+            traj_trace = next(t for t in fig.data if t.name == "trajectory_0")
+            assert len(traj_trace.x) == 4
+            assert len(traj_trace.y) == 4
+
+            # Start/end markers should have single point each
+            start_trace = next(t for t in fig.data if t.name == "traj_start_0")
+            end_trace = next(t for t in fig.data if t.name == "traj_end_0")
+            assert len(start_trace.x) == 1
+            assert len(end_trace.x) == 1
+            assert start_trace.x[0] == 0.0  # First trajectory point
+            assert end_trace.x[0] == 3.0    # Last trajectory point
+
+    def test_figure_trajectory_empty(self):
+        """Test that empty or single-point trajectory doesn't add traces."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Empty trajectory
+            fig = viz.create_umap_figure(trajectory=[])
+            trace_names = [t.name for t in fig.data]
+            assert "trajectory_0" not in trace_names
+
+            # Single point (needs at least 2 for a path)
+            fig = viz.create_umap_figure(trajectory=[(0.0, 0.0, 80.0)])
+            trace_names = [t.name for t in fig.data]
+            assert "trajectory_0" not in trace_names
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

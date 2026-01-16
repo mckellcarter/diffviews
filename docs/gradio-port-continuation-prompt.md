@@ -5,9 +5,9 @@
 I'm continuing a Gradio port of a Dash visualization app.
 
 Repo: diffviews
-Branch: feature/gradio-port-phase2-selection
+Branch: feature/gradio-port-phase3-generation
 
-**Phase 3 COMPLETE: Generation Working**
+**Phase 3b COMPLETE: Trajectory Visualization Working**
 
 Start by reading @diffviews/visualization/gradio_app.py
 
@@ -23,42 +23,32 @@ Start by reading @diffviews/visualization/gradio_app.py
 - Neighbor gallery with class labels and distances
 - Class filtering, model switching, clear buttons
 - **Generation from neighbors** (lazy adapter loading, activation masking)
+- **Trajectory visualization** (denoising path on UMAP with sigma labels)
 
-## Next: Trajectory Visualization (Phase 3b)
+## Trajectory Implementation
 
-Need to show denoising trajectory on UMAP plot:
+**How it works:**
+1. `on_generate()` calls `generate_with_mask_multistep()` with `return_trajectory=True` and `extract_layers`
+2. Each step's activations are projected through `umap_reducer.transform()`
+3. `create_umap_figure()` renders trajectory as:
+   - Lime green dashed line connecting points
+   - Green gradient markers (light→medium green)
+   - Star marker for start, diamond for end
 
-1. Call `generate_with_mask_multistep()` with `return_trajectory=True, extract_layers=[...]`
-2. Project each step's activations through `umap_reducer.transform()`
-3. Add trajectory trace to Plotly figure (line + markers with sigma labels)
+**State management:**
+- `trajectory_coords = gr.State(value=[])` stores list of trajectories `[[(x,y,σ),...], ...]`
+- Multiple trajectories accumulate with each generation
+- Trajectory preserved through: selection changes, neighbor toggles, class filter
+- Trajectory cleared only by: Clear Generated button, model switch
 
-**Key code locations:**
-- `on_generate()` handler: ~line 1161 in gradio_app.py
-- `generate_with_mask_multistep()`: diffviews/core/generator.py
-- UMAP reducer loaded from `.pkl` file (stored in `visualizer.umap_reducer`)
+## Next: Phase 4 (Polish)
 
-**Implementation sketch:**
-```python
-# Modify on_generate() to extract trajectory:
-images, labels, trajectory_acts, intermediates = generate_with_mask_multistep(
-    ...,
-    extract_layers=sorted(visualizer.umap_params.get("layers", [])),
-    return_trajectory=True,
-    return_intermediates=True,
-)
-
-# Project through UMAP (if reducer available):
-if visualizer.umap_reducer and trajectory_acts:
-    trajectory_coords = []
-    for act in trajectory_acts:
-        if visualizer.umap_scaler:
-            act = visualizer.umap_scaler.transform(act)
-        coords = visualizer.umap_reducer.transform(act)
-        trajectory_coords.append((float(coords[0, 0]), float(coords[0, 1])))
-
-    # Store in state for plot update
-    # Add go.Scatter trace with mode="lines+markers+text"
-```
+Potential improvements:
+1. Hover preview on UMAP points
+2. Intermediate image gallery (denoising steps)
+3. Loading indicators during generation
+4. Export generated images
+5. Trajectory animation option
 
 ---
 
@@ -95,9 +85,9 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 
 ## Current State
 
-- `gradio_app.py` (~1230 lines) with Plotly + generation working
-- 28 Gradio tests + 24 generator tests (52 total)
-- Next: Phase 3b (trajectory) or Phase 4 (polish)
+- `gradio_app.py` (~1400 lines) with Plotly + generation + multi-trajectory
+- 30 Gradio tests + 24 generator tests (54 total)
+- Next: Phase 4 (polish)
 
 **Key files:**
 - `diffviews/visualization/gradio_app.py` - main app
@@ -121,7 +111,8 @@ python -m diffviews.visualization.gradio_app --data-dir data
 3. `prepare_activation_dict()` splits back by layer using same sorted order
 4. Each layer activation reshaped to `(1, C, H, W)` for masking
 
-**Key methods added:**
+**Key methods:**
 - `load_adapter()`: Lazy loads checkpoint, caches layer shapes
 - `prepare_activation_dict(neighbor_indices)`: Averages neighbors, splits by layer
-- `on_generate()`: Combines neighbors, creates masker, generates image
+- `on_generate()`: Combines neighbors, creates masker, generates image, extracts trajectory
+- `create_umap_figure(..., trajectory=)`: Renders denoising path on plot
