@@ -88,7 +88,7 @@ Key considerations:
 **Branch:** `feature/gradio-port-phase4-polish`
 
 TODO:
-- [ ] Add hover preview (may need custom JS or click-to-preview)
+- [ ] Add hover preview using JS bridge pattern (see below)
 - [ ] Improve CSS styling (match Dash Bootstrap look)
 - [ ] Add authentication option for deployment
 - [ ] Configure queue settings for concurrent users
@@ -109,6 +109,23 @@ Initially used `gr.ScatterPlot` but hit blockers:
 - Textbox `.input()` event triggers Python callback
 - Full control over plot appearance and interactions
 - `customdata` field carries row indices for click handling
+
+### Hover Preview Implementation (Phase 4)
+Use same JS bridge pattern with debounce:
+```javascript
+let hoverTimeout;
+plotDiv.on('plotly_hover', function(data) {
+    clearTimeout(hoverTimeout);
+    hoverTimeout = setTimeout(() => {
+        hoverBox.value = JSON.stringify({pointIndex: point.customdata});
+        hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+    }, 150);  // debounce prevents flooding backend
+});
+plotDiv.on('plotly_unhover', () => clearTimeout(hoverTimeout));
+```
+- Add hidden `hover_data_box` textbox
+- Python handler updates `preview_image` and `preview_details` only
+- Keep click handler separate for selection
 
 ### State Management
 - Per-session: `gr.State` for selected_idx, neighbors, highlighted_class
