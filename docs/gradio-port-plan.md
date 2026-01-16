@@ -42,7 +42,7 @@ Files created/modified:
 - `pyproject.toml` (added gradio optional dependency)
 - `tests/test_dmd2_adapter.py` (fixed checkpoint path)
 
-### Phase 2: Selection & Neighbors (IN PROGRESS)
+### Phase 2: Selection & Neighbors ✅ COMPLETE
 **Branch:** `feature/gradio-port-phase2-selection`
 
 Completed:
@@ -53,21 +53,20 @@ Completed:
 - [x] Store neighbor distances in session state (`knn_distances`)
 - [x] Add 4 new tests for `find_knn_neighbors` (23 total tests now)
 - [x] Add plasma colormap for class colors
+- [x] **Switch from ScatterPlot to Plotly with JS bridge**
 
-**BLOCKER: ScatterPlot limitations require Plotly switch**
+**Plotly Migration (completed):**
+- Replaced `gr.ScatterPlot` with `gr.Plot` + `go.Scattergl`
+- Added `create_umap_figure()` method for Plotly figure generation
+- Implemented JS bridge pattern for click handling (hidden textbox + plotly_click)
+- Updated all callbacks to return Plotly figures
 
-ScatterPlot (Altair) issues discovered:
-- Cannot control plot size (internal Vega-Lite constraints)
-- `.select()` returns coordinates `[x, y]`, not row indices
-- Zoom triggers broken select events
-
-**TODO: Switch to Plotly with JS bridge**
-1. Add `create_umap_figure()` method using Plotly
-2. Use hidden Textbox + JavaScript `plotly_click` handler for click events
-3. Replace `gr.ScatterPlot` with `gr.Plot`
-4. Update all callbacks to return Plotly figures
-
-Reference: Dash app `app.py` lines 802-816 (Plotly figure), 962-1005 (clickData handling)
+**JS Bridge Key Learnings:**
+1. Inject JS via `head=` param in `gr.Blocks()` (not `js=` on events)
+2. Use `.input()` event on textbox (not `.change()`)
+3. Include textbox in inputs list explicitly
+4. Use `go.Scattergl` with `.tolist()` for Gradio compatibility
+5. Benign "too many arguments" warning can be ignored
 
 ### Phase 3: Generation
 **Branch:** `feature/gradio-port-phase3-generation`
@@ -99,10 +98,17 @@ TODO:
 
 ## Architecture Decisions
 
-### Why ScatterPlot over Plot?
-- `gr.ScatterPlot` has native `.select()` event for click handling
-- `gr.Plot` (Plotly) doesn't expose click events in Gradio 4.x
-- Trade-off: Less visual customization, but working interactions
+### Why Plotly with JS Bridge (updated)
+Initially used `gr.ScatterPlot` but hit blockers:
+- ScatterPlot `.select()` returns coordinates, not row indices
+- Cannot control plot size
+- Zoom triggers broken events
+
+**Solution:** `gr.Plot` with Plotly + custom JS bridge
+- JS `plotly_click` handler writes click data to hidden textbox
+- Textbox `.input()` event triggers Python callback
+- Full control over plot appearance and interactions
+- `customdata` field carries row indices for click handling
 
 ### State Management
 - Per-session: `gr.State` for selected_idx, neighbors, highlighted_class

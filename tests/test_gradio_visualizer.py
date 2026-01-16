@@ -433,5 +433,99 @@ class TestNearestNeighbors:
             assert neighbors == []
 
 
+class TestCreateUmapFigure:
+    """Test Plotly figure creation."""
+
+    def test_basic_figure(self):
+        """Test basic figure creation returns Plotly Figure."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            fig = viz.create_umap_figure()
+
+            # Should be a Plotly Figure
+            assert hasattr(fig, 'data')
+            assert hasattr(fig, 'layout')
+            # Should have at least the main scatter trace
+            assert len(fig.data) >= 1
+            # Main trace should have correct number of points
+            assert len(fig.data[0].x) == 20
+
+    def test_figure_with_selection(self):
+        """Test figure with selected point has extra trace."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            fig = viz.create_umap_figure(selected_idx=5)
+
+            # Should have main trace + selection trace
+            assert len(fig.data) >= 2
+            # Find selection trace
+            sel_trace = next((t for t in fig.data if t.name == "selected"), None)
+            assert sel_trace is not None
+            assert len(sel_trace.x) == 1
+
+    def test_figure_with_neighbors(self):
+        """Test figure with neighbors has neighbor traces."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            fig = viz.create_umap_figure(
+                selected_idx=0,
+                manual_neighbors=[1, 2],
+                knn_neighbors=[3, 4, 5]
+            )
+
+            # Should have traces for selection, manual neighbors, and KNN neighbors
+            trace_names = [t.name for t in fig.data]
+            assert "selected" in trace_names
+            assert "manual_neighbors" in trace_names
+            assert "knn_neighbors" in trace_names
+
+    def test_figure_empty_df(self):
+        """Test figure creation with empty dataframe."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            viz.df = pd.DataFrame()
+            fig = viz.create_umap_figure()
+
+            # Should still return a figure, just with no data
+            assert hasattr(fig, 'data')
+            assert hasattr(fig, 'layout')
+
+    def test_figure_customdata_has_indices(self):
+        """Test that figure customdata contains row indices for click handling."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+
+            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            fig = viz.create_umap_figure()
+
+            # Main trace should have customdata with indices
+            main_trace = fig.data[0]
+            assert main_trace.customdata is not None
+            assert list(main_trace.customdata) == list(range(10))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
