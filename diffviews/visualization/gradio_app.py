@@ -617,7 +617,7 @@ class GradioVisualizer:
                 x=traj_x,
                 y=traj_y,
                 mode="lines",
-                line=dict(color="lime", width=3),
+                line=dict(color="lime", width=3, dash="dash"),
                 hoverinfo="skip",
                 name="trajectory_line",
                 showlegend=False,
@@ -849,7 +849,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         sigma_max_input = gr.Number(value=visualizer.sigma_max, label="σ max")
                         sigma_min_input = gr.Number(value=visualizer.sigma_min, label="σ min")
 
-                    generate_btn = gr.Button("Generate from Neighbors", variant="primary")
+                    with gr.Row():
+                        generate_btn = gr.Button("Generate from Neighbors", variant="primary")
+                        clear_gen_btn = gr.Button("Clear", size="sm")
                     gen_status = gr.Markdown("Select neighbors, then generate")
 
                 # Neighbor list
@@ -1352,6 +1354,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 num_steps_slider, mask_steps_slider, guidance_slider,
                 sigma_max_input, sigma_min_input, highlighted_class,
             ],
+            outputs=[generated_image, gen_status, umap_plot, trajectory_coords],
+        )
+
+        # --- Clear generated button ---
+        def on_clear_generated(sel_idx, man_n, knn_n, high_class):
+            """Clear generated image and trajectory."""
+            fig = visualizer.create_umap_figure(
+                selected_idx=sel_idx,
+                manual_neighbors=man_n or [],
+                knn_neighbors=knn_n or [],
+                highlighted_class=high_class,
+            )
+            return None, "Select neighbors, then generate", fig, []
+
+        clear_gen_btn.click(
+            on_clear_generated,
+            inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class],
             outputs=[generated_image, gen_status, umap_plot, trajectory_coords],
         )
 
