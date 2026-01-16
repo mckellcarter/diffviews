@@ -624,6 +624,7 @@ class GradioVisualizer:
             ))
 
             # Markers (sigma labels reserved for hover preview)
+            # Green gradient: light (start/noisy) -> dark (end/clean)
             fig.add_trace(go.Scatter(
                 x=traj_x,
                 y=traj_y,
@@ -631,7 +632,7 @@ class GradioVisualizer:
                 marker=dict(
                     size=10,
                     color=list(range(len(trajectory))),
-                    colorscale="Viridis",
+                    colorscale=[[0, "#90EE90"], [1, "#006400"]],  # lightgreen -> darkgreen
                     line=dict(width=1, color="white"),
                 ),
                 hovertemplate="Step %{customdata}<br>σ=%{text:.1f}<br>(%{x:.2f}, %{y:.2f})<extra></extra>",
