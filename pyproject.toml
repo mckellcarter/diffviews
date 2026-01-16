@@ -42,6 +42,10 @@ viz = [
     "dash-bootstrap-components>=1.5.0",
     "plotly>=5.18.0",
 ]
+gradio = [
+    "gradio>=4.0.0",
+    "plotly>=5.18.0",
+]
 lmdb = [
     "lmdb>=1.4.0",
 ]
@@ -52,7 +56,7 @@ dev = [
     "ruff>=0.1.0",
 ]
 all = [
-    "diffviews[viz,lmdb,dev]",
+    "diffviews[viz,gradio,lmdb,dev]",
 ]
 
 [project.urls]
