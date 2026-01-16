@@ -687,38 +687,42 @@ class GradioVisualizer:
         return fig
 
 
-# JavaScript for Plotly click handling - sends click data to hidden textbox
-CLICK_HANDLER_JS = """
-function attachPlotlyClickHandler() {
-    console.log('[PlotlyClick] Attempting to attach handler...');
+# JavaScript for Plotly click and hover handling
+PLOTLY_HANDLER_JS = """
+function attachPlotlyHandlers() {
+    console.log('[Plotly] Attempting to attach handlers...');
 
     // Find Plotly plot - try multiple selectors
     let plotDiv = document.querySelector('#umap-plot .plotly-graph-div');
     if (!plotDiv) plotDiv = document.querySelector('#umap-plot .js-plotly-plot');
     if (!plotDiv) plotDiv = document.querySelector('#umap-plot [class*="plotly"]');
 
-    // Find textbox - Gradio may use input or textarea
+    // Find textboxes - Gradio may use input or textarea
     let clickBox = document.querySelector('#click-data-box textarea');
     if (!clickBox) clickBox = document.querySelector('#click-data-box input');
+    let hoverBox = document.querySelector('#hover-data-box textarea');
+    if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input');
 
-    console.log('[PlotlyClick] plotDiv:', plotDiv);
-    console.log('[PlotlyClick] clickBox:', clickBox);
+    console.log('[Plotly] plotDiv:', plotDiv);
+    console.log('[Plotly] clickBox:', clickBox);
+    console.log('[Plotly] hoverBox:', hoverBox);
 
-    if (!plotDiv || !clickBox) {
-        console.log('[PlotlyClick] Elements not found, retrying in 200ms...');
-        setTimeout(attachPlotlyClickHandler, 200);
+    if (!plotDiv || !clickBox || !hoverBox) {
+        console.log('[Plotly] Elements not found, retrying in 200ms...');
+        setTimeout(attachPlotlyHandlers, 200);
         return;
     }
 
     // Avoid duplicate handlers
-    if (plotDiv._gradioClickHandlerAttached) {
-        console.log('[PlotlyClick] Handler already attached');
+    if (plotDiv._gradioHandlersAttached) {
+        console.log('[Plotly] Handlers already attached');
         return;
     }
-    plotDiv._gradioClickHandlerAttached = true;
+    plotDiv._gradioHandlersAttached = true;
 
+    // Click handler
     plotDiv.on('plotly_click', function(data) {
-        console.log('[PlotlyClick] Click detected:', data);
+        console.log('[Plotly] Click detected:', data);
         if (!data || !data.points || data.points.length === 0) return;
 
         const point = data.points[0];
@@ -729,18 +733,43 @@ function attachPlotlyClickHandler() {
             curveNumber: point.curveNumber
         };
 
-        console.log('[PlotlyClick] Sending:', clickData);
-
-        // Set value and trigger input event for Gradio
+        console.log('[Plotly] Click sending:', clickData);
         clickBox.value = JSON.stringify(clickData);
         clickBox.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    console.log('[PlotlyClick] Handler attached successfully!');
+    // Hover handler with debounce
+    let hoverTimeout = null;
+    let lastHoverIdx = null;
+    plotDiv.on('plotly_hover', function(data) {
+        if (!data || !data.points || data.points.length === 0) return;
+
+        const point = data.points[0];
+        // Only handle main data trace (curve 0)
+        if (point.curveNumber !== 0) return;
+
+        const idx = point.customdata;
+        if (idx === lastHoverIdx) return;  // Skip if same point
+
+        clearTimeout(hoverTimeout);
+        hoverTimeout = setTimeout(() => {
+            lastHoverIdx = idx;
+            const hoverData = {
+                pointIndex: idx,
+                x: point.x,
+                y: point.y
+            };
+            console.log('[Plotly] Hover sending:', hoverData);
+            hoverBox.value = JSON.stringify(hoverData);
+            hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+        }, 150);  // 150ms debounce
+    });
+
+    console.log('[Plotly] Handlers attached successfully!');
 }
 
-// Attach handler after plot renders
-setTimeout(attachPlotlyClickHandler, 500);
+// Attach handlers after plot renders
+setTimeout(attachPlotlyHandlers, 500);
 """
 
 
@@ -752,7 +781,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     #umap-plot {
         min-height: 550px !important;
     }
-    #click-data-box {
+    #click-data-box, #hover-data-box {
         display: none !important;
     }
     """
@@ -761,7 +790,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         title="Diffusion Activation Visualizer",
         theme=gr.themes.Soft(),
         css=custom_css,
-        head=f"<script>{CLICK_HANDLER_JS}</script>",
+        head=f"<script>{PLOTLY_HANDLER_JS}</script>",
     ) as app:
 
         # Per-session state
@@ -795,11 +824,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     )
                     model_status = gr.Markdown(visible=False)
 
-                # Preview section
+                # Preview section (updated on hover)
                 with gr.Group():
                     gr.Markdown("### Preview")
                     preview_image = gr.Image(label=None, show_label=False, height=200)
-                    preview_details = gr.Markdown("Click a point to preview")
+                    preview_details = gr.Markdown("Hover over a point to preview")
 
                 # Class filter
                 with gr.Group():
@@ -814,10 +843,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Center column (main plot)
             with gr.Column(scale=3, min_width=600):
-                # Hidden textbox for JS bridge (receives click data from Plotly)
+                # Hidden textboxes for JS bridge (receives data from Plotly)
                 click_data_box = gr.Textbox(
                     value="",
                     elem_id="click-data-box",
+                    visible=False,
+                )
+                hover_data_box = gr.Textbox(
+                    value="",
+                    elem_id="hover-data-box",
                     visible=False,
                 )
                 # Use Plotly via gr.Plot for proper click handling
@@ -843,6 +877,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 with gr.Group():
                     gr.Markdown("### Generation")
                     generated_image = gr.Image(label=None, show_label=False, height=200)
+                    intermediate_gallery = gr.Gallery(
+                        label="Denoising Steps",
+                        show_label=True,
+                        columns=5,
+                        rows=1,
+                        height=80,
+                        object_fit="contain",
+                    )
                     with gr.Row():
                         num_steps_slider = gr.Slider(
                             1, 50, value=visualizer.num_steps, step=1, label="Steps"
@@ -935,30 +977,62 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 info += ")"
             return images, info
 
+        def on_hover_data(hover_json):
+            """Handle plot hover via JS bridge - update preview panel."""
+            if not hover_json:
+                return gr.update(), gr.update()
+
+            try:
+                hover_data = json.loads(hover_json)
+                point_idx = hover_data.get("pointIndex")
+                if point_idx is None:
+                    return gr.update(), gr.update()
+                point_idx = int(point_idx)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return gr.update(), gr.update()
+
+            if point_idx < 0 or point_idx >= len(visualizer.df):
+                return gr.update(), gr.update()
+
+            sample = visualizer.df.iloc[point_idx]
+            img = visualizer.get_image(sample["image_path"])
+
+            # Format details
+            if "class_label" in sample:
+                class_name = visualizer.get_class_name(int(sample["class_label"]))
+            else:
+                class_name = "N/A"
+            details = f"**{sample['sample_id']}**\n\n"
+            if "class_label" in sample:
+                details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
+            details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+
+            return img, details
+
         def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class, traj):
             """Handle plot click via JS bridge - select point or toggle neighbor."""
             if not click_json:
-                return (gr.update(),) * 11
+                return (gr.update(),) * 9
 
             try:
                 click_data = json.loads(click_json)
                 # Only handle clicks on main samples trace (curve 0)
                 # Ignore trajectory and other overlay traces
                 if click_data.get("curveNumber", 0) != 0:
-                    return (gr.update(),) * 11
+                    return (gr.update(),) * 9
                 point_idx = click_data.get("pointIndex")
                 if point_idx is None:
-                    return (gr.update(),) * 11
+                    return (gr.update(),) * 9
                 point_idx = int(point_idx)
             except (json.JSONDecodeError, TypeError, ValueError):
-                return (gr.update(),) * 11
+                return (gr.update(),) * 9
 
             if point_idx < 0 or point_idx >= len(visualizer.df):
-                return (gr.update(),) * 11
+                return (gr.update(),) * 9
 
             knn_dist = knn_dist or {}
 
-            # First click: select this point (clears trajectory)
+            # First click: select this point
             if sel_idx is None:
                 sample = visualizer.df.iloc[point_idx]
                 img = visualizer.get_image(sample["image_path"])
@@ -981,8 +1055,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 )
 
                 return (
-                    img,           # preview_image
-                    details,       # preview_details
                     img,           # selected_image
                     details,       # selected_details
                     point_idx,     # selected_idx
@@ -996,7 +1068,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Clicking same point: do nothing
             if point_idx == sel_idx:
-                return (gr.update(),) * 11
+                return (gr.update(),) * 9
 
             # Toggle neighbor (preserve trajectory)
             man_n = list(man_n) if man_n else []
@@ -1022,8 +1094,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             gallery, info = build_neighbor_gallery(sel_idx, man_n, knn_n, knn_dist)
 
             return (
-                gr.update(),   # preview_image
-                gr.update(),   # preview_details
                 gr.update(),   # selected_image
                 gr.update(),   # selected_details
                 sel_idx,       # selected_idx (unchanged)
@@ -1036,14 +1106,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
 
         def on_clear_selection(high_class, traj):
-            """Clear selection and neighbors (preserves trajectory)."""
+            """Clear selection and neighbors (preserves trajectory, preview unchanged)."""
             fig = visualizer.create_umap_figure(
                 highlighted_class=high_class,
                 trajectory=traj if traj else None,
             )
             return (
-                None,                      # preview_image
-                "Click a point to preview", # preview_details
                 None,                      # selected_image
                 "Click a point to select", # selected_details
                 None,                      # selected_idx
@@ -1084,7 +1152,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             return fig, None, None, ""
 
         def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
-            """Handle model switching (resets all state, inputs unused)."""
+            """Handle model switching (resets all state including preview)."""
             if model_name == visualizer.current_model:
                 return (gr.update(),) * 14
 
@@ -1106,7 +1174,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 None,                              # highlighted_class
                 [],                                # trajectory_coords
                 None,                              # preview_image
-                "Click a point to preview",        # preview_details
+                "Hover over a point to preview",   # preview_details
                 None,                              # selected_image
                 "Click a point to select",         # selected_details
                 visualizer.get_class_options(),    # class_dropdown choices
@@ -1116,6 +1184,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # on_load initializes KNN model
         app.load(on_load, outputs=[])
 
+        # Hover handling via JS bridge (updates preview panel)
+        hover_data_box.input(
+            on_hover_data,
+            inputs=[hover_data_box],
+            outputs=[preview_image, preview_details],
+        )
+
         # Click handling via JS bridge (click_data_box receives JSON from Plotly click)
         click_data_box.input(
             on_click_data,
@@ -1124,8 +1199,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 knn_neighbors, knn_distances, highlighted_class, trajectory_coords
             ],
             outputs=[
-                preview_image,
-                preview_details,
                 selected_image,
                 selected_details,
                 selected_idx,
@@ -1142,8 +1215,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             on_clear_selection,
             inputs=[highlighted_class, trajectory_coords],
             outputs=[
-                preview_image,
-                preview_details,
                 selected_image,
                 selected_details,
                 selected_idx,
@@ -1260,7 +1331,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 all_neighbors.insert(0, sel_idx)
 
             if not all_neighbors:
-                return None, "Select neighbors first", gr.update(), existing_traj
+                return None, [], "Select neighbors first", gr.update(), existing_traj
 
             # Get class label from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
@@ -1277,12 +1348,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             with visualizer._generation_lock:
                 adapter = visualizer.load_adapter()
                 if adapter is None:
-                    return None, "Checkpoint not found", gr.update(), []
+                    return None, [], "Checkpoint not found", gr.update(), []
 
                 # Prepare activation dict
                 activation_dict = visualizer.prepare_activation_dict(all_neighbors)
                 if activation_dict is None:
-                    return None, "Failed to prepare activations", gr.update(), []
+                    return None, [], "Failed to prepare activations", gr.update(), []
 
                 # Create masker and register hooks
                 masker = ActivationMasker(adapter)
@@ -1291,7 +1362,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 masker.register_hooks(list(activation_dict.keys()))
 
                 try:
-                    # Generate with trajectory extraction
+                    # Generate with trajectory and intermediate extraction
                     result = generate_with_mask_multistep(
                         adapter,
                         masker,
@@ -1306,16 +1377,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         device=visualizer.device,
                         extract_layers=extract_layers if can_project else None,
                         return_trajectory=can_project,
+                        return_intermediates=True,
                     )
                 finally:
                     masker.remove_hooks()
 
-            # Unpack results
-            if can_project and len(result) >= 3:
-                images, _labels, trajectory_acts = result[:3]
-            else:
-                images = result[0]
-                trajectory_acts = []
+            # Unpack results: (images, labels, [trajectory], [intermediates])
+            images = result[0]
+            trajectory_acts = []
+            intermediate_imgs = []
+            idx = 2  # Start after images, labels
+            if can_project:
+                trajectory_acts = result[idx] if len(result) > idx else []
+                idx += 1
+            intermediate_imgs = result[idx] if len(result) > idx else []
 
             # Project trajectory through UMAP
             traj_coords = []
@@ -1362,7 +1437,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             traj_info = f", {len(all_trajectories)} trajectories" if all_trajectories else ""
             status = f"Generated (class {class_label}: {class_name}{traj_info})"
 
-            return gen_img, status, fig, all_trajectories
+            # Build intermediate gallery: list of (image, label) tuples
+            step_gallery = []
+            for i, step_img in enumerate(intermediate_imgs):
+                sigma = sigmas[i] if i < len(sigmas) else 0.0
+                step_gallery.append((step_img[0].numpy(), f"σ={sigma:.1f}"))
+
+            return gen_img, step_gallery, status, fig, all_trajectories
 
         generate_btn.click(
             on_generate,
@@ -1371,24 +1452,24 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 num_steps_slider, mask_steps_slider, guidance_slider,
                 sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords,
             ],
-            outputs=[generated_image, gen_status, umap_plot, trajectory_coords],
+            outputs=[generated_image, intermediate_gallery, gen_status, umap_plot, trajectory_coords],
         )
 
         # --- Clear generated button ---
         def on_clear_generated(sel_idx, man_n, knn_n, high_class):
-            """Clear generated image and trajectory."""
+            """Clear generated image, intermediates, and trajectory."""
             fig = visualizer.create_umap_figure(
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_n or [],
                 highlighted_class=high_class,
             )
-            return None, "Select neighbors, then generate", fig, []
+            return None, [], "Select neighbors, then generate", fig, []
 
         clear_gen_btn.click(
             on_clear_generated,
             inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class],
-            outputs=[generated_image, gen_status, umap_plot, trajectory_coords],
+            outputs=[generated_image, intermediate_gallery, gen_status, umap_plot, trajectory_coords],
         )
 
     return app

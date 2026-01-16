@@ -7,7 +7,7 @@ I'm continuing a Gradio port of a Dash visualization app.
 Repo: diffviews
 Branch: feature/gradio-port-phase3-generation
 
-**Phase 3b COMPLETE: Trajectory Visualization Working**
+**Phase 4 IN PROGRESS: Polish Features**
 
 Start by reading @diffviews/visualization/gradio_app.py
 
@@ -24,6 +24,33 @@ Start by reading @diffviews/visualization/gradio_app.py
 - Class filtering, model switching, clear buttons
 - **Generation from neighbors** (lazy adapter loading, activation masking)
 - **Trajectory visualization** (denoising path on UMAP with sigma labels)
+- **Hover preview** (debounced JS hover → preview panel)
+- **Intermediate image gallery** (denoising steps with σ labels)
+
+## Hover Preview Implementation
+
+**How it works:**
+1. JS `plotly_hover` handler with 150ms debounce writes to hidden `#hover-data-box`
+2. `on_hover_data()` loads image and updates preview panel only
+3. Click handling separate - updates selection panel, not preview
+
+**Key points:**
+- Hover exclusively controls preview panel
+- Click controls selection (doesn't touch preview)
+- Model switch clears preview (data is new)
+- Only main data trace (curve 0) triggers hover
+
+## Intermediate Gallery Implementation
+
+**How it works:**
+1. `on_generate()` calls with `return_intermediates=True`
+2. Generator returns `(images, labels, trajectory, intermediates)`
+3. Each step image displayed in gallery with σ label
+
+**UI:**
+- Gallery below generated image: 5 columns, 80px height
+- Labels show σ value at each step
+- Cleared by "Clear" button along with trajectory
 
 ## Trajectory Implementation
 
@@ -41,14 +68,12 @@ Start by reading @diffviews/visualization/gradio_app.py
 - Trajectory preserved through: selection changes, neighbor toggles, class filter
 - Trajectory cleared only by: Clear Generated button, model switch
 
-## Next: Phase 4 (Polish)
+## Remaining Phase 4 Items
 
 Potential improvements:
-1. Hover preview on UMAP points
-2. Intermediate image gallery (denoising steps)
-3. Loading indicators during generation
-4. Export generated images
-5. Trajectory animation option
+1. Loading indicators during generation
+2. Export generated images
+3. Trajectory animation option
 
 ---
 
@@ -85,9 +110,9 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 
 ## Current State
 
-- `gradio_app.py` (~1400 lines) with Plotly + generation + multi-trajectory
+- `gradio_app.py` (~1500 lines) with Plotly + generation + hover + intermediates
 - 30 Gradio tests + 24 generator tests (54 total)
-- Next: Phase 4 (polish)
+- Phase 4 in progress
 
 **Key files:**
 - `diffviews/visualization/gradio_app.py` - main app
