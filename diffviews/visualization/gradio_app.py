@@ -362,7 +362,7 @@ class GradioVisualizer:
         # Create copy with highlight column
         plot_df = self.df[["umap_x", "umap_y", "sample_id"]].copy()
         if "class_label" in self.df.columns:
-            plot_df["class_label"] = self.df["class_label"]
+            plot_df["class_label"] = self.df["class_label"].astype(str)
 
         # Add highlight column for visual distinction
         plot_df["highlight"] = "normal"
@@ -400,11 +400,50 @@ class GradioVisualizer:
 
         return [(f"{c}: {self.get_class_name(c)}", c) for c in unique_classes]
 
+    def get_color_map(self) -> dict:
+        """Generate color map for class labels using turbo colormap."""
+        if self.df.empty or "class_label" not in self.df.columns:
+            return {}
+
+        import matplotlib.pyplot as plt
+        unique_classes = self.df["class_label"].dropna().unique()
+        unique_classes = sorted([int(c) for c in unique_classes])
+
+        if not unique_classes:
+            return {}
+
+        cmap = plt.cm.turbo
+        color_map = {}
+        for i, cls in enumerate(unique_classes):
+            rgba = cmap(i / max(len(unique_classes) - 1, 1))
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+            )
+            color_map[str(cls)] = hex_color
+        return color_map
+
 
 def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     """Create Gradio Blocks app."""
 
-    with gr.Blocks(title="Diffusion Activation Visualizer", theme=gr.themes.Soft()) as app:
+    # CSS to make plot larger
+    custom_css = """
+    #umap-plot {
+        min-height: 550px !important;
+    }
+    #umap-plot .vega-embed {
+        width: 100% !important;
+    }
+    #umap-plot canvas {
+        max-width: 100% !important;
+    }
+    """
+
+    with gr.Blocks(
+        title="Diffusion Activation Visualizer",
+        theme=gr.themes.Soft(),
+        css=custom_css
+    ) as app:
         # Per-session state
         selected_idx = gr.State(value=None)
         manual_neighbors = gr.State(value=[])
@@ -453,7 +492,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_status = gr.Markdown("")
 
             # Center column (main plot)
-            with gr.Column(scale=2):
+            with gr.Column(scale=3, min_width=600):
                 # Use ScatterPlot for native selection support
                 umap_plot = gr.ScatterPlot(
                     value=visualizer.get_plot_dataframe(),
@@ -463,7 +502,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     title="Activation UMAP",
                     x_title="UMAP 1",
                     y_title="UMAP 2",
-                    height=500,
+                    height=550,
+                    color_map=visualizer.get_color_map() or None,
+                    elem_id="umap-plot",
                 )
                 status_text = gr.Markdown(
                     f"Showing {len(visualizer.df)} samples"
@@ -529,12 +570,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             evt: gr.SelectData, sel_idx, man_n, knn_n, high_class
         ):
             """Handle plot click - select point or toggle neighbor."""
+            print(f"[SELECT] evt={evt}, evt.index={getattr(evt, 'index', None)}, "
+                  f"evt.value={getattr(evt, 'value', None)}")
             if evt is None or evt.index is None:
+                print("[SELECT] No event or index, returning no-op")
                 return (gr.update(),) * 8
 
             # Get point index from selection event
             # ScatterPlot select returns row index
             point_idx = evt.index
+            print(f"[SELECT] point_idx={point_idx}, type={type(point_idx)}")
             if isinstance(point_idx, (list, tuple)):
                 point_idx = point_idx[0]
 

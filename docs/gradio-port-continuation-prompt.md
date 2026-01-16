@@ -1,54 +1,53 @@
 # Continuation Prompt for Gradio Port
 
-Copy this prompt to continue work on the Gradio port in a new session:
-
 ---
 
 I'm continuing a Gradio port of a Dash visualization app.
 
 Repo: diffviews
-Branch: feature/gradio-port-phase2-selection (in progress)
-Next: feature/gradio-port-phase3-generation
+Branch: feature/gradio-port-phase2-selection
 
-Phase 1 done: Basic layout, ScatterPlot, model switching, class filtering.
-Phase 2 done: KNN suggest button, neighbor gallery with distances, 23 tests pass.
+**URGENT: Switch from ScatterPlot to Plotly**
 
-Phase 3 TODO: Enable generation from averaged neighbor activations.
+ScatterPlot (Altair) has critical issues:
+- Can't control plot size
+- Click returns coordinates not row indices
+- Zoom triggers broken events
 
-See docs/gradio-port-plan.md for full context.
+Plan: Use `gr.Plot` with Plotly + JS bridge for clicks.
+See detailed plan below.
+
 Start by reading @diffviews/visualization/gradio_app.py
 
 ---
 
-## Detailed Context (if needed)
+## Plotly Migration Plan
 
-**What exists:**
-- `diffviews/visualization/gradio_app.py` (~890 lines) - Gradio app with:
-  - `GradioVisualizer` class: data loading, model discovery, KNN fitting
-  - `find_knn_neighbors(idx, k)` returns (idx, distance) tuples
-  - ScatterPlot with click selection, class filtering
-  - Suggest button + K slider for auto-suggesting neighbors
-  - Gallery shows distances (d=X.XX) for KNN neighbors
-  - Generation controls disabled (placeholders)
+**JS Bridge Pattern:**
+1. `gr.Plot` displays Plotly figure
+2. Hidden `gr.Textbox` receives click data from JS
+3. JS attaches `plotly_click` handler, writes `{pointIndex, x, y}` to textbox
+4. Textbox `.change()` triggers Python callback
 
-- `tests/test_gradio_visualizer.py` - 23 tests
-- 87 total tests pass
+**Key steps:**
+1. Add `create_umap_figure()` method (replace `get_plot_dataframe()`)
+2. Add hidden click_data_box + CLICK_HANDLER_JS
+3. Replace `gr.ScatterPlot` with `gr.Plot`
+4. Wire `click_data_box.change()` instead of `.select()`
+5. Update all callbacks that return plot updates
 
-**Key technical notes:**
-- Using `gr.ScatterPlot` (Altair) not Plotly - has working `.select()` events
-- Per-session state: `selected_idx`, `manual_neighbors`, `knn_neighbors`, `knn_distances`
-- Thread lock scaffolded for generation: `_generation_lock`
+**Reference:** Dash app at `diffviews/visualization/app.py` lines 802-816 (figure), 962-1005 (click handling)
 
-**Phase 3 needs:**
-- Enable generate button when checkpoint available
-- Port `generate_from_neighbors` logic from Dash app
-- Progress indicator during generation
-- Save generated images to session temp dir
+---
+
+## Current State
+
+- `gradio_app.py` has turbo colormap working
+- KNN suggest + distance display working
+- Click selection BROKEN (ScatterPlot returns coords not indices)
+- 87 tests pass
 
 ```bash
-# Run tests
 python -m pytest tests/test_gradio_visualizer.py -v
-
-# Run app
 python -m diffviews.visualization.gradio_app --data-dir data
 ```

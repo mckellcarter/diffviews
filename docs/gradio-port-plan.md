@@ -52,12 +52,22 @@ Completed:
 - [x] Add K slider for adjusting neighbor count
 - [x] Store neighbor distances in session state (`knn_distances`)
 - [x] Add 4 new tests for `find_knn_neighbors` (23 total tests now)
+- [x] Add turbo colormap for class colors
 
-TODO (optional):
-- [ ] Add neighbor removal via gallery click (requires custom JS)
-- [ ] Consider Plotly switch for richer trace overlays (staying with ScatterPlot for now)
+**BLOCKER: ScatterPlot limitations require Plotly switch**
 
-Key decision: Staying with ScatterPlot (Altair) for now - it provides working click events and the highlight column approach works well for distinguishing selected/neighbors.
+ScatterPlot (Altair) issues discovered:
+- Cannot control plot size (internal Vega-Lite constraints)
+- `.select()` returns coordinates `[x, y]`, not row indices
+- Zoom triggers broken select events
+
+**TODO: Switch to Plotly with JS bridge**
+1. Add `create_umap_figure()` method using Plotly
+2. Use hidden Textbox + JavaScript `plotly_click` handler for click events
+3. Replace `gr.ScatterPlot` with `gr.Plot`
+4. Update all callbacks to return Plotly figures
+
+Reference: Dash app `app.py` lines 802-816 (Plotly figure), 962-1005 (clickData handling)
 
 ### Phase 3: Generation
 **Branch:** `feature/gradio-port-phase3-generation`
