@@ -659,7 +659,7 @@ class GradioVisualizer:
                 x=[traj_x[-1]],
                 y=[traj_y[-1]],
                 mode="markers",
-                marker=dict(symbol="diamond", size=14, color="red", line=dict(width=1, color="white")),
+                marker=dict(symbol="diamond", size=14, color="lime", line=dict(width=1, color="white")),
                 hovertemplate="End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
                 name="traj_end",
                 showlegend=False,
