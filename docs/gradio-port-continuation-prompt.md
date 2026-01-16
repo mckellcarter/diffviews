@@ -31,14 +31,15 @@ Start by reading @diffviews/visualization/gradio_app.py
 1. `on_generate()` calls `generate_with_mask_multistep()` with `return_trajectory=True` and `extract_layers`
 2. Each step's activations are projected through `umap_reducer.transform()`
 3. `create_umap_figure()` renders trajectory as:
-   - White dotted line connecting points
-   - Viridis-colored markers with sigma labels
-   - Star marker for start (high noise), diamond for end (low noise)
+   - Lime green dashed line connecting points
+   - Green gradient markers (light→medium green)
+   - Star marker for start, diamond for end
 
 **State management:**
-- `trajectory_coords = gr.State(value=[])` stores `[(x, y, sigma), ...]`
-- Trajectory preserved when: toggling neighbors, changing class filter, suggesting KNN
-- Trajectory cleared when: selecting new point, clearing selection, switching model
+- `trajectory_coords = gr.State(value=[])` stores list of trajectories `[[(x,y,σ),...], ...]`
+- Multiple trajectories accumulate with each generation
+- Trajectory preserved through: selection changes, neighbor toggles, class filter
+- Trajectory cleared only by: Clear Generated button, model switch
 
 ## Next: Phase 4 (Polish)
 
@@ -84,7 +85,7 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 
 ## Current State
 
-- `gradio_app.py` (~1350 lines) with Plotly + generation + trajectory working
+- `gradio_app.py` (~1400 lines) with Plotly + generation + multi-trajectory
 - 30 Gradio tests + 24 generator tests (54 total)
 - Next: Phase 4 (polish)
 
