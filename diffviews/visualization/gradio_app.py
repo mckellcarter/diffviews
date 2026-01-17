@@ -688,7 +688,7 @@ class GradioVisualizer:
 
 
 # JavaScript for Plotly click and hover handling
-PLOTLY_HANDLER_JS = """
+PLOTLY_HANDLER_JS = r"""
 function attachPlotlyHandlers() {
     console.log('[Plotly] Attempting to attach handlers...');
 
@@ -740,21 +740,52 @@ function attachPlotlyHandlers() {
 
     // Hover handler with debounce
     let hoverTimeout = null;
-    let lastHoverIdx = null;
+    let lastHoverKey = null;
     plotDiv.on('plotly_hover', function(data) {
         if (!data || !data.points || data.points.length === 0) return;
 
         const point = data.points[0];
-        // Only handle main data trace (curve 0)
+        const traceName = point.data.name || '';
+
+        // Check if this is a trajectory point (named "trajectory_N")
+        const trajMatch = traceName.match(/^trajectory_(\d+)$/);
+        if (trajMatch) {
+            const trajIdx = parseInt(trajMatch[1]);
+            const stepIdx = point.customdata;  // Step index stored in customdata
+            const hoverKey = `traj_${trajIdx}_${stepIdx}`;
+
+            if (hoverKey === lastHoverKey) return;
+
+            clearTimeout(hoverTimeout);
+            hoverTimeout = setTimeout(() => {
+                lastHoverKey = hoverKey;
+                const hoverData = {
+                    type: 'trajectory',
+                    trajIdx: trajIdx,
+                    stepIdx: stepIdx,
+                    x: point.x,
+                    y: point.y,
+                    sigma: point.text  // Sigma stored in text
+                };
+                console.log('[Plotly] Trajectory hover:', hoverData);
+                hoverBox.value = JSON.stringify(hoverData);
+                hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+            }, 100);  // Faster for trajectory
+            return;
+        }
+
+        // Only handle main data trace (curve 0) for sample hover
         if (point.curveNumber !== 0) return;
 
         const idx = point.customdata;
-        if (idx === lastHoverIdx) return;  // Skip if same point
+        const hoverKey = `sample_${idx}`;
+        if (hoverKey === lastHoverKey) return;
 
         clearTimeout(hoverTimeout);
         hoverTimeout = setTimeout(() => {
-            lastHoverIdx = idx;
+            lastHoverKey = hoverKey;
             const hoverData = {
+                type: 'sample',
                 pointIndex: idx,
                 x: point.x,
                 y: point.y
@@ -800,6 +831,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         knn_distances = gr.State(value={})  # {idx: distance} for KNN neighbors
         highlighted_class = gr.State(value=None)
         trajectory_coords = gr.State(value=[])  # [[(x, y, sigma), ...], ...] list of trajectories
+        intermediate_images = gr.State(value=[])  # [(img, sigma), ...] for trajectory hover/animation
+        animation_frame = gr.State(value=-1)  # Current animation frame (-1 = showing final)
+        generation_info = gr.State(value=None)  # {class_id, class_name, n_traj} for display
 
         gr.Markdown("# Diffusion Activation Visualizer")
 
@@ -904,6 +938,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         clear_gen_btn = gr.Button("Clear", size="sm")
                     gen_status = gr.Markdown("Select neighbors, then generate")
 
+                    # Frame navigation controls
+                    with gr.Row():
+                        prev_frame_btn = gr.Button("◀", size="sm", min_width=40)
+                        next_frame_btn = gr.Button("▶", size="sm", min_width=40)
+
                 # Neighbor list
                 with gr.Group():
                     gr.Markdown("### Neighbors")
@@ -977,19 +1016,47 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 info += ")"
             return images, info
 
-        def on_hover_data(hover_json):
-            """Handle plot hover via JS bridge - update preview panel."""
+        def on_hover_data(hover_json, intermediates):
+            """Handle plot hover via JS bridge - update preview panel.
+
+            Handles two types:
+            - Sample hover: show sample image from dataset
+            - Trajectory hover: show intermediate image from generation
+            """
             if not hover_json:
                 return gr.update(), gr.update()
 
             try:
                 hover_data = json.loads(hover_json)
-                point_idx = hover_data.get("pointIndex")
-                if point_idx is None:
-                    return gr.update(), gr.update()
-                point_idx = int(point_idx)
             except (json.JSONDecodeError, TypeError, ValueError):
                 return gr.update(), gr.update()
+
+            hover_type = hover_data.get("type", "sample")
+
+            # Trajectory point hover - show intermediate image
+            if hover_type == "trajectory":
+                step_idx = hover_data.get("stepIdx")
+                traj_idx = hover_data.get("trajIdx", 0)
+                sigma = hover_data.get("sigma", "?")
+
+                if intermediates and step_idx is not None:
+                    step_idx = int(step_idx)
+                    if 0 <= step_idx < len(intermediates):
+                        img, stored_sigma = intermediates[step_idx]
+                        details = f"**Trajectory {traj_idx + 1}, Step {step_idx}**\n\n"
+                        details += f"σ = {stored_sigma:.1f}\n\n"
+                        details += f"Coords: ({hover_data.get('x', 0):.2f}, {hover_data.get('y', 0):.2f})"
+                        return img, details
+
+                # No intermediates stored
+                details = f"**Trajectory step {step_idx}**\n\nσ = {sigma}"
+                return gr.update(), details
+
+            # Sample hover - show dataset image
+            point_idx = hover_data.get("pointIndex")
+            if point_idx is None:
+                return gr.update(), gr.update()
+            point_idx = int(point_idx)
 
             if point_idx < 0 or point_idx >= len(visualizer.df):
                 return gr.update(), gr.update()
@@ -1187,7 +1254,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # Hover handling via JS bridge (updates preview panel)
         hover_data_box.input(
             on_hover_data,
-            inputs=[hover_data_box],
+            inputs=[hover_data_box, intermediate_images],
             outputs=[preview_image, preview_details],
         )
 
@@ -1331,7 +1398,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 all_neighbors.insert(0, sel_idx)
 
             if not all_neighbors:
-                return None, [], "Select neighbors first", gr.update(), existing_traj
+                return None, gr.update(), "Select neighbors first", gr.update(), existing_traj, [], None
 
             # Get class label from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
@@ -1348,12 +1415,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             with visualizer._generation_lock:
                 adapter = visualizer.load_adapter()
                 if adapter is None:
-                    return None, [], "Checkpoint not found", gr.update(), []
+                    return None, gr.update(), "Checkpoint not found", gr.update(), [], [], None
 
                 # Prepare activation dict
                 activation_dict = visualizer.prepare_activation_dict(all_neighbors)
                 if activation_dict is None:
-                    return None, [], "Failed to prepare activations", gr.update(), []
+                    return None, gr.update(), "Failed to prepare activations", gr.update(), [], [], None
 
                 # Create masker and register hooks
                 masker = ActivationMasker(adapter)
@@ -1392,19 +1459,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 idx += 1
             intermediate_imgs = result[idx] if len(result) > idx else []
 
+            # Compute sigma schedule used during this generation (store with results)
+            rho = 7.0
+            sigmas = []
+            for i in range(int(n_steps)):
+                ramp = i / max(int(n_steps) - 1, 1)
+                min_inv_rho = float(s_min) ** (1 / rho)
+                max_inv_rho = float(s_max) ** (1 / rho)
+                sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+                sigmas.append(sigma)
+
             # Project trajectory through UMAP
             traj_coords = []
             if trajectory_acts and visualizer.umap_reducer:
-                # Compute sigma schedule (same as generator)
-                rho = 7.0
-                sigmas = []
-                for i in range(int(n_steps)):
-                    ramp = i / max(int(n_steps) - 1, 1)
-                    min_inv_rho = float(s_min) ** (1 / rho)
-                    max_inv_rho = float(s_max) ** (1 / rho)
-                    sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
-                    sigmas.append(sigma)
-
                 for i, act in enumerate(trajectory_acts):
                     try:
                         # Scale if scaler exists
@@ -1434,16 +1501,38 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Convert to numpy for gr.Image
             gen_img = images[0].numpy()
             class_name = visualizer.get_class_name(class_label) if class_label else "random"
-            traj_info = f", {len(all_trajectories)} trajectories" if all_trajectories else ""
-            status = f"Generated (class {class_label}: {class_name}{traj_info})"
+            n_traj = len(all_trajectories) if all_trajectories else 0
+            n_steps = len(intermediate_imgs)
 
-            # Build intermediate gallery: list of (image, label) tuples
+            # Build generation info for frame display
+            gen_info = {
+                "class_id": class_label,
+                "class_name": class_name,
+                "n_traj": n_traj,
+                "n_steps": n_steps,
+            }
+
+            # Status shows final result info
+            traj_info = f" | {n_traj} traj" if n_traj else ""
+            status = f"Class {class_label}: {class_name}{traj_info} | Final"
+
+            # Build intermediate gallery and state: list of (image, sigma) tuples
+            # Caption includes full info so it shows in gallery label area on hover/select
+            # Compact format to avoid being covered by gallery buttons
             step_gallery = []
+            intermediates_state = []  # For trajectory hover
             for i, step_img in enumerate(intermediate_imgs):
                 sigma = sigmas[i] if i < len(sigmas) else 0.0
-                step_gallery.append((step_img[0].numpy(), f"σ={sigma:.1f}"))
+                img_np = step_img[0].numpy()
+                caption = f"{class_label}: {class_name} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                step_gallery.append((img_np, caption))
+                intermediates_state.append((img_np, sigma))
 
-            return gen_img, step_gallery, status, fig, all_trajectories
+            # Gallery label (shown when nothing selected)
+            gallery_label = f"{class_label}: {class_name} | {n_steps} steps"
+            gallery_update = gr.update(value=step_gallery, label=gallery_label)
+
+            return gen_img, gallery_update, status, fig, all_trajectories, intermediates_state, gen_info
 
         generate_btn.click(
             on_generate,
@@ -1452,7 +1541,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 num_steps_slider, mask_steps_slider, guidance_slider,
                 sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords,
             ],
-            outputs=[generated_image, intermediate_gallery, gen_status, umap_plot, trajectory_coords],
+            outputs=[
+                generated_image, intermediate_gallery, gen_status,
+                umap_plot, trajectory_coords, intermediate_images,
+                generation_info
+            ],
         )
 
         # --- Clear generated button ---
@@ -1464,12 +1557,89 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 knn_neighbors=knn_n or [],
                 highlighted_class=high_class,
             )
-            return None, [], "Select neighbors, then generate", fig, []
+            gallery_update = gr.update(value=[], label="Denoising Steps")
+            return None, gallery_update, "Select neighbors, then generate", fig, [], [], -1, None
 
         clear_gen_btn.click(
             on_clear_generated,
             inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class],
-            outputs=[generated_image, intermediate_gallery, gen_status, umap_plot, trajectory_coords],
+            outputs=[
+                generated_image, intermediate_gallery, gen_status,
+                umap_plot, trajectory_coords, intermediate_images,
+                animation_frame, generation_info
+            ],
+        )
+
+        # --- Frame navigation for intermediate images ---
+        def format_frame_info(gen_info, frame_idx, n_frames, sigma):
+            """Format frame info string with class, step, sigma (compact)."""
+            if not gen_info:
+                return f"Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+
+            class_id = gen_info.get("class_id", "?")
+            class_name = gen_info.get("class_name", "")
+
+            return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+
+        def on_next_frame(intermediates, current_frame, gen_info):
+            """Show next intermediate frame."""
+            if not intermediates:
+                return gr.update(), -1, gr.update()
+
+            n_frames = len(intermediates)
+            # If at final (-1), go to first frame; otherwise advance
+            if current_frame == -1:
+                new_frame = 0
+            else:
+                new_frame = (current_frame + 1) % n_frames
+
+            img, sigma = intermediates[new_frame]
+            label = format_frame_info(gen_info, new_frame, n_frames, sigma)
+            return img, new_frame, gr.update(label=label)
+
+        def on_prev_frame(intermediates, current_frame, gen_info):
+            """Show previous intermediate frame."""
+            if not intermediates:
+                return gr.update(), -1, gr.update()
+
+            n_frames = len(intermediates)
+            # If at final (-1) or first, go to last frame; otherwise go back
+            if current_frame <= 0:
+                new_frame = n_frames - 1
+            else:
+                new_frame = current_frame - 1
+
+            img, sigma = intermediates[new_frame]
+            label = format_frame_info(gen_info, new_frame, n_frames, sigma)
+            return img, new_frame, gr.update(label=label)
+
+        next_frame_btn.click(
+            on_next_frame,
+            inputs=[intermediate_images, animation_frame, generation_info],
+            outputs=[generated_image, animation_frame, intermediate_gallery],
+        )
+
+        prev_frame_btn.click(
+            on_prev_frame,
+            inputs=[intermediate_images, animation_frame, generation_info],
+            outputs=[generated_image, animation_frame, intermediate_gallery],
+        )
+
+        # Clicking gallery item shows it in main image
+        def on_gallery_select(evt: gr.SelectData, intermediates, gen_info):
+            """Show selected gallery item in main generated image."""
+            if not intermediates or evt.index >= len(intermediates):
+                return gr.update(), -1, gr.update()
+
+            img, sigma = intermediates[evt.index]
+            n_frames = len(intermediates)
+            label = format_frame_info(gen_info, evt.index, n_frames, sigma)
+            return img, evt.index, gr.update(label=label)
+
+        intermediate_gallery.select(
+            on_gallery_select,
+            inputs=[intermediate_images, generation_info],
+            outputs=[generated_image, animation_frame, intermediate_gallery],
         )
 
     return app

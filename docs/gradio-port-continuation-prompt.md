@@ -5,7 +5,7 @@
 I'm continuing a Gradio port of a Dash visualization app.
 
 Repo: diffviews
-Branch: feature/gradio-port-phase3-generation
+Branch: feature/gradio-port-phase4-polish
 
 **Phase 4 IN PROGRESS: Polish Features**
 
@@ -26,6 +26,8 @@ Start by reading @diffviews/visualization/gradio_app.py
 - **Trajectory visualization** (denoising path on UMAP with sigma labels)
 - **Hover preview** (debounced JS hover → preview panel)
 - **Intermediate image gallery** (denoising steps with σ labels)
+- **Frame navigation** (◀/▶ buttons + gallery click to view intermediate steps)
+- **Gallery captions** show full generation info (class ID, class name, step, sigma)
 
 ## Hover Preview Implementation
 
@@ -68,12 +70,24 @@ Start by reading @diffviews/visualization/gradio_app.py
 - Trajectory preserved through: selection changes, neighbor toggles, class filter
 - Trajectory cleared only by: Clear Generated button, model switch
 
+## Frame Navigation Implementation
+
+**How it works:**
+1. ◀/▶ buttons step through intermediate images
+2. Clicking gallery thumbnail shows that step in main generated_image panel
+3. `generation_info` state stores class/step metadata for captions
+4. Gallery caption shows: `{class_id}: {class_name} | Step {i}/{n} | σ={sigma}`
+
+**State:**
+- `intermediate_images = gr.State(value=[])` - list of `(img, sigma)` tuples
+- `animation_frame = gr.State(value=-1)` - current frame (-1 = final)
+- `generation_info = gr.State(value=None)` - `{class_id, class_name, n_traj, n_steps}`
+
 ## Remaining Phase 4 Items
 
 Potential improvements:
 1. Loading indicators during generation
 2. Export generated images
-3. Trajectory animation option
 
 ---
 
