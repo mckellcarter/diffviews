@@ -672,7 +672,7 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-        # Layout
+        # Layout - autosize lets CSS control dimensions
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
@@ -680,8 +680,8 @@ class GradioVisualizer:
             hovermode="closest",
             template="plotly_white",
             showlegend=False,
-            height=550,
-            margin=dict(l=50, r=20, t=40, b=50),
+            autosize=True,
+            margin=dict(l=40, r=10, t=35, b=40),
         )
 
         return fig
@@ -807,13 +807,200 @@ setTimeout(attachPlotlyHandlers, 500);
 def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     """Create Gradio Blocks app."""
 
-    # CSS for plot and hidden elements
+    # CSS for layout, plot sizing, and reduced chrome
     custom_css = """
-    #umap-plot {
-        min-height: 550px !important;
+    /* Main container fills viewport */
+    .gradio-container {
+        max-width: 100% !important;
+        padding: 0.5rem !important;
     }
+
+    /* Main row uses available height */
+    #main-row {
+        min-height: calc(100vh - 80px) !important;
+        align-items: stretch !important;
+    }
+
+    /* Sidebars: scrollable with max height */
+    #left-sidebar, #right-sidebar {
+        max-height: calc(100vh - 80px) !important;
+        overflow-y: auto !important;
+        padding: 0.25rem !important;
+    }
+
+    /* Center column stretches */
+    #center-column {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    /* Plot uses viewport height - target all nested elements */
+    #umap-plot {
+        min-height: 50vh !important;
+        height: calc(100vh - 120px) !important;
+        flex-grow: 1 !important;
+    }
+
+    #umap-plot > div {
+        height: 100% !important;
+    }
+
+    #umap-plot .js-plotly-plot,
+    #umap-plot .plotly,
+    #umap-plot .plotly-graph-div {
+        height: 100% !important;
+        width: 100% !important;
+    }
+
+    #umap-plot .main-svg {
+        height: 100% !important;
+    }
+
+    /* Reduce group padding */
+    .gr-group {
+        padding: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    /* Compact markdown headers */
+    .gr-group h3 {
+        margin: 0 0 0.25rem 0 !important;
+        font-size: 0.9rem !important;
+    }
+
+    /* Smaller image containers */
+    .gr-image {
+        margin: 0 !important;
+    }
+
+    /* Compact sliders and inputs */
+    .gr-slider, .gr-number {
+        margin-bottom: 0.25rem !important;
+    }
+
+    /* Compact buttons */
+    .gr-button-sm {
+        padding: 0.25rem 0.5rem !important;
+        margin: 0.125rem 0 !important;
+    }
+
+    /* Gallery compact */
+    .gr-gallery {
+        margin: 0.25rem 0 !important;
+    }
+
+    /* Hide JS bridge elements */
     #click-data-box, #hover-data-box {
         display: none !important;
+    }
+
+    /* Reduce title size */
+    h1 {
+        font-size: 1.5rem !important;
+        margin: 0.25rem 0 0.5rem 0 !important;
+    }
+
+    /* Inline model dropdown label */
+    #model-dropdown {
+        margin-bottom: 0.25rem !important;
+    }
+
+    #model-dropdown .wrap {
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+    }
+
+    #model-dropdown label {
+        min-width: fit-content !important;
+        margin: 0 !important;
+        font-size: 0.9rem !important;
+    }
+
+    #model-dropdown .wrap > div:last-child {
+        flex: 1 !important;
+    }
+
+    #status-text {
+        font-size: 0.8rem !important;
+        color: #666 !important;
+        margin: 0 0 0.5rem 0 !important;
+    }
+
+    #status-text p {
+        margin: 0 !important;
+    }
+
+    /* Compact generation params - all in one row with inline labels */
+    #gen-params-row {
+        gap: 0.25rem !important;
+        align-items: center !important;
+        flex-wrap: wrap !important;
+    }
+
+    #gen-params-row > div {
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 0.2rem !important;
+        flex: 0 1 auto !important;
+    }
+
+    #gen-params-row label {
+        min-width: fit-content !important;
+        margin: 0 !important;
+        font-size: 0.75rem !important;
+        white-space: nowrap !important;
+    }
+
+    #gen-params-row input {
+        max-width: 55px !important;
+        padding: 0.2rem 0.4rem !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* Hide number input spin buttons */
+    #gen-params-row input[type="number"]::-webkit-inner-spin-button,
+    #gen-params-row input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none !important;
+        margin: 0 !important;
+    }
+
+    #gen-params-row input[type="number"] {
+        -moz-appearance: textfield !important;
+    }
+
+    /* Smooth scaling for 64x64 images (auto = bilinear interpolation) */
+    #preview-image img,
+    #selected-image img,
+    #generated-image img,
+    #intermediate-gallery img,
+    #neighbor-gallery img {
+        image-rendering: auto !important;
+    }
+
+    /* Image containers: fill available space */
+    #preview-image, #selected-image, #generated-image {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        overflow: hidden !important;
+    }
+
+    /* Scale images UP to fill container, preserve aspect ratio */
+    #preview-image img, #selected-image img, #generated-image img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important;
+        max-width: none !important;
+        max-height: none !important;
+    }
+
+    /* Gallery images also scale up */
+    #intermediate-gallery img,
+    #neighbor-gallery img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important;
     }
     """
 
@@ -837,31 +1024,39 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         gr.Markdown("# Diffusion Activation Visualizer")
 
-        with gr.Row():
+        with gr.Row(elem_id="main-row"):
             # Left column (sidebar)
-            with gr.Column(scale=1):
-                # Model selector (only if multiple models)
+            with gr.Column(scale=1, elem_id="left-sidebar"):
+                # Model selector + status
                 if len(visualizer.model_configs) > 1:
                     model_dropdown = gr.Dropdown(
                         choices=list(visualizer.model_configs.keys()),
                         value=visualizer.current_model,
                         label="Model",
                         interactive=True,
+                        elem_id="model-dropdown",
                     )
-                    model_status = gr.Markdown("")
                 else:
                     model_dropdown = gr.Dropdown(
                         choices=[visualizer.current_model] if visualizer.current_model else [],
                         value=visualizer.current_model,
                         label="Model",
-                        visible=False,
+                        visible=len(visualizer.model_configs) > 0,
+                        elem_id="model-dropdown",
                     )
-                    model_status = gr.Markdown(visible=False)
+                status_text = gr.Markdown(
+                    f"Showing {len(visualizer.df)} samples"
+                    + (f" ({visualizer.current_model})" if visualizer.current_model else ""),
+                    elem_id="status-text"
+                )
+                model_status = gr.Markdown("", visible=False)
 
                 # Preview section (updated on hover)
                 with gr.Group():
                     gr.Markdown("### Preview")
-                    preview_image = gr.Image(label=None, show_label=False, height=200)
+                    preview_image = gr.Image(
+                        label=None, show_label=False, height=180, elem_id="preview-image"
+                    )
                     preview_details = gr.Markdown("Hover over a point to preview")
 
                 # Class filter
@@ -876,7 +1071,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_status = gr.Markdown("")
 
             # Center column (main plot)
-            with gr.Column(scale=3, min_width=600):
+            with gr.Column(scale=3, min_width=500, elem_id="center-column"):
                 # Hidden textboxes for JS bridge (receives data from Plotly)
                 click_data_box = gr.Textbox(
                     value="",
@@ -894,51 +1089,60 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     elem_id="umap-plot",
                     show_label=False,
                 )
-                status_text = gr.Markdown(
-                    f"Showing {len(visualizer.df)} samples"
-                    + (f" ({visualizer.current_model})" if visualizer.current_model else "")
-                )
 
             # Right column (selection & controls)
-            with gr.Column(scale=1):
+            with gr.Column(scale=1, elem_id="right-sidebar"):
                 with gr.Group():
                     gr.Markdown("### Selected Sample")
-                    selected_image = gr.Image(label=None, show_label=False, height=200)
+                    selected_image = gr.Image(
+                        label=None, show_label=False, height=150, elem_id="selected-image"
+                    )
                     selected_details = gr.Markdown("Click a point to select")
                     clear_selection_btn = gr.Button("Clear Selection", size="sm")
 
                 # Generation settings
                 with gr.Group():
                     gr.Markdown("### Generation")
-                    generated_image = gr.Image(label=None, show_label=False, height=200)
+                    # Parameters and buttons first
+                    with gr.Row(elem_id="gen-params-row"):
+                        num_steps_slider = gr.Number(
+                            value=visualizer.num_steps, label="Steps",
+                            elem_id="num-steps", min_width=50, precision=0
+                        )
+                        mask_steps_slider = gr.Number(
+                            value=visualizer.mask_steps, label="Mask",
+                            elem_id="mask-steps", min_width=50, precision=0
+                        )
+                        guidance_slider = gr.Number(
+                            value=visualizer.guidance_scale, label="CFG",
+                            elem_id="guidance", min_width=50
+                        )
+                        sigma_max_input = gr.Number(
+                            value=visualizer.sigma_max, label="σ max",
+                            elem_id="sigma-max", min_width=50
+                        )
+                        sigma_min_input = gr.Number(
+                            value=visualizer.sigma_min, label="σ min",
+                            elem_id="sigma-min", min_width=50
+                        )
+                    with gr.Row():
+                        generate_btn = gr.Button("Generate from Neighbors", variant="primary")
+                        clear_gen_btn = gr.Button("Clear", size="sm")
+                    gen_status = gr.Markdown("Select neighbors, then generate")
+                    # Generated output
+                    generated_image = gr.Image(
+                        label=None, show_label=False, height=180, elem_id="generated-image"
+                    )
+                    # Denoising steps gallery with frame nav
                     intermediate_gallery = gr.Gallery(
                         label="Denoising Steps",
                         show_label=True,
                         columns=5,
                         rows=1,
-                        height=80,
+                        height=70,
                         object_fit="contain",
+                        elem_id="intermediate-gallery",
                     )
-                    with gr.Row():
-                        num_steps_slider = gr.Slider(
-                            1, 50, value=visualizer.num_steps, step=1, label="Steps"
-                        )
-                        mask_steps_slider = gr.Slider(
-                            1, 50, value=visualizer.mask_steps, step=1, label="Mask Steps"
-                        )
-                    guidance_slider = gr.Slider(
-                        -10, 20, value=visualizer.guidance_scale, step=0.1, label="Guidance"
-                    )
-                    with gr.Row():
-                        sigma_max_input = gr.Number(value=visualizer.sigma_max, label="σ max")
-                        sigma_min_input = gr.Number(value=visualizer.sigma_min, label="σ min")
-
-                    with gr.Row():
-                        generate_btn = gr.Button("Generate from Neighbors", variant="primary")
-                        clear_gen_btn = gr.Button("Clear", size="sm")
-                    gen_status = gr.Markdown("Select neighbors, then generate")
-
-                    # Frame navigation controls
                     with gr.Row():
                         prev_frame_btn = gr.Button("◀", size="sm", min_width=40)
                         next_frame_btn = gr.Button("▶", size="sm", min_width=40)
@@ -947,16 +1151,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 with gr.Group():
                     gr.Markdown("### Neighbors")
                     with gr.Row():
-                        knn_k_slider = gr.Slider(
-                            1, 10, value=5, step=1, label="K neighbors"
+                        knn_k_slider = gr.Number(
+                            value=5, label="K", precision=0, minimum=1, maximum=20
                         )
                         suggest_btn = gr.Button("Suggest", size="sm")
                     neighbor_gallery = gr.Gallery(
                         label=None,
                         show_label=False,
                         columns=2,
-                        height=200,
+                        height=160,
                         object_fit="contain",
+                        elem_id="neighbor-gallery",
                     )
                     neighbor_info = gr.Markdown("No neighbors selected")
                     clear_neighbors_btn = gr.Button("Clear Neighbors", size="sm")
