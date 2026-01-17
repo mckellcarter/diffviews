@@ -100,13 +100,19 @@ Key considerations:
 - Per-session state: Generated samples in `gr.State`, not shared DataFrame
 - UMAP reducer must be loaded (from .pkl file) for trajectory projection
 
-### Phase 4: Polish & Production
+### Phase 4: Polish & Production (IN PROGRESS)
 **Branch:** `feature/gradio-port-phase4-polish`
 
+Completed:
+- [x] Add hover preview using JS bridge pattern (debounced plotly_hover → preview panel)
+- [x] Show intermediate images during denoising (gallery with σ labels)
+- [x] Frame navigation (◀/▶ buttons + gallery click to view steps)
+- [x] Gallery captions show full generation info (class, step, sigma)
+- [x] Trajectory hover shows intermediate images in preview panel
+
 TODO:
-- [ ] Add hover preview using JS bridge pattern (see below)
-- [ ] Show intermediate images during denoising (gallery)
-- [ ] Add sigma display to selection/generation/preview panels
+- [ ] Add loading indicators during generation
+- [ ] Export generated images (download button)
 - [ ] Improve CSS styling (match Dash Bootstrap look)
 - [ ] Add authentication option for deployment
 - [ ] Configure queue settings for concurrent users
