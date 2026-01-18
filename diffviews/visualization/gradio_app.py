@@ -349,6 +349,50 @@ class GradioVisualizer:
             print(f"Error loading image {image_path}: {e}")
             return None
 
+    @staticmethod
+    def create_composite_image(
+        main_img: np.ndarray,
+        inset_img: np.ndarray,
+        inset_ratio: float = 0.25,
+        margin: int = 2,
+        border_width: int = 0
+    ) -> np.ndarray:
+        """Create composite image with inset in upper-left corner.
+
+        Args:
+            main_img: Main image (denoised output) as numpy array
+            inset_img: Inset image (noised input) as numpy array
+            inset_ratio: Size of inset relative to main image
+            margin: Pixel margin from corner
+            border_width: Width of black border around inset
+
+        Returns:
+            Composite image as numpy array
+        """
+        from PIL import ImageDraw
+
+        main_pil = Image.fromarray(main_img)
+        inset_pil = Image.fromarray(inset_img)
+
+        # Resize inset
+        main_size = main_pil.size
+        inset_size = (int(main_size[0] * inset_ratio), int(main_size[1] * inset_ratio))
+        inset_pil = inset_pil.resize(inset_size, Image.Resampling.LANCZOS)
+
+        # Paste inset in upper-left corner
+        inset_x, inset_y = margin, margin
+        main_pil.paste(inset_pil, (inset_x, inset_y))
+
+        # Draw black border around inset
+        if border_width > 0:
+            draw = ImageDraw.Draw(main_pil)
+            x0, y0 = inset_x - border_width, inset_y - border_width
+            x1, y1 = inset_x + inset_size[0], inset_y + inset_size[1]
+            for i in range(border_width):
+                draw.rectangle([x0 + i, y0 + i, x1 - i, y1 - i], outline="black")
+
+        return np.array(main_pil)
+
     def load_adapter(self):
         """Lazily load the generation adapter."""
         if self.adapter is not None:
@@ -650,23 +694,23 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-            # Start marker (star)
+            # Start marker (diamond)
             fig.add_trace(go.Scatter(
                 x=[traj_x[0]],
                 y=[traj_y[0]],
                 mode="markers",
-                marker=dict(symbol="star", size=18, color="lime", line=dict(width=1, color="white")),
+                marker=dict(symbol="diamond", size=14, color="lime", line=dict(width=1, color="white")),
                 hovertemplate=f"Traj {traj_idx + 1} Start (σ=%.1f)<extra></extra>" % traj_sigma[0],
                 name=f"traj_start_{traj_idx}",
                 showlegend=False,
             ))
 
-            # End marker (diamond) - matches gradient end color
+            # End marker (star)
             fig.add_trace(go.Scatter(
                 x=[traj_x[-1]],
                 y=[traj_y[-1]],
                 mode="markers",
-                marker=dict(symbol="diamond", size=14, color="#228B22", line=dict(width=1, color="white")),
+                marker=dict(symbol="star", size=18, color="#228B22", line=dict(width=1, color="white")),
                 hovertemplate=f"Traj {traj_idx + 1} End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
                 name=f"traj_end_{traj_idx}",
                 showlegend=False,
@@ -682,6 +726,7 @@ class GradioVisualizer:
             showlegend=False,
             autosize=True,
             margin=dict(l=40, r=10, t=35, b=40),
+            uirevision=self.current_model,  # Preserve zoom/pan, reset on model switch
         )
 
         return fig
@@ -809,16 +854,21 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
     # CSS for layout, plot sizing, and reduced chrome
     custom_css = """
-    /* Main container fills viewport */
+    /* Main container fills viewport with min dimensions */
     .gradio-container {
         max-width: 100% !important;
         padding: 0.5rem !important;
+        min-width: 900px !important;
+        min-height: 600px !important;
+        overflow: auto !important;
     }
 
     /* Main row uses available height */
     #main-row {
         min-height: calc(100vh - 80px) !important;
+        min-height: 500px !important;
         align-items: stretch !important;
+        flex-wrap: nowrap !important;
     }
 
     /* Sidebars: scrollable with max height */
@@ -859,7 +909,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     /* Reduce group padding */
     .gr-group {
         padding: 0.5rem !important;
-        margin-bottom: 0.5rem !important;
+        margin-bottom: 0.10rem !important;
     }
 
     /* Compact markdown headers */
@@ -900,25 +950,67 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         margin: 0.25rem 0 0.5rem 0 !important;
     }
 
-    /* Inline model dropdown label */
-    #model-dropdown {
+    /* Model selector row: label + dropdown inline */
+    #model-row {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
         margin-bottom: 0.25rem !important;
     }
 
-    #model-dropdown .wrap {
-        flex-direction: row !important;
-        align-items: center !important;
-        gap: 0.5rem !important;
+    #model-row > div {
+        flex: 0 0 auto !important;
     }
 
-    #model-dropdown label {
-        min-width: fit-content !important;
+    #model-label {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 60px !important;
+    }
+
+    #model-label p {
         margin: 0 !important;
         font-size: 0.9rem !important;
     }
 
-    #model-dropdown .wrap > div:last-child {
-        flex: 1 !important;
+    #model-dropdown {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        width: auto !important;
+    }
+
+    /* KNN row styling */
+    #knn-row {
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+    }
+
+    #knn-label {
+        flex-shrink: 0 !important;
+    }
+
+    #knn-label p {
+        margin: 0 !important;
+        white-space: nowrap !important;
+    }
+
+    #knn-input {
+        flex-shrink: 0 !important;
+        max-width: 65px !important;
+    }
+
+    /* Hide spin buttons on K input */
+    #knn-input input[type="number"]::-webkit-inner-spin-button,
+    #knn-input input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none !important;
+        margin: 0 !important;
+    }
+
+    #knn-input input[type="number"] {
+        -moz-appearance: textfield !important;
     }
 
     #status-text {
@@ -953,7 +1045,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     }
 
     #gen-params-row input {
-        max-width: 55px !important;
+        max-width: 50px !important;
         padding: 0.2rem 0.4rem !important;
         font-size: 0.85rem !important;
     }
@@ -986,13 +1078,54 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         overflow: hidden !important;
     }
 
-    /* Scale images UP to fill container, preserve aspect ratio */
-    #preview-image img, #selected-image img, #generated-image img {
+    /* Preview image: fixed size, scale image to fill */
+    #preview-image {
+        width: 100% !important;
+        min-height: 180px !important;
+    }
+
+    #preview-image > div,
+    #preview-image > div > div {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    #preview-image img {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 300px !important;
+        max-width: none !important;
+        object-fit: contain !important;
+    }
+
+    /* Compact preview and selected details text */
+    #preview-details,
+    #selected-details {
+        line-height: 1.3 !important;
+    }
+
+    #preview-details p,
+    #selected-details p {
+        margin: 0.15em 0 !important;
+    }
+
+    /* Selected/generated images: fill container */
+    #selected-image img, #generated-image img {
         width: 100% !important;
         height: 100% !important;
         object-fit: contain !important;
         max-width: none !important;
         max-height: none !important;
+    }
+
+    /* Generated image: match preview size */
+    #generated-image {
+        width: 100% !important;
+        min-height: 180px !important;
+    }
+
+    #generated-image img {
+        min-height: 300px !important;
     }
 
     /* Gallery images also scale up */
@@ -1001,6 +1134,22 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         width: 100% !important;
         height: 100% !important;
         object-fit: contain !important;
+    }
+
+    /* Neighbor gallery: scrollable with more height */
+    #neighbor-gallery {
+        max-height: 280px !important;
+        overflow-y: auto !important;
+    }
+
+    /* Lock scroll when gallery preview is active */
+    #neighbor-gallery:has(.preview) {
+        overflow-y: hidden !important;
+    }
+
+    /* Make preview fill the container */
+    #neighbor-gallery .preview {
+        max-height: 280px !important;
     }
     """
 
@@ -1028,22 +1177,24 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Left column (sidebar)
             with gr.Column(scale=1, elem_id="left-sidebar"):
                 # Model selector + status
-                if len(visualizer.model_configs) > 1:
-                    model_dropdown = gr.Dropdown(
-                        choices=list(visualizer.model_configs.keys()),
-                        value=visualizer.current_model,
-                        label="Model",
-                        interactive=True,
-                        elem_id="model-dropdown",
-                    )
-                else:
-                    model_dropdown = gr.Dropdown(
-                        choices=[visualizer.current_model] if visualizer.current_model else [],
-                        value=visualizer.current_model,
-                        label="Model",
-                        visible=len(visualizer.model_configs) > 0,
-                        elem_id="model-dropdown",
-                    )
+                with gr.Row(elem_id="model-row"):
+                    gr.Markdown("**Model**", elem_id="model-label")
+                    if len(visualizer.model_configs) > 1:
+                        model_dropdown = gr.Dropdown(
+                            choices=list(visualizer.model_configs.keys()),
+                            value=visualizer.current_model,
+                            show_label=False,
+                            interactive=True,
+                            elem_id="model-dropdown",
+                        )
+                    else:
+                        model_dropdown = gr.Dropdown(
+                            choices=[visualizer.current_model] if visualizer.current_model else [],
+                            value=visualizer.current_model,
+                            show_label=False,
+                            visible=len(visualizer.model_configs) > 0,
+                            elem_id="model-dropdown",
+                        )
                 status_text = gr.Markdown(
                     f"Showing {len(visualizer.df)} samples"
                     + (f" ({visualizer.current_model})" if visualizer.current_model else ""),
@@ -1055,9 +1206,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 with gr.Group():
                     gr.Markdown("### Preview")
                     preview_image = gr.Image(
-                        label=None, show_label=False, height=180, elem_id="preview-image"
+                        label=None, show_label=False, elem_id="preview-image"
                     )
-                    preview_details = gr.Markdown("Hover over a point to preview")
+                    preview_details = gr.Markdown(
+                        "Hover over a point to preview", elem_id="preview-details"
+                    )
 
                 # Class filter
                 with gr.Group():
@@ -1069,6 +1222,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     )
                     clear_class_btn = gr.Button("Clear Highlight", size="sm")
                     class_status = gr.Markdown("")
+
+                # Selected sample (moved from right sidebar)
+                with gr.Group():
+                    gr.Markdown("### Selected Sample")
+                    selected_image = gr.Image(
+                        label=None, show_label=False, height=150, elem_id="selected-image"
+                    )
+                    selected_details = gr.Markdown(
+                        "Click a point to select", elem_id="selected-details"
+                    )
+                    clear_selection_btn = gr.Button("Clear Selection", size="sm")
 
             # Center column (main plot)
             with gr.Column(scale=3, min_width=500, elem_id="center-column"):
@@ -1090,18 +1254,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     show_label=False,
                 )
 
-            # Right column (selection & controls)
+            # Right column (generation & neighbors)
             with gr.Column(scale=1, elem_id="right-sidebar"):
-                with gr.Group():
-                    gr.Markdown("### Selected Sample")
-                    selected_image = gr.Image(
-                        label=None, show_label=False, height=150, elem_id="selected-image"
-                    )
-                    selected_details = gr.Markdown("Click a point to select")
-                    clear_selection_btn = gr.Button("Clear Selection", size="sm")
-
                 # Generation settings
-                with gr.Group():
+                with gr.Group(elem_id="gen-group"):
                     gr.Markdown("### Generation")
                     # Parameters and buttons first
                     with gr.Row(elem_id="gen-params-row"):
@@ -1125,13 +1281,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             value=visualizer.sigma_min, label="σ min",
                             elem_id="sigma-min", min_width=50
                         )
-                    with gr.Row():
-                        generate_btn = gr.Button("Generate from Neighbors", variant="primary")
-                        clear_gen_btn = gr.Button("Clear", size="sm")
+                    generate_btn = gr.Button("Generate from Neighbors", variant="primary")
                     gen_status = gr.Markdown("Select neighbors, then generate")
                     # Generated output
                     generated_image = gr.Image(
-                        label=None, show_label=False, height=180, elem_id="generated-image"
+                        label=None, show_label=False, elem_id="generated-image"
                     )
                     # Denoising steps gallery with frame nav
                     intermediate_gallery = gr.Gallery(
@@ -1146,21 +1300,25 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     with gr.Row():
                         prev_frame_btn = gr.Button("◀", size="sm", min_width=40)
                         next_frame_btn = gr.Button("▶", size="sm", min_width=40)
+                    clear_gen_btn = gr.Button("Clear", size="sm")
 
                 # Neighbor list
                 with gr.Group():
                     gr.Markdown("### Neighbors")
-                    with gr.Row():
+                    with gr.Row(elem_id="knn-row"):
+                        gr.Markdown("**K-neighbors**", elem_id="knn-label")
                         knn_k_slider = gr.Number(
-                            value=5, label="K", precision=0, minimum=1, maximum=20
+                            value=5, show_label=False, precision=0, minimum=1,
+                            elem_id="knn-input", min_width=50
                         )
-                        suggest_btn = gr.Button("Suggest", size="sm")
+                        suggest_btn = gr.Button("Suggest KNN", size="sm")
                     neighbor_gallery = gr.Gallery(
                         label=None,
                         show_label=False,
                         columns=2,
-                        height=160,
+                        height="auto",
                         object_fit="contain",
+                        allow_preview=True,
                         elem_id="neighbor-gallery",
                     )
                     neighbor_info = gr.Markdown("No neighbors selected")
@@ -1193,7 +1351,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 return [], "Click points or use Suggest"
 
             images = []
-            for idx in all_neighbors[:10]:
+            for idx in all_neighbors[:20]:
                 if idx < len(visualizer.df):
                     sample = visualizer.df.iloc[idx]
                     img = visualizer.get_image(sample["image_path"])
@@ -1274,10 +1432,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 class_name = visualizer.get_class_name(int(sample["class_label"]))
             else:
                 class_name = "N/A"
-            details = f"**{sample['sample_id']}**\n\n"
+            details = f"**{sample['sample_id']}**<br>"
             if "class_label" in sample:
-                details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
-            details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
+            if "conditioning_sigma" in sample:
+                details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
+            details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
             return img, details
 
@@ -1314,10 +1474,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                 else:
                     class_name = "N/A"
-                details = f"**{sample['sample_id']}**\n\n"
+                details = f"**{sample['sample_id']}**<br>"
                 if "class_label" in sample:
-                    details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
-                details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
+                if "conditioning_sigma" in sample:
+                    details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
+                details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
                 # Build updated Plotly figure with selection (preserve trajectory)
                 fig = visualizer.create_umap_figure(
@@ -1345,13 +1507,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Toggle neighbor (preserve trajectory)
             man_n = list(man_n) if man_n else []
             knn_n = list(knn_n) if knn_n else []
+            at_limit = False
 
             if point_idx in man_n:
                 man_n.remove(point_idx)
             elif point_idx in knn_n:
                 knn_n.remove(point_idx)
             else:
-                man_n.append(point_idx)
+                # Check total neighbor limit
+                total = len(man_n) + len(knn_n)
+                if total >= 20:
+                    at_limit = True
+                else:
+                    man_n.append(point_idx)
 
             # Rebuild Plotly figure with updated highlights (preserve trajectory)
             fig = visualizer.create_umap_figure(
@@ -1364,6 +1532,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Build gallery for neighbors
             gallery, info = build_neighbor_gallery(sel_idx, man_n, knn_n, knn_dist)
+
+            # Add limit notice if needed
+            if at_limit:
+                info += " (max 20)"
 
             return (
                 gr.update(),   # selected_image
@@ -1426,11 +1598,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
             """Handle model switching (resets all state including preview)."""
             if model_name == visualizer.current_model:
-                return (gr.update(),) * 14
+                return (gr.update(),) * 22
 
             success = visualizer.switch_model(model_name)
             if not success:
-                return (gr.update(),) * 14
+                return (gr.update(),) * 22
 
             fig = visualizer.create_umap_figure()
             status = f"Showing {len(visualizer.df)} samples ({model_name})"
@@ -1449,7 +1621,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "Hover over a point to preview",   # preview_details
                 None,                              # selected_image
                 "Click a point to select",         # selected_details
-                visualizer.get_class_options(),    # class_dropdown choices
+                gr.update(choices=visualizer.get_class_options(), value=None),  # class_dropdown
+                None,                              # generated_image
+                gr.update(value=[], label="Denoising Steps"),  # intermediate_gallery
+                "Select neighbors, then generate", # gen_status
+                [],                                # intermediate_images
+                -1,                                # animation_frame
+                None,                              # generation_info
+                [],                                # neighbor_gallery
+                "No neighbors selected",           # neighbor_info
             )
 
         # Wire up events
@@ -1533,6 +1713,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     selected_image,
                     selected_details,
                     class_dropdown,
+                    generated_image,
+                    intermediate_gallery,
+                    gen_status,
+                    intermediate_images,
+                    animation_frame,
+                    generation_info,
+                    neighbor_gallery,
+                    neighbor_info,
                 ],
             )
 
@@ -1543,12 +1731,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         def on_suggest_neighbors(sel_idx, k_val, high_class, man_n, traj):
             """Auto-suggest K nearest neighbors (preserves trajectory)."""
             if sel_idx is None:
-                return gr.update(), [], {}, gr.update(), "Select a point first"
+                return gr.update(), [], {}, [], "Select a point first"
+
+            # Clamp k to max 20
+            k_val = int(k_val)
+            clamped = k_val > 20
+            k_val = min(k_val, 20)
 
             # Find KNN neighbors
-            neighbors = visualizer.find_knn_neighbors(sel_idx, k=int(k_val))
+            neighbors = visualizer.find_knn_neighbors(sel_idx, k=k_val)
             if not neighbors:
-                return gr.update(), [], {}, gr.update(), "No neighbors found"
+                return gr.update(), [], {}, [], "No neighbors found"
 
             # Extract indices and distances
             knn_idx = [idx for idx, _ in neighbors]
@@ -1563,7 +1756,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 trajectory=traj if traj else None,
             )
 
-            return fig, knn_idx, knn_dist, gr.update(), f"Found {len(knn_idx)} neighbors"
+            # Build neighbor gallery
+            gallery, info = build_neighbor_gallery(sel_idx, man_n or [], knn_idx, knn_dist)
+
+            # Add clamped notice if needed
+            if clamped:
+                info += " (max 20)"
+
+            return fig, knn_idx, knn_dist, gallery, info
 
         suggest_btn.click(
             on_suggest_neighbors,
@@ -1634,7 +1834,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 masker.register_hooks(list(activation_dict.keys()))
 
                 try:
-                    # Generate with trajectory and intermediate extraction
+                    # Generate with trajectory, intermediates, and noised inputs
                     result = generate_with_mask_multistep(
                         adapter,
                         masker,
@@ -1650,19 +1850,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         extract_layers=extract_layers if can_project else None,
                         return_trajectory=can_project,
                         return_intermediates=True,
+                        return_noised_inputs=True,
                     )
                 finally:
                     masker.remove_hooks()
 
-            # Unpack results: (images, labels, [trajectory], [intermediates])
+            # Unpack results: (images, labels, [trajectory], [intermediates], [noised_inputs])
             images = result[0]
             trajectory_acts = []
             intermediate_imgs = []
+            noised_inputs = []
             idx = 2  # Start after images, labels
             if can_project:
                 trajectory_acts = result[idx] if len(result) > idx else []
                 idx += 1
             intermediate_imgs = result[idx] if len(result) > idx else []
+            idx += 1
+            noised_inputs = result[idx] if len(result) > idx else []
 
             # Compute sigma schedule used during this generation (store with results)
             rho = 7.0
@@ -1704,10 +1908,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
 
             # Convert to numpy for gr.Image
-            gen_img = images[0].numpy()
+            gen_img_raw = images[0].numpy()
             class_name = visualizer.get_class_name(class_label) if class_label else "random"
             n_traj = len(all_trajectories) if all_trajectories else 0
             n_steps = len(intermediate_imgs)
+
+            # Create composite for final image (output + last noised input as inset)
+            if noised_inputs and len(noised_inputs) > 0:
+                last_noised = noised_inputs[-1][0].numpy()
+                gen_img = GradioVisualizer.create_composite_image(gen_img_raw, last_noised)
+            else:
+                gen_img = gen_img_raw
 
             # Build generation info for frame display
             gen_info = {
@@ -1722,16 +1933,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             status = f"Class {class_label}: {class_name}{traj_info} | Final"
 
             # Build intermediate gallery and state: list of (image, sigma) tuples
-            # Caption includes full info so it shows in gallery label area on hover/select
-            # Compact format to avoid being covered by gallery buttons
+            # Each step shows denoised output with noised input as inset
             step_gallery = []
             intermediates_state = []  # For trajectory hover
             for i, step_img in enumerate(intermediate_imgs):
                 sigma = sigmas[i] if i < len(sigmas) else 0.0
                 img_np = step_img[0].numpy()
+
+                # Create composite with noised input inset if available
+                if noised_inputs and i < len(noised_inputs):
+                    noised_np = noised_inputs[i][0].numpy()
+                    composite_img = GradioVisualizer.create_composite_image(img_np, noised_np)
+                else:
+                    composite_img = img_np
+
                 caption = f"{class_label}: {class_name} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
-                step_gallery.append((img_np, caption))
-                intermediates_state.append((img_np, sigma))
+                step_gallery.append((composite_img, caption))
+                intermediates_state.append((composite_img, sigma))
 
             # Gallery label (shown when nothing selected)
             gallery_label = f"{class_label}: {class_name} | {n_steps} steps"
