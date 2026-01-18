@@ -809,16 +809,21 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
     # CSS for layout, plot sizing, and reduced chrome
     custom_css = """
-    /* Main container fills viewport */
+    /* Main container fills viewport with min dimensions */
     .gradio-container {
         max-width: 100% !important;
         padding: 0.5rem !important;
+        min-width: 900px !important;
+        min-height: 600px !important;
+        overflow: auto !important;
     }
 
     /* Main row uses available height */
     #main-row {
         min-height: calc(100vh - 80px) !important;
+        min-height: 500px !important;
         align-items: stretch !important;
+        flex-wrap: nowrap !important;
     }
 
     /* Sidebars: scrollable with max height */
@@ -859,7 +864,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     /* Reduce group padding */
     .gr-group {
         padding: 0.5rem !important;
-        margin-bottom: 0.5rem !important;
+        margin-bottom: 0.10rem !important;
     }
 
     /* Compact markdown headers */
@@ -900,25 +905,67 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         margin: 0.25rem 0 0.5rem 0 !important;
     }
 
-    /* Inline model dropdown label */
-    #model-dropdown {
+    /* Model selector row: label + dropdown inline */
+    #model-row {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
         margin-bottom: 0.25rem !important;
     }
 
-    #model-dropdown .wrap {
-        flex-direction: row !important;
-        align-items: center !important;
-        gap: 0.5rem !important;
+    #model-row > div {
+        flex: 0 0 auto !important;
     }
 
-    #model-dropdown label {
-        min-width: fit-content !important;
+    #model-label {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 60px !important;
+    }
+
+    #model-label p {
         margin: 0 !important;
         font-size: 0.9rem !important;
     }
 
-    #model-dropdown .wrap > div:last-child {
-        flex: 1 !important;
+    #model-dropdown {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        width: auto !important;
+    }
+
+    /* KNN row styling */
+    #knn-row {
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+    }
+
+    #knn-label {
+        flex-shrink: 0 !important;
+    }
+
+    #knn-label p {
+        margin: 0 !important;
+        white-space: nowrap !important;
+    }
+
+    #knn-input {
+        flex-shrink: 0 !important;
+        max-width: 65px !important;
+    }
+
+    /* Hide spin buttons on K input */
+    #knn-input input[type="number"]::-webkit-inner-spin-button,
+    #knn-input input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none !important;
+        margin: 0 !important;
+    }
+
+    #knn-input input[type="number"] {
+        -moz-appearance: textfield !important;
     }
 
     #status-text {
@@ -953,7 +1000,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     }
 
     #gen-params-row input {
-        max-width: 55px !important;
+        max-width: 50px !important;
         padding: 0.2rem 0.4rem !important;
         font-size: 0.85rem !important;
     }
@@ -986,8 +1033,37 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         overflow: hidden !important;
     }
 
-    /* Scale images UP to fill container, preserve aspect ratio */
-    #preview-image img, #selected-image img, #generated-image img {
+    /* Preview image: fixed size, scale image to fill */
+    #preview-image {
+        width: 100% !important;
+        min-height: 180px !important;
+    }
+
+    #preview-image > div,
+    #preview-image > div > div {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    #preview-image img {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 300px !important;
+        max-width: none !important;
+        object-fit: contain !important;
+    }
+
+    /* Compact preview text */
+    #preview-details {
+        line-height: 1.3 !important;
+    }
+
+    #preview-details p {
+        margin: 0.15em 0 !important;
+    }
+
+    /* Selected/generated images: fill container */
+    #selected-image img, #generated-image img {
         width: 100% !important;
         height: 100% !important;
         object-fit: contain !important;
@@ -1028,22 +1104,24 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Left column (sidebar)
             with gr.Column(scale=1, elem_id="left-sidebar"):
                 # Model selector + status
-                if len(visualizer.model_configs) > 1:
-                    model_dropdown = gr.Dropdown(
-                        choices=list(visualizer.model_configs.keys()),
-                        value=visualizer.current_model,
-                        label="Model",
-                        interactive=True,
-                        elem_id="model-dropdown",
-                    )
-                else:
-                    model_dropdown = gr.Dropdown(
-                        choices=[visualizer.current_model] if visualizer.current_model else [],
-                        value=visualizer.current_model,
-                        label="Model",
-                        visible=len(visualizer.model_configs) > 0,
-                        elem_id="model-dropdown",
-                    )
+                with gr.Row(elem_id="model-row"):
+                    gr.Markdown("**Model**", elem_id="model-label")
+                    if len(visualizer.model_configs) > 1:
+                        model_dropdown = gr.Dropdown(
+                            choices=list(visualizer.model_configs.keys()),
+                            value=visualizer.current_model,
+                            show_label=False,
+                            interactive=True,
+                            elem_id="model-dropdown",
+                        )
+                    else:
+                        model_dropdown = gr.Dropdown(
+                            choices=[visualizer.current_model] if visualizer.current_model else [],
+                            value=visualizer.current_model,
+                            show_label=False,
+                            visible=len(visualizer.model_configs) > 0,
+                            elem_id="model-dropdown",
+                        )
                 status_text = gr.Markdown(
                     f"Showing {len(visualizer.df)} samples"
                     + (f" ({visualizer.current_model})" if visualizer.current_model else ""),
@@ -1055,9 +1133,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 with gr.Group():
                     gr.Markdown("### Preview")
                     preview_image = gr.Image(
-                        label=None, show_label=False, height=180, elem_id="preview-image"
+                        label=None, show_label=False, elem_id="preview-image"
                     )
-                    preview_details = gr.Markdown("Hover over a point to preview")
+                    preview_details = gr.Markdown(
+                        "Hover over a point to preview", elem_id="preview-details"
+                    )
 
                 # Class filter
                 with gr.Group():
@@ -1101,7 +1181,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     clear_selection_btn = gr.Button("Clear Selection", size="sm")
 
                 # Generation settings
-                with gr.Group():
+                with gr.Group(elem_id="gen-group"):
                     gr.Markdown("### Generation")
                     # Parameters and buttons first
                     with gr.Row(elem_id="gen-params-row"):
@@ -1150,11 +1230,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 # Neighbor list
                 with gr.Group():
                     gr.Markdown("### Neighbors")
-                    with gr.Row():
+                    with gr.Row(elem_id="knn-row"):
+                        gr.Markdown("**K-neighbors**", elem_id="knn-label")
                         knn_k_slider = gr.Number(
-                            value=5, label="K", precision=0, minimum=1, maximum=20
+                            value=5, show_label=False, precision=0, minimum=1, maximum=20,
+                            elem_id="knn-input", min_width=50
                         )
-                        suggest_btn = gr.Button("Suggest", size="sm")
+                        suggest_btn = gr.Button("Suggest KNN", size="sm")
                     neighbor_gallery = gr.Gallery(
                         label=None,
                         show_label=False,
@@ -1274,10 +1356,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 class_name = visualizer.get_class_name(int(sample["class_label"]))
             else:
                 class_name = "N/A"
-            details = f"**{sample['sample_id']}**\n\n"
+            details = f"**{sample['sample_id']}**<br>"
             if "class_label" in sample:
-                details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
-            details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
+            if "conditioning_sigma" in sample:
+                details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
+            details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
             return img, details
 
@@ -1317,6 +1401,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 details = f"**{sample['sample_id']}**\n\n"
                 if "class_label" in sample:
                     details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
+                if "conditioning_sigma" in sample:
+                    details += f"σ = {sample['conditioning_sigma']:.1f}\n\n"
                 details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
                 # Build updated Plotly figure with selection (preserve trajectory)
