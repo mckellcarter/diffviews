@@ -1053,12 +1053,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         object-fit: contain !important;
     }
 
-    /* Compact preview text */
-    #preview-details {
+    /* Compact preview and selected details text */
+    #preview-details,
+    #selected-details {
         line-height: 1.3 !important;
     }
 
-    #preview-details p {
+    #preview-details p,
+    #selected-details p {
         margin: 0.15em 0 !important;
     }
 
@@ -1150,6 +1152,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     clear_class_btn = gr.Button("Clear Highlight", size="sm")
                     class_status = gr.Markdown("")
 
+                # Selected sample (moved from right sidebar)
+                with gr.Group():
+                    gr.Markdown("### Selected Sample")
+                    selected_image = gr.Image(
+                        label=None, show_label=False, height=150, elem_id="selected-image"
+                    )
+                    selected_details = gr.Markdown(
+                        "Click a point to select", elem_id="selected-details"
+                    )
+                    clear_selection_btn = gr.Button("Clear Selection", size="sm")
+
             # Center column (main plot)
             with gr.Column(scale=3, min_width=500, elem_id="center-column"):
                 # Hidden textboxes for JS bridge (receives data from Plotly)
@@ -1170,16 +1183,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     show_label=False,
                 )
 
-            # Right column (selection & controls)
+            # Right column (generation & neighbors)
             with gr.Column(scale=1, elem_id="right-sidebar"):
-                with gr.Group():
-                    gr.Markdown("### Selected Sample")
-                    selected_image = gr.Image(
-                        label=None, show_label=False, height=150, elem_id="selected-image"
-                    )
-                    selected_details = gr.Markdown("Click a point to select")
-                    clear_selection_btn = gr.Button("Clear Selection", size="sm")
-
                 # Generation settings
                 with gr.Group(elem_id="gen-group"):
                     gr.Markdown("### Generation")
@@ -1398,12 +1403,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                 else:
                     class_name = "N/A"
-                details = f"**{sample['sample_id']}**\n\n"
+                details = f"**{sample['sample_id']}**<br>"
                 if "class_label" in sample:
-                    details += f"Class: {int(sample['class_label'])}: {class_name}\n\n"
+                    details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    details += f"σ = {sample['conditioning_sigma']:.1f}\n\n"
-                details += f"Coords: ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
+                details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
                 # Build updated Plotly figure with selection (preserve trajectory)
                 fig = visualizer.create_umap_figure(
