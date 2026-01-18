@@ -838,7 +838,7 @@ function attachPlotlyHandlers() {
             console.log('[Plotly] Hover sending:', hoverData);
             hoverBox.value = JSON.stringify(hoverData);
             hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
-        }, 150);  // 150ms debounce
+        }, 100);  // 100ms debounce
     });
 
     console.log('[Plotly] Handlers attached successfully!');
@@ -1295,6 +1295,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         rows=1,
                         height=70,
                         object_fit="contain",
+                        show_download_button=False,
                         elem_id="intermediate-gallery",
                     )
                     with gr.Row():

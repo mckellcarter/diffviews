@@ -7,7 +7,7 @@ I'm continuing a Gradio port of a Dash visualization app.
 Repo: diffviews
 Branch: feature/gradio-port-phase4-polish
 
-**Phase 4 IN PROGRESS: Polish Features**
+**Phase 4 NEARLY COMPLETE: Polish Features**
 
 Start by reading @diffviews/visualization/gradio_app.py
 
@@ -28,6 +28,10 @@ Start by reading @diffviews/visualization/gradio_app.py
 - **Intermediate image gallery** (denoising steps with σ labels)
 - **Frame navigation** (◀/▶ buttons + gallery click to view intermediate steps)
 - **Gallery captions** show full generation info (class ID, class name, step, sigma)
+- **Composite images** with noised input inset in upper-left corner
+- **Download button** on generated image (Gradio built-in, hidden on intermediate gallery)
+- **CLI command** `diffviews viz-gradio` (alongside `diffviews viz` for Dash)
+- **CSS styling** compact layouts, vh-based sizing, smooth image scaling
 
 ## Hover Preview Implementation
 
@@ -85,9 +89,12 @@ Start by reading @diffviews/visualization/gradio_app.py
 
 ## Remaining Phase 4 Items
 
-Potential improvements:
-1. Loading indicators during generation
-2. Export generated images
+Deployment & production:
+1. Add authentication option for deployment
+2. Configure queue settings for concurrent users
+3. Test multi-user scenarios
+4. Add deployment documentation (HuggingFace Spaces, Modal)
+5. Performance optimization for large datasets
 
 ---
 
@@ -124,19 +131,26 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 
 ## Current State
 
-- `gradio_app.py` (~1500 lines) with Plotly + generation + hover + intermediates
+- `gradio_app.py` (~2100 lines) with Plotly + generation + hover + intermediates
 - 30 Gradio tests + 24 generator tests (54 total)
-- Phase 4 in progress
+- Phase 4 nearly complete
 
 **Key files:**
-- `diffviews/visualization/gradio_app.py` - main app
-- `diffviews/visualization/app.py` - Dash reference
+- `diffviews/visualization/gradio_app.py` - main Gradio app
+- `diffviews/visualization/app.py` - Dash app (legacy)
+- `diffviews/scripts/cli.py` - CLI with `viz-gradio` command
 - `diffviews/core/generator.py` - generation functions
 - `tests/test_gradio_visualizer.py` - gradio tests
 - `tests/test_generator.py` - generator tests (includes gradio generation tests)
 
 ```bash
+# Run tests
 python -m pytest tests/test_gradio_visualizer.py tests/test_generator.py -v
+
+# Run via CLI (recommended)
+diffviews viz-gradio --data-dir data
+
+# Run directly
 python -m diffviews.visualization.gradio_app --data-dir data
 ```
 
