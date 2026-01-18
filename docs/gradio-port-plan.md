@@ -109,11 +109,13 @@ Completed:
 - [x] Frame navigation (◀/▶ buttons + gallery click to view steps)
 - [x] Gallery captions show full generation info (class, step, sigma)
 - [x] Trajectory hover shows intermediate images in preview panel
+- [x] Composite images with noised input inset in upper-left
+- [x] Download button on generated image (Gradio built-in)
+- [x] Hide download button on intermediate gallery (prevents caption overlap)
+- [x] Add `diffviews viz-gradio` CLI command (alongside existing `viz` for Dash)
+- [x] CSS styling (compact layouts, vh-based sizing, smooth image scaling)
 
 TODO:
-- [ ] Add loading indicators during generation
-- [ ] Export generated images (download button)
-- [ ] Improve CSS styling (match Dash Bootstrap look)
 - [ ] Add authentication option for deployment
 - [ ] Configure queue settings for concurrent users
 - [ ] Test multi-user scenarios
