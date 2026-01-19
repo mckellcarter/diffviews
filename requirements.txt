@@ -14,8 +14,8 @@ tqdm>=4.60.0
 # Numba pinned for UMAP pickle compatibility
 numba==0.58.1
 
-# Visualization
-gradio>=4.0.0
+# Visualization - pinned to 4.x for compatibility
+gradio>=4.0.0,<5.0.0
 plotly>=5.18.0
 matplotlib>=3.5.0
 
