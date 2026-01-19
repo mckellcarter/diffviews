@@ -3,9 +3,9 @@
 ---
 
 Repo: diffviews
-Branch: main (Gradio-only, Dash removed)
+Branch: feature/phase5-hf-spaces-deployment
 
-**Status: Gradio visualizer complete, ready for deployment**
+**Phase 5: HuggingFace Spaces Deployment**
 
 Start by reading @diffviews/visualization/app.py
 
@@ -110,10 +110,13 @@ Start by reading @diffviews/visualization/app.py
 
 ## Remaining Items
 
-### Phase 5: Public Demo (CURRENT PRIORITY)
-1. Add deployment documentation (HuggingFace Spaces)
-2. Create `app.py` for HF Spaces entry point
-3. Performance optimization for large datasets (if needed)
+### Phase 5: HF Spaces Deployment (CURRENT)
+- [ ] Create HF Spaces `app.py` entry point in repo root
+- [ ] Add `requirements.txt` for Spaces compatibility
+- [ ] Create Space on HuggingFace Hub
+- [ ] Configure data/checkpoint loading for Spaces
+- [ ] Test on HF Spaces free tier (CPU) and paid (GPU)
+- [ ] Add deployment documentation
 
 ### Phase 6: Auth & Persistence (DEFERRED)
 See `docs/auth-plan.md` for comprehensive plan covering:
