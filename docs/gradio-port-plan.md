@@ -120,15 +120,20 @@ Completed:
 - [x] Configure queue settings (`max_size=20`)
 - [x] Test multi-user scenarios (verified session isolation)
 
-### Phase 5: Public Demo (CURRENT)
+### Phase 5: HF Spaces Deployment (CURRENT)
+**Branch:** `feature/phase5-hf-spaces-deployment`
 
-Focus: Minimal functional public deployment without auth
+Focus: Deploy to HuggingFace Spaces for public demo
 
 TODO:
-- [ ] Add deployment documentation (HuggingFace Spaces)
-- [ ] Create `app.py` for HF Spaces (standard entry point)
-- [ ] Add `requirements.txt` for Spaces compatibility
-- [ ] Test on HF Spaces free tier
+- [ ] Create `app.py` in repo root (HF Spaces entry point)
+- [ ] Add `requirements.txt` for Spaces
+- [ ] Create Space on HuggingFace Hub (mckell/diffviews)
+- [ ] Configure data loading (HF datasets or bundled)
+- [ ] Configure checkpoint loading (HF model hub or bundled)
+- [ ] Test CPU-only mode (free tier)
+- [ ] Test GPU mode (paid tier, if needed for generation)
+- [ ] Add deployment documentation to README
 - [ ] Performance optimization for large datasets (if needed)
 
 ### Phase 6: Auth & Persistence (DEFERRED)

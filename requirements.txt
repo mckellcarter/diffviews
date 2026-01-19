@@ -1,0 +1,20 @@
+# DiffViews - HuggingFace Spaces Requirements
+# Core dependencies
+torch>=2.0.0
+numpy>=1.21.0
+pandas>=1.5.0
+pillow>=9.0.0
+scikit-learn>=1.0.0
+umap-learn>=0.5.0
+tqdm>=4.60.0
+
+# Visualization
+gradio>=4.0.0
+plotly>=5.18.0
+matplotlib>=3.5.0
+
+# HuggingFace Hub for data download
+huggingface_hub>=0.19.0
+
+# Optional but useful
+scipy>=1.7.0
