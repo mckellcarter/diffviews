@@ -81,16 +81,24 @@ def ensure_data_ready(data_dir: Path, checkpoints: list) -> bool:
     """Ensure data and checkpoints are downloaded."""
     print(f"Checking for existing data in {data_dir.absolute()}...")
 
-    # Check which models have data (config + embeddings)
+    # Check which models have data (config + embeddings + images)
     models_with_data = []
     for model in ["dmd2", "edm"]:
         config_path = data_dir / model / "config.json"
         embeddings_dir = data_dir / model / "embeddings"
-        if config_path.exists() and embeddings_dir.exists():
-            csv_files = list(embeddings_dir.glob("*.csv"))
-            if csv_files:
-                models_with_data.append(model)
-                print(f"  Found {model}: {config_path}")
+        images_dir = data_dir / model / "images" / "imagenet_real"
+
+        if not config_path.exists():
+            continue
+        if not embeddings_dir.exists():
+            continue
+
+        csv_files = list(embeddings_dir.glob("*.csv"))
+        png_files = list(images_dir.glob("sample_*.png")) if images_dir.exists() else []
+
+        if csv_files and png_files:
+            models_with_data.append(model)
+            print(f"  Found {model}: {len(csv_files)} csv, {len(png_files)} images")
 
     if not models_with_data:
         print("Data not found, downloading...")
