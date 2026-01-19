@@ -112,10 +112,17 @@ Start by reading @diffviews/visualization/gradio_app.py
 
 ## Remaining Items
 
-Deployment & production:
-1. Add authentication option for deployment
-2. Add deployment documentation (HuggingFace Spaces, Modal)
-3. Performance optimization for large datasets
+### Phase 5: Public Demo (CURRENT PRIORITY)
+1. Add deployment documentation (HuggingFace Spaces)
+2. Create `app.py` for HF Spaces entry point
+3. Performance optimization for large datasets (if needed)
+
+### Phase 6: Auth & Persistence (DEFERRED)
+See `docs/auth-plan.md` for comprehensive plan covering:
+- Basic auth CLI flags, HF OAuth, FastAPI OAuth
+- SQLite persistence layer for generations/workspaces
+- Usage logging and analytics
+- Security considerations and deployment-specific options
 
 ---
 
