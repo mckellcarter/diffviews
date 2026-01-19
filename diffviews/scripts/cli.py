@@ -4,7 +4,7 @@ CLI for diffviews package.
 Usage:
     diffviews download [--output-dir DIR] [--checkpoints all|dmd2|edm|none]
     diffviews convert <data_dir> [--model-type TYPE] [--keep-npz]
-    diffviews visualize [--data-dir DIR] [--port PORT] [--debug] [...]
+    diffviews viz [--data-dir DIR] [--port PORT] [--share] [...]
 """
 
 import argparse
@@ -117,11 +117,11 @@ def convert_command(args):
 
 
 def visualize_command(args):
-    """Launch the visualization app."""
+    """Launch the Gradio visualization app."""
     from ..utils.device import get_device
-    from ..visualization.app import DMD2Visualizer
+    from ..visualization.app import GradioVisualizer, create_gradio_app
 
-    visualizer = DMD2Visualizer(
+    visualizer = GradioVisualizer(
         data_dir=args.data_dir,
         embeddings_path=args.embeddings,
         checkpoint_path=args.checkpoint_path,
@@ -131,15 +131,17 @@ def visualize_command(args):
         guidance_scale=args.guidance_scale,
         sigma_max=args.sigma_max,
         sigma_min=args.sigma_min,
-        label_dropout=args.label_dropout,
         adapter_name=args.adapter,
-        umap_n_neighbors=args.umap_n_neighbors,
-        umap_min_dist=args.umap_min_dist,
         max_classes=args.max_classes,
-        initial_model=args.model
+        initial_model=args.model,
     )
 
-    visualizer.run(debug=args.debug, port=args.port)
+    app = create_gradio_app(visualizer)
+    app.queue(max_size=20).launch(
+        server_name="0.0.0.0",
+        server_port=args.port,
+        share=args.share,
+    )
 
 
 def main():
@@ -190,7 +192,7 @@ def main():
         help="Keep original .npz files after conversion"
     )
 
-    # Visualize subcommand
+    # Visualize subcommand (Gradio)
     viz_parser = subparsers.add_parser(
         "visualize",
         aliases=["viz"],
@@ -211,13 +213,13 @@ def main():
     viz_parser.add_argument(
         "--port",
         type=int,
-        default=8050,
-        help="Port to run server on"
+        default=7860,
+        help="Port to run server on (default: 7860)"
     )
     viz_parser.add_argument(
-        "--debug",
+        "--share",
         action="store_true",
-        help="Run in debug mode"
+        help="Create public share link"
     )
     viz_parser.add_argument(
         "--checkpoint-path",
@@ -257,12 +259,6 @@ def main():
         help="Minimum sigma for denoising"
     )
     viz_parser.add_argument(
-        "--label-dropout",
-        type=float,
-        default=0.0,
-        help="Label dropout for CFG models"
-    )
-    viz_parser.add_argument(
         "--mask-steps",
         type=int,
         default=1,
@@ -273,18 +269,6 @@ def main():
         type=str,
         default="dmd2-imagenet-64",
         help="Adapter name for model loading"
-    )
-    viz_parser.add_argument(
-        "--umap-n-neighbors",
-        type=int,
-        default=15,
-        help="UMAP n_neighbors parameter"
-    )
-    viz_parser.add_argument(
-        "--umap-min-dist",
-        type=float,
-        default=0.1,
-        help="UMAP min_dist parameter"
     )
     viz_parser.add_argument(
         "--max-classes", "-c",

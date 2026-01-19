@@ -14,7 +14,7 @@ DiffViews provides tools for visualizing and exploring the internal activations 
 - **Activation extraction**: Extract and save layer activations during generation
 - **Activation masking**: Constrain generation by fixing specific layer outputs
 - **UMAP visualization**: Project high-dimensional activations to 2D/3D
-- **Interactive dashboard**: Explore embeddings, find neighbors, generate from activations
+- **Interactive dashboard**: Gradio app to explore embeddings, find neighbors, generate from activations
 - **Multi-step generation**: Support for single-step and multi-step denoising with CFG
 
 ## Installation
@@ -188,36 +188,35 @@ Quick start (16 ImageNet classes, ~1168 samples per model):
 ```bash
 pip install diffviews[viz]
 diffviews download
-diffviews viz
+diffviews viz-gradio
 ```
 
 ## Visualization App
 
-Launch the interactive dashboard:
+Two visualization backends available:
 
 ```bash
-# Multi-model (recommended)
-diffviews viz --data-dir data
+# Gradio app (recommended) - better multi-user support
+diffviews viz-gradio --data-dir data
 
-# Single model with explicit paths
-diffviews viz \
-  --data-dir /path/to/model_data/ \
-  --embeddings /path/to/embeddings.csv \
-  --checkpoint-path /path/to/model.pkl \
-  --adapter dmd2-imagenet-64
+# Dash app (legacy)
+diffviews viz --data-dir data
 ```
 
-### Features
+### Gradio Features
 
 - **Model Switching**: Dropdown to switch between discovered models
 - **Point Selection**: Click points to select, click neighbors to add/remove
+- **KNN Suggestions**: Auto-suggest nearest neighbors with distance display
 - **Generation**: Generate from averaged neighbor activations
-- **Trajectory View**: Hover generated points to see denoising trajectory
+- **Trajectory View**: Denoising path visualized on UMAP with sigma labels
+- **Intermediate Steps**: Gallery of denoising steps with frame navigation
+- **Hover Preview**: Preview samples by hovering over points
 
 ### CLI Options
 
 ```bash
-diffviews viz --help
+diffviews viz-gradio --help
 ```
 
 | Option | Description |
@@ -230,7 +229,8 @@ diffviews viz --help
 | `--num-steps` | Denoising steps (overrides config default) |
 | `--guidance-scale` | CFG scale (0=uncond, 1=class-cond, >1=amplified) |
 | `--model`, `-m` | Initial model to load (e.g., `dmd2`, `edm`) |
-| `--port` | Server port (default: 8050) |
+| `--port` | Server port (default: 7860) |
+| `--share` | Create public share link (Gradio only) |
 
 ### Other Commands
 
