@@ -1,2031 +1,2215 @@
 """
-Interactive Dash application for diffusion activation visualization.
+Gradio-based diffusion activation visualizer.
+Port of the Dash visualization app with multi-user support.
 """
 
 import argparse
-import base64
 import json
 import pickle
-from io import BytesIO
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-import dash
-import dash_bootstrap_components as dbc
+import gradio as gr
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import torch
-from dash import Input, Output, State, callback_context, dcc, html
 from PIL import Image
 from sklearn.neighbors import NearestNeighbors
 
-# For generation from activations - using diffviews adapter interface
-from diffviews.adapters import get_adapter
-from diffviews.core.generator import (
-    generate_with_mask,
-    generate_with_mask_multistep,
-    get_denoising_sigmas,
-    save_generated_sample,
-)
-from diffviews.core.masking import ActivationMasker, unflatten_activation
+import plotly.graph_objects as go
 
-# For loading dataset activations (UMAP pre-computed via CLI or embeddings CSV)
 from diffviews.processing.umap import load_dataset_activations
 from diffviews.utils.device import get_device
+from diffviews.adapters.registry import get_adapter
+from diffviews.core.masking import ActivationMasker, unflatten_activation
+from diffviews.core.generator import generate_with_mask_multistep
 
 
-class DMD2Visualizer:
-    """Main visualizer application."""
+@dataclass
+class ModelData:
+    """Per-model data container for thread-safe multi-user access.
 
-    def __init__(self, data_dir: Path, embeddings_path: Path = None, checkpoint_path: Path = None,
-                 device: str = 'cuda', num_steps: int = 5, mask_steps: int = 1,
-                 guidance_scale: float = 1.0, sigma_max: float = 80.0, sigma_min: float = 0.5,
-                 label_dropout: float = 0.0, adapter_name: str = 'dmd2-imagenet-64',
-                 umap_n_neighbors: int = 15, umap_min_dist: float = 0.1, max_classes: int = None,
-                 initial_model: str = None):
-        """
+    All fields are populated during initialization and should be treated
+    as read-only afterward to ensure thread safety.
+    """
+    name: str
+    data_dir: Path
+    adapter_name: str
+    checkpoint_path: Optional[Path]
+    sigma_max: float
+    sigma_min: float
+    default_steps: int
+
+    # Loaded data
+    df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    activations: Optional[np.ndarray] = None
+    metadata_df: Optional[pd.DataFrame] = None
+    umap_reducer: Any = None
+    umap_scaler: Any = None
+    umap_params: Dict = field(default_factory=dict)
+    nn_model: Optional[NearestNeighbors] = None
+
+    # Lazy-loaded adapter (protected by lock in visualizer)
+    adapter: Any = None
+    layer_shapes: Dict[str, tuple] = field(default_factory=dict)
+
+
+class GradioVisualizer:
+    """Gradio-based visualizer with multi-user support.
+
+    Thread-safety model:
+    - model_data dict is populated at init, read-only afterward
+    - Each model's ModelData contains all model-specific state
+    - current_model selection is per-session via gr.State (not instance attr)
+    - Adapter loading protected by _generation_lock
+    """
+
+    def __init__(
+        self,
+        data_dir: Path,
+        embeddings_path: Path = None,
+        checkpoint_path: Path = None,
+        device: str = "cuda",
+        num_steps: int = 5,
+        mask_steps: int = 1,
+        guidance_scale: float = 1.0,
+        sigma_max: float = 80.0,
+        sigma_min: float = 0.5,
+        label_dropout: float = 0.0,
+        adapter_name: str = "dmd2-imagenet-64",
+        max_classes: int = None,
+        initial_model: str = None,
+    ):
+        """Initialize visualizer.
+
         Args:
-            data_dir: Root data directory (parent containing model subdirs or single model dir)
+            data_dir: Root data directory (parent containing model subdirs)
             embeddings_path: Optional path to precomputed embeddings CSV
             checkpoint_path: Optional path to checkpoint for generation
             device: Device for generation ('cuda', 'mps', or 'cpu')
-            num_steps: Number of denoising steps (1=single-step, 4/10=multi-step)
-            mask_steps: Steps to apply activation mask (default=num_steps, 1=first-step-only)
-            guidance_scale: CFG scale (0=uncond, 1=class, >1=amplify, <0=anti-class)
+            num_steps: Number of denoising steps
+            mask_steps: Steps to apply activation mask
+            guidance_scale: CFG scale
             sigma_max: Maximum sigma for denoising schedule
             sigma_min: Minimum sigma for denoising schedule
-            label_dropout: Label dropout for model config (use 0.1 for CFG models)
-            adapter_name: Adapter name for model loading (default: dmd2-imagenet-64)
-            umap_n_neighbors: UMAP n_neighbors parameter
-            umap_min_dist: UMAP min_dist parameter
+            label_dropout: Label dropout for model config
+            adapter_name: Adapter name for model loading
             max_classes: Maximum number of classes to load (None=all)
-            initial_model: Initial model to load (default: dmd2 or first discovered)
+            initial_model: Initial model to load
         """
-        self.root_data_dir = Path(data_dir)  # Parent dir containing model subdirs
-        self.embeddings_path = embeddings_path
-        self.checkpoint_path = checkpoint_path
+        self.root_data_dir = Path(data_dir)
         self.device = device
-        self.num_steps = num_steps
         self.mask_steps = mask_steps
         self.guidance_scale = guidance_scale
-        self.sigma_max = sigma_max
-        self.sigma_min = sigma_min
         self.label_dropout = label_dropout
-        self.adapter_name = adapter_name
-        self.umap_n_neighbors = umap_n_neighbors
-        self.umap_min_dist = umap_min_dist
         self.max_classes = max_classes
-        self.df = None
-        self.umap_params = None
-        self.activations = None
-        self.metadata_df = None
-        self.nn_model = None  # Nearest neighbors model
-        self.selected_point = None  # Currently selected point
-        self.neighbor_indices = None  # Indices of neighbors
-        self.class_labels = {}  # ImageNet class labels (Standard ordering)
 
-        # For generation from activations
-        self.umap_reducer = None  # UMAP model for inverse_transform
-        self.umap_scaler = None   # Scaler for inverse_transform
-        self.adapter = None       # GeneratorAdapter instance
-        self.layer_shapes = {}    # Cache of layer activation shapes
+        # Fallback defaults (used if no model config overrides)
+        self._default_num_steps = num_steps
+        self._default_sigma_max = sigma_max
+        self._default_sigma_min = sigma_min
+        self._default_adapter_name = adapter_name
+        self._default_checkpoint_path = checkpoint_path
+        self._default_embeddings_path = embeddings_path
 
-        # Multi-model support
-        self.model_configs = {}  # {model_name: {data_dir, adapter, checkpoint, ...}}
-        self.current_model = None
+        # Thread lock for adapter loading
+        self._generation_lock = threading.Lock()
 
-        # Track last used values for detecting which field changed
-        self._last_sigma_max = self.sigma_max
-        self._last_sigma_min = self.sigma_min
-
-        # Discover available models
-        self.discover_models()
-
-        # Set initial model
-        if initial_model and initial_model in self.model_configs:
-            self.current_model = initial_model
-        elif 'dmd2' in self.model_configs:
-            self.current_model = 'dmd2'
-        elif self.model_configs:
-            self.current_model = list(self.model_configs.keys())[0]
-
-        # Set data_dir to current model's directory (or root if single model)
-        if self.current_model and self.current_model in self.model_configs:
-            config = self.model_configs[self.current_model]
-            self.data_dir = config['data_dir']
-            self.adapter_name = config['adapter']
-            if config.get('checkpoint'):
-                # Resolve checkpoint path relative to model dir
-                ckpt = Path(config['checkpoint'])
-                if not ckpt.is_absolute():
-                    candidate = config['data_dir'] / ckpt
-                    if candidate.exists():
-                        ckpt = candidate
-                self.checkpoint_path = ckpt
-            # Use discovered embeddings if no explicit embeddings_path provided
-            if self.embeddings_path is None and config.get('embeddings_path'):
-                self.embeddings_path = config['embeddings_path']
-            # Use model-specific sigma defaults
-            self.sigma_max = config.get('sigma_max', self.sigma_max)
-            self.sigma_min = config.get('sigma_min', self.sigma_min)
-            self.num_steps = config.get('default_steps', self.num_steps)
-        else:
-            self.data_dir = self.root_data_dir
-
-        # Load class labels
+        # Shared class labels (typically same across models for ImageNet)
+        self.class_labels: Dict[int, str] = {}
         self.load_class_labels()
 
-        # Load data
-        print(f"Data directory: {self.data_dir.absolute()}")
-        self.load_data()
+        # Discover and load all models (read-only after init)
+        self.model_configs: Dict[str, dict] = {}
+        self.model_data: Dict[str, ModelData] = {}
+        self.discover_models()
+        self._load_all_models()
 
-        # Create Dash app
-        self.app = dash.Dash(
-            __name__,
-            external_stylesheets=[dbc.themes.BOOTSTRAP]
-        )
-        self.app.title = "Diffusion Generation Visualizer"
-        self.build_layout()
-        self.register_callbacks()
+        # Determine default model (for initial UI state, not mutable)
+        if initial_model and initial_model in self.model_data:
+            self.default_model = initial_model
+        elif "dmd2" in self.model_data:
+            self.default_model = "dmd2"
+        elif self.model_data:
+            self.default_model = list(self.model_data.keys())[0]
+        else:
+            self.default_model = None
+
+        if self.default_model:
+            print(f"Default model: {self.default_model}")
+            print(f"Loaded {len(self.model_data[self.default_model].df)} samples")
 
     def discover_models(self):
         """Discover available models in the data directory."""
-        # Look for subdirectories with config.json + embeddings/
         for subdir in self.root_data_dir.iterdir():
             if not subdir.is_dir():
                 continue
             config_path = subdir / "config.json"
             embeddings_dir = subdir / "embeddings"
             if config_path.exists() and embeddings_dir.exists():
-                # Load config
-                with open(config_path, 'r', encoding='utf-8') as f:
+                with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
-                # Find embeddings file
                 embeddings_files = list(embeddings_dir.glob("*.csv"))
                 if not embeddings_files:
                     continue
                 model_name = subdir.name
                 self.model_configs[model_name] = {
-                    'data_dir': subdir,
-                    'adapter': config.get('adapter', 'dmd2-imagenet-64'),
-                    'checkpoint': config.get('checkpoint'),
-                    'sigma_max': config.get('sigma_max', 80.0),
-                    'sigma_min': config.get('sigma_min', 0.5),
-                    'default_steps': config.get('default_steps', 5),
-                    'embeddings_path': embeddings_files[0]  # Use first CSV found
+                    "data_dir": subdir,
+                    "adapter": config.get("adapter", "dmd2-imagenet-64"),
+                    "checkpoint": config.get("checkpoint"),
+                    "sigma_max": config.get("sigma_max", 80.0),
+                    "sigma_min": config.get("sigma_min", 0.5),
+                    "default_steps": config.get("default_steps", 5),
+                    "embeddings_path": embeddings_files[0],
                 }
                 print(f"Discovered model: {model_name} (adapter={config.get('adapter')})")
 
-    def switch_model(self, model_name: str) -> bool:
-        """Switch to a different model.
+    def _load_all_models(self):
+        """Load data for all discovered models into model_data dict.
 
-        Args:
-            model_name: Name of the model to switch to
-
-        Returns:
-            True if switch succeeded, False otherwise
+        This is called once during __init__ to preload all model data.
+        After this, model_data is read-only for thread safety.
         """
-        if model_name not in self.model_configs:
-            print(f"Warning: Model '{model_name}' not found in configs")
-            return False
+        for model_name, config in self.model_configs.items():
+            print(f"Loading model: {model_name}")
+            model_data = self._load_model_data(model_name, config)
+            if model_data is not None:
+                self.model_data[model_name] = model_data
 
-        config = self.model_configs[model_name]
-        print(f"Switching to model: {model_name}")
+    def _load_model_data(self, model_name: str, config: dict) -> Optional[ModelData]:
+        """Load all data for a single model into a ModelData instance."""
+        data_dir = config["data_dir"]
+        embeddings_path = config.get("embeddings_path")
 
-        # Reset model-specific state
-        self.adapter = None
-        self.layer_shapes = {}
-        self.umap_reducer = None
-        self.umap_scaler = None
-        self.nn_model = None
-        self.activations = None
-        self.metadata_df = None
-
-        # Clear generated samples/trajectories
-        if hasattr(self, 'generated_trajectories'):
-            self.generated_trajectories = []
-
-        # Update paths and config
-        self.current_model = model_name
-        self.data_dir = config['data_dir']
-        self.adapter_name = config['adapter']
-        if config.get('checkpoint'):
-            # Try to resolve checkpoint path - check model dir, root dir, then cwd
-            ckpt = Path(config['checkpoint'])
+        # Resolve checkpoint path
+        checkpoint_path = None
+        if config.get("checkpoint"):
+            ckpt = Path(config["checkpoint"])
             if not ckpt.is_absolute():
-                for base in [config['data_dir'], self.root_data_dir, Path.cwd()]:
+                for base in [data_dir, self.root_data_dir, Path.cwd()]:
                     candidate = base / ckpt
                     if candidate.exists():
                         ckpt = candidate
                         break
-            self.checkpoint_path = ckpt
-        self.embeddings_path = config['embeddings_path']
+            checkpoint_path = ckpt
 
-        # Apply model-specific defaults
-        self.sigma_max = config.get('sigma_max', 80.0)
-        self.sigma_min = config.get('sigma_min', 0.5)
-        self.num_steps = config.get('default_steps', 5)
+        # Create ModelData instance
+        model_data = ModelData(
+            name=model_name,
+            data_dir=data_dir,
+            adapter_name=config.get("adapter", self._default_adapter_name),
+            checkpoint_path=checkpoint_path,
+            sigma_max=config.get("sigma_max", self._default_sigma_max),
+            sigma_min=config.get("sigma_min", self._default_sigma_min),
+            default_steps=config.get("default_steps", self._default_num_steps),
+        )
 
-        # Reset tracked sigma values
-        self._last_sigma_max = self.sigma_max
-        self._last_sigma_min = self.sigma_min
+        # Load embeddings
+        if embeddings_path and Path(embeddings_path).exists():
+            print(f"  Loading embeddings from {embeddings_path}")
+            model_data.df = pd.read_csv(embeddings_path)
 
-        # Reload data
-        self.load_data()
-        self.fit_nearest_neighbors()
+            # Load UMAP params
+            param_path = Path(embeddings_path).with_suffix(".json")
+            if param_path.exists():
+                with open(param_path, "r", encoding="utf-8") as f:
+                    model_data.umap_params = json.load(f)
 
-        return True
+            # Load UMAP model for inverse_transform (optional)
+            umap_model_path = Path(embeddings_path).with_suffix(".pkl")
+            if umap_model_path.exists():
+                print(f"  Loading UMAP model from {umap_model_path}")
+                with open(umap_model_path, "rb") as f:
+                    umap_data = pickle.load(f)
+                    model_data.umap_reducer = umap_data["reducer"]
+                    model_data.umap_scaler = umap_data["scaler"]
+
+            # Filter by max_classes if specified
+            if self.max_classes is not None and "class_label" in model_data.df.columns:
+                unique_classes = model_data.df["class_label"].unique()
+                if len(unique_classes) > self.max_classes:
+                    classes_to_keep = unique_classes[: self.max_classes]
+                    original_count = len(model_data.df)
+                    model_data.df = model_data.df[
+                        model_data.df["class_label"].isin(classes_to_keep)
+                    ].reset_index(drop=True)
+                    print(
+                        f"  Filtered to {self.max_classes} classes: "
+                        f"{original_count} -> {len(model_data.df)} samples"
+                    )
+
+            # Load activations for generation
+            model_data.activations, model_data.metadata_df = self._load_activations(
+                data_dir, "imagenet_real"
+            )
+
+            # Fit KNN model
+            self._fit_knn_model(model_data)
+
+            print(f"  Loaded {len(model_data.df)} samples")
+        else:
+            print(f"  Warning: No embeddings found for {model_name}")
+            model_data.df = pd.DataFrame()
+
+        return model_data
+
+    def _load_activations(
+        self, data_dir: Path, model_type: str
+    ) -> Tuple[Optional[np.ndarray], Optional[pd.DataFrame]]:
+        """Load raw activations for generation."""
+        activation_dir = data_dir / "activations" / model_type
+        metadata_path = data_dir / "metadata" / model_type / "dataset_info.json"
+
+        if not activation_dir.exists():
+            print(f"  Warning: Activation dir not found: {activation_dir}")
+            return None, None
+
+        if not metadata_path.exists():
+            print(f"  Warning: No metadata found: {metadata_path}")
+            return None, None
+
+        activations, metadata_df = load_dataset_activations(activation_dir, metadata_path)
+        return activations, metadata_df
+
+    def _fit_knn_model(self, model_data: ModelData):
+        """Fit KNN model on UMAP coordinates for a model."""
+        if model_data.df.empty or "umap_x" not in model_data.df.columns:
+            return
+
+        umap_coords = model_data.df[["umap_x", "umap_y"]].values
+        print(f"  [KNN] Fitting on {umap_coords.shape[0]} points")
+        model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
+        model_data.nn_model.fit(umap_coords)
+
+    def get_model(self, model_name: str) -> Optional[ModelData]:
+        """Get ModelData for a model name, or None if not found."""
+        return self.model_data.get(model_name)
+
+    def is_valid_model(self, model_name: str) -> bool:
+        """Check if a model name is valid."""
+        return model_name in self.model_data
 
     def load_class_labels(self):
-        """Load ImageNet class labels (Standard ordering)."""
-        # All data now uses Standard ImageNet ordering - no remapping needed
-        # Check root_data_dir first, then data_dir, then package data
-        label_path = self.root_data_dir / "imagenet_standard_class_index.json"
-        if not label_path.exists():
-            label_path = self.data_dir / "imagenet_standard_class_index.json"
-        if not label_path.exists():
-            # Fallback to legacy paths
-            label_path = self.data_dir / "imagenet_class_labels.json"
-        if not label_path.exists():
-            # Fallback to package data directory
-            label_path = Path(__file__).parent.parent / "data" / "imagenet_standard_class_index.json"
+        """Load ImageNet class labels (shared across models)."""
+        search_paths = [
+            self.root_data_dir / "imagenet_standard_class_index.json",
+            self.root_data_dir / "imagenet_class_labels.json",
+            Path(__file__).parent.parent / "data" / "imagenet_standard_class_index.json",
+        ]
 
-        if label_path.exists():
-            with open(label_path, 'r', encoding='utf-8') as f:
-                raw_labels = json.load(f)
-                # Convert to dict: {class_id: class_name}
-                self.class_labels = {int(k): v[1] for k, v in raw_labels.items()}
-            print(f"Loaded {len(self.class_labels)} ImageNet class labels (Standard ordering)")
-        else:
-            print(f"Warning: Class labels not found at {label_path}")
-            self.class_labels = {}
+        for label_path in search_paths:
+            if label_path.exists():
+                with open(label_path, "r", encoding="utf-8") as f:
+                    raw_labels = json.load(f)
+                    self.class_labels = {int(k): v[1] for k, v in raw_labels.items()}
+                print(f"Loaded {len(self.class_labels)} ImageNet class labels")
+                return
 
-    def get_class_name(self, class_id):
+        print("Warning: Class labels not found")
+        self.class_labels = {}
+
+    def get_class_name(self, class_id: int) -> str:
         """Get human-readable class name for a class ID."""
         if class_id in self.class_labels:
             return self.class_labels[class_id]
         return f"Unknown class {class_id}"
 
-    def get_sample_class_name(self, sample):
-        """Get class name from sample, handling NaN values."""
-        if 'class_label' not in sample:
+    def find_knn_neighbors(
+        self, model_name: str, idx: int, k: int = 5, exclude_selected: bool = True
+    ) -> List[Tuple[int, float]]:
+        """Find k nearest neighbors for a point.
+
+        Args:
+            model_name: Name of the model to use
+            idx: Index of the query point
+            k: Number of neighbors to return
+            exclude_selected: If True, exclude the query point from results
+
+        Returns:
+            List of (neighbor_idx, distance) tuples sorted by distance
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.nn_model is None:
+            return []
+        if idx >= len(model_data.df):
+            return []
+
+        # Query k+1 since the point itself is included
+        query_k = k + 1 if exclude_selected else k
+        query_point = model_data.df.iloc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
+        distances, indices = model_data.nn_model.kneighbors(query_point, n_neighbors=query_k)
+
+        results = []
+        for dist, neighbor_idx in zip(distances[0], indices[0]):
+            if exclude_selected and neighbor_idx == idx:
+                continue
+            results.append((int(neighbor_idx), float(dist)))
+
+        return results[:k]
+
+    def get_image(self, model_name: str, image_path: str) -> Optional[np.ndarray]:
+        """Load image as numpy array for gr.Image.
+
+        Args:
+            model_name: Name of the model (determines data directory)
+            image_path: Relative path to image within model's data directory
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None:
             return None
-        class_id = int(sample['class_label'])
-        class_name = sample.get('class_name')
-        if class_name is None or (isinstance(class_name, float) and pd.isna(class_name)):
-            class_name = self.get_class_name(class_id)
-        return class_name
-
-    def add_class_highlight_trace(self, fig, highlighted_class):
-        """Add class highlight X markers colored by log(sigma)."""
-        if highlighted_class is None or 'class_label' not in self.df.columns:
-            return
-
-        class_mask = self.df['class_label'] == highlighted_class
-        class_df = self.df[class_mask]
-
-        if len(class_df) == 0:
-            return
-
-        class_name = self.get_class_name(highlighted_class)
-
-        # Color by log(sigma): black at max, medium grey at min
-        # Filter to only samples with valid sigma values
-        if 'conditioning_sigma' in class_df.columns:
-            sigma_mask = class_df['conditioning_sigma'].notna()
-            class_df_with_sigma = class_df[sigma_mask]
-
-            if len(class_df_with_sigma) > 0:
-                sigmas = class_df_with_sigma['conditioning_sigma'].values
-                log_sigmas = np.log(sigmas + 1e-6)  # Avoid log(0)
-                # Normalize to 0-1 range (0=min sigma, 1=max sigma)
-                log_min, log_max = log_sigmas.min(), log_sigmas.max()
-                if log_max > log_min:
-                    normalized = (log_sigmas - log_min) / (log_max - log_min)
-                else:
-                    normalized = np.ones_like(log_sigmas) * 0.5
-                # Map: 1 (max sigma) -> black (0), 0 (min sigma) -> medium grey (128)
-                grey_values = ((1 - normalized) * 128).astype(int)
-                colors = [f'rgb({g},{g},{g})' for g in grey_values]
-
-                # Add trace for samples with sigma (colored)
-                fig.add_trace(go.Scatter(
-                    x=class_df_with_sigma['umap_x'],
-                    y=class_df_with_sigma['umap_y'],
-                    mode='markers',
-                    marker=dict(
-                        size=12,
-                        color=colors,
-                        symbol='x',
-                        line=dict(width=2, color=colors)
-                    ),
-                    name=f'Class {highlighted_class}: {class_name}',
-                    hoverinfo='skip',
-                    showlegend=True
-                ))
-
-                # Add separate trace for samples without sigma (generated) in green
-                class_df_no_sigma = class_df[~sigma_mask]
-                if len(class_df_no_sigma) > 0:
-                    fig.add_trace(go.Scatter(
-                        x=class_df_no_sigma['umap_x'],
-                        y=class_df_no_sigma['umap_y'],
-                        mode='markers',
-                        marker=dict(
-                            size=12,
-                            color='#00FF00',
-                            symbol='x',
-                            line=dict(width=2, color='#00FF00')
-                        ),
-                        name=f'Class {highlighted_class} (generated)',
-                        hoverinfo='skip',
-                        showlegend=False
-                    ))
-                return
-
-        # Fallback: no sigma data, use black
-        fig.add_trace(go.Scatter(
-            x=class_df['umap_x'],
-            y=class_df['umap_y'],
-            mode='markers',
-            marker=dict(
-                size=12,
-                color='black',
-                symbol='x',
-                line=dict(width=2, color='black')
-            ),
-            name=f'Class {highlighted_class}: {class_name}',
-            hoverinfo='skip',
-            showlegend=True
-        ))
-
-    def load_data(self):
-        """Load embeddings or prepare for generation."""
-        if self.embeddings_path:
-            if not Path(self.embeddings_path).exists():
-                print(f"ERROR: Embeddings file not found: {self.embeddings_path}")
-                print(f"  Absolute path: {Path(self.embeddings_path).absolute()}")
-                self.df = pd.DataFrame()
-                return
-            print(f"Loading embeddings from {self.embeddings_path}")
-            self.df = pd.read_csv(self.embeddings_path)
-
-            # Load UMAP params
-            param_path = Path(self.embeddings_path).with_suffix('.json')
-            if param_path.exists():
-                with open(param_path, 'r', encoding='utf-8') as f:
-                    self.umap_params = json.load(f)
-            else:
-                self.umap_params = {}
-
-            # Load UMAP model for inverse_transform (optional)
-            model_path = Path(self.embeddings_path).with_suffix('.pkl')
-            if model_path.exists():
-                print(f"Loading UMAP model from {model_path}")
-                with open(model_path, 'rb') as f:
-                    model_data = pickle.load(f)
-                    self.umap_reducer = model_data['reducer']
-                    self.umap_scaler = model_data['scaler']
-                print("UMAP model loaded (inverse_transform available)")
-            else:
-                print(f"Note: UMAP pkl not found at {model_path}")
-                print("(Generation still works - uses neighbor averaging)")
-
-            # Filter by max_classes if specified
-            if self.max_classes is not None and 'class_label' in self.df.columns:
-                unique_classes = self.df['class_label'].unique()
-                if len(unique_classes) > self.max_classes:
-                    classes_to_keep = unique_classes[:self.max_classes]
-                    original_count = len(self.df)
-                    self.df = self.df[self.df['class_label'].isin(classes_to_keep)].reset_index(drop=True)
-                    print(f"Filtered to {self.max_classes} classes: {original_count} -> {len(self.df)} samples")
-
-            # Always load activations for generation
-            if self.activations is None:
-                self.activations, self.metadata_df = self.load_activations_for_model("imagenet_real")
-
-            print(f"Loaded {len(self.df)} samples")
-        else:
-            print("No embeddings found. Will load activations for dynamic UMAP.")
-            self.df = pd.DataFrame()
-
-    def load_activations_for_model(self, model_type: str):
-        """Load raw activations for dynamic UMAP computation."""
-        activation_dir = self.data_dir / "activations" / model_type
-        metadata_path = self.data_dir / "metadata" / model_type / "dataset_info.json"
-
-        if not activation_dir.exists():
-            print(f"Warning: Activation dir not found: {activation_dir}")
-            print(f"  Expected structure: {self.data_dir}/activations/{model_type}/")
-            return None, None
-
-        if not metadata_path.exists():
-            print(f"Warning: No metadata found: {metadata_path}")
-            print(f"  Expected: {self.data_dir}/metadata/{model_type}/dataset_info.json")
-            return None, None
-
-        activations, metadata_df = load_dataset_activations(
-            activation_dir,
-            metadata_path
-        )
-        return activations, metadata_df
-
-    def get_image_base64(self, image_path: str, size: tuple = (256, 256)):
-        """Convert image to base64 for hover display."""
         try:
-            full_path = self.data_dir / image_path
-            img = Image.open(full_path)
-            img.thumbnail(size, Image.Resampling.LANCZOS)
-
-            # Convert to base64
-            buffer = BytesIO()
-            img.save(buffer, format="PNG")
-            img_str = base64.b64encode(buffer.getvalue()).decode()
-            return f"data:image/png;base64,{img_str}"
+            full_path = model_data.data_dir / image_path
+            return np.array(Image.open(full_path))
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
             return None
 
-    def get_composite_image_base64(self, main_path: str, inset_path: str, size: tuple = (150, 150), inset_ratio: float = 0.35):
-        """Create composite image with inset in upper-left corner."""
-        try:
-            full_main_path = self.data_dir / main_path
-            full_inset_path = self.data_dir / inset_path
+    @staticmethod
+    def create_composite_image(
+        main_img: np.ndarray,
+        inset_img: np.ndarray,
+        inset_ratio: float = 0.25,
+        margin: int = 2,
+        border_width: int = 0
+    ) -> np.ndarray:
+        """Create composite image with inset in upper-left corner.
 
-            # Load main image
-            main_img = Image.open(full_main_path)
-            main_img = main_img.resize(size, Image.Resampling.LANCZOS)
+        Args:
+            main_img: Main image (denoised output) as numpy array
+            inset_img: Inset image (noised input) as numpy array
+            inset_ratio: Size of inset relative to main image
+            margin: Pixel margin from corner
+            border_width: Width of black border around inset
 
-            # Load and resize inset image
-            inset_img = Image.open(full_inset_path)
-            inset_size = (int(size[0] * inset_ratio), int(size[1] * inset_ratio))
-            inset_img = inset_img.resize(inset_size, Image.Resampling.LANCZOS)
+        Returns:
+            Composite image as numpy array
+        """
+        from PIL import ImageDraw
 
-            # Paste inset in upper-left with small margin
-            margin = 4
-            main_img.paste(inset_img, (margin, margin))
+        main_pil = Image.fromarray(main_img)
+        inset_pil = Image.fromarray(inset_img)
 
-            # Convert to base64
-            buffer = BytesIO()
-            main_img.save(buffer, format="PNG")
-            img_str = base64.b64encode(buffer.getvalue()).decode()
-            return f"data:image/png;base64,{img_str}"
-        except Exception as e:
-            print(f"Error compositing images {main_path}, {inset_path}: {e}")
+        # Resize inset
+        main_size = main_pil.size
+        inset_size = (int(main_size[0] * inset_ratio), int(main_size[1] * inset_ratio))
+        inset_pil = inset_pil.resize(inset_size, Image.Resampling.LANCZOS)
+
+        # Paste inset in upper-left corner
+        inset_x, inset_y = margin, margin
+        main_pil.paste(inset_pil, (inset_x, inset_y))
+
+        # Draw black border around inset
+        if border_width > 0:
+            draw = ImageDraw.Draw(main_pil)
+            x0, y0 = inset_x - border_width, inset_y - border_width
+            x1, y1 = inset_x + inset_size[0], inset_y + inset_size[1]
+            for i in range(border_width):
+                draw.rectangle([x0 + i, y0 + i, x1 - i, y1 - i], outline="black")
+
+        return np.array(main_pil)
+
+    def load_adapter(self, model_name: str):
+        """Lazily load the generation adapter for a model.
+
+        Args:
+            model_name: Name of the model to load adapter for
+
+        Returns:
+            Loaded adapter or None if not found
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None:
             return None
 
-    def build_layout(self):
-        """Build Dash layout."""
-        self.app.layout = dbc.Container([
-            dbc.Row([
-                dbc.Col([
-                    html.H1("Diffusion Activation Visualizer", className="mb-4")
-                ])
-            ]),
+        # Return cached adapter if already loaded
+        if model_data.adapter is not None:
+            return model_data.adapter
 
-            dbc.Row([
-                # Left sidebar - hover preview + class filter
-                dbc.Col([
-                    # Model selector card (only show if multiple models)
-                    dbc.Card([
-                        dbc.CardHeader("Model"),
-                        dbc.CardBody([
-                            dcc.Dropdown(
-                                id="model-selector",
-                                options=[{"label": m, "value": m} for m in self.model_configs.keys()],
-                                value=self.current_model,
-                                clearable=False,
-                                className="mb-2"
-                            ),
-                            html.Div(id="model-status", className="text-muted small")
-                        ])
-                    ], className="mb-3", style={"display": "block" if len(self.model_configs) > 1 else "none"}),
+        if not model_data.checkpoint_path or not Path(model_data.checkpoint_path).exists():
+            print(f"Error: checkpoint not found at {model_data.checkpoint_path}")
+            return None
 
-                    # Status line
-                    html.Div(id="status-text", className="text-muted small mb-3"),
-
-                    # Hover preview card
-                    dbc.Card([
-                        dbc.CardHeader("Hover Preview"),
-                        dbc.CardBody([
-                            html.Div(id="hover-image"),
-                            html.Div(id="hover-details", className="mt-2")
-                        ])
-                    ], className="mb-3"),
-
-                    # Class filter card
-                    dbc.Card([
-                        dbc.CardHeader("Find Class"),
-                        dbc.CardBody([
-                            dcc.Dropdown(
-                                id="class-filter-dropdown",
-                                options=[],  # Populated dynamically
-                                placeholder="Select a class...",
-                                searchable=True,
-                                clearable=True,
-                                className="mb-2",
-                                style={"maxHeight": "300px"}
-                            ),
-                            dbc.Button(
-                                "Clear Highlight",
-                                id="clear-class-highlight-btn",
-                                color="secondary",
-                                size="sm",
-                                outline=True,
-                                className="w-100",
-                                disabled=True
-                            ),
-                            html.Div(id="class-filter-status", className="text-muted small mt-2")
-                        ])
-                    ])
-                ], width=3),
-
-                # Main visualization
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            dcc.Loading(
-                                id="loading-plot",
-                                children=[
-                                    dcc.Graph(
-                                        id="umap-scatter",
-                                        style={"height": "70vh"}
-                                    )
-                                ],
-                                type="default"
-                            )
-                        ])
-                    ])
-                ], width=6),
-
-                # Right sidebar - selected sample + neighbors
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader([
-                            html.Span("Selected Sample"),
-                            dbc.Button(
-                                "✕",
-                                id="clear-selection-btn",
-                                color="link",
-                                size="sm",
-                                className="float-end p-0",
-                                style={"fontSize": "20px", "lineHeight": "1", "display": "none"}
-                            )
-                        ]),
-                        dbc.CardBody([
-                            html.Div(id="selected-image"),
-                            html.Div(id="selected-details", className="mt-2"),
-                            html.Hr(),
-
-                            # Generation controls
-                            html.Label("Generation Settings", className="fw-bold"),
-                            dbc.Row([
-                                dbc.Col([
-                                    html.Label("Steps", className="small", id="steps-label"),
-                                    dbc.Tooltip(
-                                        "Number of denoising steps. 1=single-step, 4-10=multi-step for higher quality.",
-                                        target="steps-label", placement="top"
-                                    ),
-                                    dbc.Input(
-                                        id="num-steps-input",
-                                        type="number",
-                                        min=1,
-                                        max=50,
-                                        step=1,
-                                        value=self.num_steps,
-                                        size="sm"
-                                    ),
-                                ], width=6),
-                                dbc.Col([
-                                    html.Label("Mask Steps", className="small", id="mask-steps-label"),
-                                    dbc.Tooltip(
-                                        "Steps to apply activation mask. Default=all steps. Use 1 for first-step-only masking.",
-                                        target="mask-steps-label", placement="top"
-                                    ),
-                                    dbc.Input(
-                                        id="mask-steps-input",
-                                        type="number",
-                                        min=1,
-                                        max=50,
-                                        step=1,
-                                        value=self.mask_steps or self.num_steps,
-                                        size="sm"
-                                    ),
-                                ], width=6),
-                            ], className="mb-2"),
-                            dbc.Row([
-                                dbc.Col([
-                                    html.Label("Guidance", className="small", id="guidance-label"),
-                                    dbc.Tooltip(
-                                        "CFG scale. 0=unconditional, 1=class-conditional, >1=amplified, <0=negative guidance.",
-                                        target="guidance-label", placement="top"
-                                    ),
-                                    dbc.Input(
-                                        id="guidance-scale-input",
-                                        type="number",
-                                        min=-10,
-                                        max=20,
-                                        step=0.1,
-                                        value=self.guidance_scale,
-                                        size="sm"
-                                    ),
-                                ], width=4),
-                                dbc.Col([
-                                    html.Label("σ max", className="small", id="sigma-max-label"),
-                                    dbc.Tooltip(
-                                        "Maximum noise level (start of denoising). Higher=more noise.",
-                                        target="sigma-max-label", placement="top"
-                                    ),
-                                    dbc.Input(
-                                        id="sigma-max-input",
-                                        type="number",
-                                        min=0.01,
-                                        max=200,
-                                        step="any",
-                                        value=self.sigma_max,
-                                        size="sm"
-                                    ),
-                                ], width=4),
-                                dbc.Col([
-                                    html.Label("σ min", className="small", id="sigma-min-label"),
-                                    dbc.Tooltip(
-                                        "Minimum noise level (end of denoising). Lower=cleaner output.",
-                                        target="sigma-min-label", placement="top"
-                                    ),
-                                    dbc.Input(
-                                        id="sigma-min-input",
-                                        type="number",
-                                        min=0.001,
-                                        max=80,
-                                        step="any",
-                                        value=self.sigma_min,
-                                        size="sm"
-                                    ),
-                                ], width=4),
-                            ], className="mb-2"),
-
-                            html.Hr(),
-                            html.Label("Generate from Neighbors"),
-                            dbc.Button(
-                                "Generate Image",
-                                id="generate-from-neighbors-btn",
-                                color="success",
-                                size="sm",
-                                className="w-100 mb-2",
-                                disabled=True
-                            ),
-                            html.Div(id="generation-status", className="text-muted small mb-2"),
-                            dbc.Button(
-                                "Clear Generated",
-                                id="clear-generated-btn",
-                                color="secondary",
-                                size="sm",
-                                outline=True,
-                                className="w-100 mb-2",
-                            ),
-
-                            html.Hr(),
-                            html.Label("Manual Neighbor Selection"),
-                            html.Div(
-                                "Click on other points to add/remove neighbors",
-                                className="text-muted small mb-2"
-                            ),
-                            html.Div(id="neighbor-list", className="small", style={"maxHeight": "400px", "overflowY": "auto"})
-                        ])
-                    ])
-                ], width=3)
-            ]),
-
-            # Hidden stores for state
-            dcc.Store(id="selected-point-store", data=None),
-            dcc.Store(id="neighbor-indices-store", data=None),
-            dcc.Store(id="manual-neighbors-store", data=[]),
-            dcc.Store(id="highlighted-class-store", data=None),
-            dcc.Store(id="model-switch-trigger", data=None),
-            dcc.Store(id="current-model-store", data=self.current_model)
-        ], fluid=True, className="p-4")
-
-    def fit_nearest_neighbors(self):
-        """Fit KNN model on UMAP coordinates (2D) for intuitive neighbor selection."""
-        if self.df.empty or 'umap_x' not in self.df.columns:
-            print("[KNN] No UMAP coordinates loaded, skipping KNN fit")
-            return
-
-        # Fit on 2D UMAP coordinates for intuitive visual neighbor selection
-        umap_coords = self.df[['umap_x', 'umap_y']].values
-        print(f"[KNN] Fitting on UMAP coordinates: {umap_coords.shape}")
-        self.nn_model = NearestNeighbors(n_neighbors=21, metric='euclidean')
-        self.nn_model.fit(umap_coords)
-
-    def register_callbacks(self):
-        """Register Dash callbacks."""
-
-        # Model switching callback - handles switch, resets stores, and updates figure
-        @self.app.callback(
-            Output("umap-scatter", "figure", allow_duplicate=True),
-            Output("status-text", "children", allow_duplicate=True),
-            Output("model-status", "children"),
-            Output("selected-point-store", "data", allow_duplicate=True),
-            Output("manual-neighbors-store", "data", allow_duplicate=True),
-            Output("neighbor-indices-store", "data", allow_duplicate=True),
-            Output("current-model-store", "data", allow_duplicate=True),
-            Output("highlighted-class-store", "data", allow_duplicate=True),
-            Output("class-filter-dropdown", "value", allow_duplicate=True),
-            Output("clear-class-highlight-btn", "disabled", allow_duplicate=True),
-            Output("selected-image", "children", allow_duplicate=True),
-            Output("selected-details", "children", allow_duplicate=True),
-            Output("clear-selection-btn", "style", allow_duplicate=True),
-            Input("model-selector", "value"),
-            State("current-model-store", "data"),
-            prevent_initial_call=True
+        print(f"Loading adapter: {model_data.adapter_name} from {model_data.checkpoint_path}")
+        AdapterClass = get_adapter(model_data.adapter_name)
+        model_data.adapter = AdapterClass.from_checkpoint(
+            model_data.checkpoint_path,
+            device=self.device,
+            label_dropout=self.label_dropout,
         )
-        def handle_model_switch(new_model, current_model):
-            """Handle model switching - updates figure, resets all state."""
-            if new_model != current_model and new_model in self.model_configs:
-                success = self.switch_model(new_model)
-                if success:
-                    # Build new figure from updated self.df
-                    if self.df.empty:
-                        fig = go.Figure()
-                    else:
-                        color_col = 'class_label' if 'class_label' in self.df.columns else None
-                        hover_data = ['class_label'] if 'class_label' in self.df.columns else []
-                        fig = px.scatter(
-                            self.df,
-                            x='umap_x',
-                            y='umap_y',
-                            color=color_col,
-                            hover_data=hover_data + ['sample_id'],
-                            title="Activation UMAP",
-                            labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
-                        )
-                        fig.update_traces(marker=dict(size=5, opacity=0.7))
-                        fig.update_layout(hovermode='closest', template='plotly_white')
+        # Cache layer shapes
+        model_data.layer_shapes = model_data.adapter.get_layer_shapes()
+        print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
+        return model_data.adapter
 
-                    status = f"Showing {len(self.df)} samples ({new_model})"
-                    clear_btn_style = {"fontSize": "20px", "lineHeight": "1", "display": "none"}
-                    return (fig, status, f"Switched to {new_model}",
-                            None, [], None, new_model,  # selection stores
-                            None, None, True,  # class filter reset
-                            "Click a point to select",  # selected-image
-                            html.Div("No sample selected", className="text-muted small"),  # selected-details
-                            clear_btn_style)  # hide clear button
-                no_update = dash.no_update
-                return (no_update,) * 13
-            return (dash.no_update,) * 13
+    def prepare_activation_dict(
+        self, model_name: str, neighbor_indices: List[int]
+    ) -> Optional[Dict[str, "torch.Tensor"]]:
+        """Prepare activation dict for masked generation.
 
-        @self.app.callback(
-            Output("umap-scatter", "figure"),
-            Output("status-text", "children"),
-            Input("status-text", "id"),  # Dummy input to trigger on load
-            prevent_initial_call=False
-        )
-        def update_plot(_):
-            """Display pre-loaded UMAP embeddings."""
-            # Fit NN model if not already done
-            if self.nn_model is None and not self.df.empty:
-                self.fit_nearest_neighbors()
+        Args:
+            model_name: Name of the model to use
+            neighbor_indices: List of indices to average activations from
 
-            # Create plot
-            if self.df.empty:
-                return go.Figure(), "No data loaded"
+        Returns:
+            Dict mapping layer_name -> (1, C, H, W) tensor, or None if error
+        """
+        import torch
 
-            # Determine color column
-            if 'class_label' in self.df.columns:
-                color_col = 'class_label'
-                hover_data = ['class_label']
-            else:
-                color_col = None
-                hover_data = []
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.activations is None:
+            return None
+        if len(neighbor_indices) == 0:
+            return None
 
-            fig = px.scatter(
-                self.df,
-                x='umap_x',
-                y='umap_y',
-                color=color_col,
-                hover_data=hover_data + ['sample_id'],
-                title="Activation UMAP",
-                labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
+        # Get layers from UMAP params (must match order used during embedding)
+        layers = sorted(model_data.umap_params.get("layers", ["encoder_bottleneck", "midblock"]))
+        if not model_data.layer_shapes:
+            if model_data.adapter is None:
+                self.load_adapter(model_name)
+            if model_data.adapter is None:
+                return None
+
+        # Average neighbor activations in high-D space
+        neighbor_acts = model_data.activations[neighbor_indices]  # (N, D)
+        center_activation = np.mean(neighbor_acts, axis=0, keepdims=True)  # (1, D)
+
+        # Split into per-layer activations (MUST be sorted order!)
+        activation_dict = {}
+        offset = 0
+        for layer_name in layers:
+            if layer_name not in model_data.layer_shapes:
+                print(f"Warning: layer {layer_name} not in adapter shapes")
+                continue
+            shape = model_data.layer_shapes[layer_name]  # (C, H, W)
+            size = int(np.prod(shape))
+            layer_act_flat = center_activation[0, offset : offset + size]
+            layer_act = unflatten_activation(
+                torch.from_numpy(layer_act_flat).float(), shape
             )
+            activation_dict[layer_name] = layer_act  # (1, C, H, W)
+            offset += size
 
-            fig.update_traces(marker=dict(size=5, opacity=0.7))
-            fig.update_layout(
-                hovermode='closest',
-                template='plotly_white'
+        return activation_dict
+
+    def get_plot_dataframe(
+        self,
+        model_name: str,
+        selected_idx: Optional[int] = None,
+        manual_neighbors: Optional[List[int]] = None,
+        knn_neighbors: Optional[List[int]] = None,
+        highlighted_class: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """Get DataFrame for ScatterPlot with highlight column.
+
+        Args:
+            model_name: Name of the model to use
+            selected_idx: Index of selected point
+            manual_neighbors: List of manually selected neighbor indices
+            knn_neighbors: List of KNN neighbor indices
+            highlighted_class: Class ID to highlight
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
+            return pd.DataFrame(columns=["umap_x", "umap_y", "highlight", "sample_id"])
+
+        df = model_data.df
+
+        # Create copy with highlight column
+        plot_df = df[["umap_x", "umap_y", "sample_id"]].copy()
+        if "class_label" in df.columns:
+            plot_df["class_label"] = df["class_label"].astype(str)
+
+        # Add highlight column for visual distinction
+        plot_df["highlight"] = "normal"
+
+        manual_neighbors = manual_neighbors or []
+        knn_neighbors = knn_neighbors or []
+
+        # Mark class highlights
+        if highlighted_class is not None and "class_label" in df.columns:
+            class_mask = df["class_label"] == highlighted_class
+            plot_df.loc[class_mask, "highlight"] = "class_highlight"
+
+        # Mark neighbors
+        for idx in knn_neighbors:
+            if idx < len(plot_df):
+                plot_df.loc[idx, "highlight"] = "knn_neighbor"
+
+        for idx in manual_neighbors:
+            if idx < len(plot_df):
+                plot_df.loc[idx, "highlight"] = "manual_neighbor"
+
+        # Mark selected (highest priority)
+        if selected_idx is not None and selected_idx < len(plot_df):
+            plot_df.loc[selected_idx, "highlight"] = "selected"
+
+        return plot_df
+
+    def get_class_options(self, model_name: str) -> List[Tuple[str, int]]:
+        """Get class options for dropdown.
+
+        Args:
+            model_name: Name of the model to use
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
+            return []
+        if "class_label" not in model_data.df.columns:
+            return []
+
+        unique_classes = model_data.df["class_label"].dropna().unique()
+        unique_classes = sorted([int(c) for c in unique_classes])
+
+        return [(f"{c}: {self.get_class_name(c)}", c) for c in unique_classes]
+
+    def get_color_map(self, model_name: str) -> dict:
+        """Generate color map for class labels using plasma colormap.
+
+        Args:
+            model_name: Name of the model to use
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
+            return {}
+        if "class_label" not in model_data.df.columns:
+            return {}
+
+        import matplotlib.pyplot as plt
+        unique_classes = model_data.df["class_label"].dropna().unique()
+        unique_classes = sorted([int(c) for c in unique_classes])
+
+        if not unique_classes:
+            return {}
+
+        cmap = plt.cm.plasma
+        color_map = {}
+        for i, cls in enumerate(unique_classes):
+            rgba = cmap(i / max(len(unique_classes) - 1, 1))
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
             )
+            color_map[str(cls)] = hex_color
+        return color_map
 
-            model_info = f" ({self.current_model})" if self.current_model else ""
-            status = f"Showing {len(self.df)} samples{model_info}"
-            return fig, status
+    def create_umap_figure(
+        self,
+        model_name: str,
+        selected_idx: Optional[int] = None,
+        manual_neighbors: Optional[List[int]] = None,
+        knn_neighbors: Optional[List[int]] = None,
+        highlighted_class: Optional[int] = None,
+        trajectory: Optional[List[Tuple[float, float, float]]] = None,
+    ) -> go.Figure:
+        """Create Plotly figure for UMAP scatter plot.
 
-        @self.app.callback(
-            Output("hover-image", "children"),
-            Output("hover-details", "children"),
-            Input("umap-scatter", "hoverData")
-        )
-        def display_hover(hoverData):
-            """Display image and info on hover."""
-            if not hoverData or self.df.empty:
-                return "Hover over a point", html.Div("No point hovered", className="text-muted small")
+        Args:
+            model_name: Name of the model to use
+            selected_idx: Index of currently selected point
+            manual_neighbors: List of manually selected neighbor indices
+            knn_neighbors: List of KNN neighbor indices
+            highlighted_class: Class ID to highlight
+            trajectory: List of (x, y, sigma) tuples for denoising trajectory
 
-            point_data = hoverData['points'][0]
-            curve_number = point_data.get('curveNumber', 0)
-
-            # If hovering over non-main trace with customdata, check type to distinguish
-            # Trajectory points: customdata[0] is string (sample_id)
-            # Generated overlay: customdata[0] is int (df index)
-            if curve_number > 0 and 'customdata' in point_data:
-                first_elem = point_data['customdata'][0]
-
-                # Trajectory point: customdata = [sample_id_str, step_str, img_path, noised_path]
-                if isinstance(first_elem, str):
-                    customdata = point_data['customdata']
-                    sample_id, step, img_path = customdata[0], customdata[1], customdata[2]
-                    # noised_path may not exist in older data (unused but kept for future)
-                    _noised_path = customdata[3] if len(customdata) > 3 else None  # noqa: F841
-
-                    # Look up full trajectory for this sample
-                    full_trajectory = None
-                    if hasattr(self, 'generated_trajectories'):
-                        for traj in self.generated_trajectories:
-                            if traj['sample_id'] == sample_id:
-                                full_trajectory = traj.get('trajectory', [])
-                                break
-
-                    # Build grid of all trajectory images with hovered one highlighted
-                    if full_trajectory:
-                        grid_items = []
-                        for traj_point in full_trajectory:
-                            traj_step_num = traj_point['step']
-                            traj_img_path = traj_point.get('image_path')
-                            traj_noised_path = traj_point.get('noised_path')
-                            traj_sigma = traj_point.get('sigma')
-                            # Compare step numbers (step string may include sigma suffix like "step 0, σ=80.0")
-                            step_prefix = f"step {traj_step_num}"
-                            is_hovered = (step == step_prefix or step.startswith(step_prefix + ","))
-
-                            # Format label with sigma if available
-                            if traj_sigma is not None:
-                                step_label = f"Step {traj_point['step']}, σ={traj_sigma:.3f}"
-                            else:
-                                step_label = f"Step {traj_point['step']}"
-
-                            if traj_img_path:
-                                # Use composite image if noised input available
-                                if traj_noised_path:
-                                    img_b64 = self.get_composite_image_base64(traj_img_path, traj_noised_path, size=(150, 150))
-                                else:
-                                    img_b64 = self.get_image_base64(traj_img_path, size=(150, 150))
-                                border_style = "3px solid red" if is_hovered else "1px solid #ccc"
-                                opacity = "1" if is_hovered else "0.7"
-                                grid_items.append(html.Div([
-                                    html.Img(
-                                        src=img_b64,
-                                        style={"width": "100%", "border": border_style, "borderRadius": "4px", "opacity": opacity}
-                                    ) if img_b64 else html.Div("?", style={"width": "60px", "height": "60px"}),
-                                    html.Div(step_label, className="text-center small",
-                                             style={"fontWeight": "bold" if is_hovered else "normal"})
-                                ], style={"width": "calc(50% - 4px)", "margin": "2px", "textAlign": "center"}))
-
-                        img_element = html.Div(grid_items, style={
-                            "display": "flex", "flexWrap": "wrap", "justifyContent": "center"
-                        })
-                    elif img_path:
-                        # Fallback to single image if trajectory not found
-                        img_b64 = self.get_image_base64(img_path, size=(200, 200))
-                        img_element = html.Img(
-                            src=img_b64,
-                            style={"width": "100%", "border": "2px solid red", "borderRadius": "4px"}
-                        ) if img_b64 else html.Div("Image not found")
-                    else:
-                        img_element = html.Div("No image (intended point)", className="text-muted")
-
-                    details = [
-                        html.Div([html.Strong("Sample: "), html.Span(sample_id, className="small")]),
-                        html.Div([html.Strong("Hovered: "), html.Span(step, className="small")]),
-                        html.Div([html.Strong("Coords: "), html.Span(f"({point_data['x']:.3f}, {point_data['y']:.3f})", className="small")])
-                    ]
-                    return img_element, html.Div(details, className="small")
-
-                # Generated overlay: customdata = [int_df_index]
-                point_idx = first_elem
-            else:
-                # Main scatter plot (trace 0), use pointIndex directly
-                point_idx = point_data['pointIndex']
-
-            sample = self.df.iloc[point_idx]
-
-            # Get image thumbnail for hover
-            img_b64 = self.get_image_base64(sample['image_path'], size=(200, 200))
-            img_element = html.Img(
-                src=img_b64,
-                style={"width": "100%", "border": "1px solid #ddd", "borderRadius": "4px"}
-            ) if img_b64 else html.Div("Image not found")
-
-            # Compact details for hover
-            details = []
-            details.append(html.Div([
-                html.Strong("ID: "),
-                html.Span(sample['sample_id'], className="small")
-            ]))
-
-            class_name = self.get_sample_class_name(sample)
-            if class_name is not None:
-                class_id = int(sample['class_label'])
-                details.append(html.Div([
-                    html.Strong("Class: "),
-                    html.Span(f"{class_id}: {class_name}", className="small")
-                ]))
-
-            details.append(html.Div([
-                html.Strong("Coords: "),
-                html.Span(f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})", className="small")
-            ]))
-
-            if 'conditioning_sigma' in sample and pd.notna(sample['conditioning_sigma']):
-                details.append(html.Div([
-                    html.Strong("Sigma: "),
-                    html.Span(f"{sample['conditioning_sigma']}", className="small")
-                ]))
-
-            return img_element, html.Div(details)
-
-        @self.app.callback(
-            Output("selected-image", "children"),
-            Output("selected-details", "children"),
-            Output("generate-from-neighbors-btn", "disabled"),
-            Output("selected-point-store", "data"),
-            Output("manual-neighbors-store", "data"),
-            Output("clear-selection-btn", "style"),
-            Output("neighbor-indices-store", "data", allow_duplicate=True),
-            Input("umap-scatter", "clickData"),
-            Input("clear-selection-btn", "n_clicks"),
-            State("selected-point-store", "data"),
-            State("manual-neighbors-store", "data"),
-            State("neighbor-indices-store", "data"),
-            prevent_initial_call=True
-        )
-        def display_selected(clickData, clear_clicks, current_selected, manual_neighbors, knn_neighbors):
-            """Handle point selection and neighbor toggling."""
-            ctx = callback_context
-            if not ctx.triggered:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-            trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
-
-            # Handle clear button
-            if trigger_id == "clear-selection-btn":
-                return (
-                    "Click a point to select",
-                    html.Div("No point selected", className="text-muted small"),
-                    True,  # Disable generate button
-                    None,  # Clear selected point
-                    [],    # Clear manual neighbors
-                    {"fontSize": "20px", "lineHeight": "1", "display": "none"},  # Hide clear button
-                    None   # Clear KNN neighbors
-                )
-
-            # Handle click on plot
-            if not clickData or self.df.empty:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-            point_data = clickData['points'][0]
-            curve_number = point_data.get('curveNumber', 0)
-
-            # If clicked on non-main trace with customdata, check type
-            if curve_number > 0 and 'customdata' in point_data:
-                first_elem = point_data['customdata'][0]
-                # Trajectory point (string customdata) - ignore clicks
-                if isinstance(first_elem, str):
-                    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-                # Generated overlay (int customdata)
-                point_idx = first_elem
-            else:
-                point_idx = point_data['pointIndex']
-
-            # Ensure lists are initialized
-            if manual_neighbors is None:
-                manual_neighbors = []
-            if knn_neighbors is None:
-                knn_neighbors = []
-
-            # If no point currently selected, select this one
-            if current_selected is None:
-                sample = self.df.iloc[point_idx]
-                img_b64 = self.get_image_base64(sample['image_path'])
-                img_element = html.Img(
-                    src=img_b64,
-                    style={"width": "100%", "border": "2px solid #0d6efd", "borderRadius": "4px"}
-                ) if img_b64 else html.Div("Image not found")
-
-                details = []
-                details.append(html.P([html.Strong("Sample ID: "), sample['sample_id']]))
-                class_name = self.get_sample_class_name(sample)
-                if class_name is not None:
-                    class_id = int(sample['class_label'])
-                    details.append(html.P([html.Strong("Class: "), f"{class_id}: {class_name}"]))
-                if 'conditioning_sigma' in sample and pd.notna(sample['conditioning_sigma']):
-                    details.append(html.P([html.Strong("Sigma: "), f"{sample['conditioning_sigma']}"]))
-                details.append(html.P([
-                    html.Strong("UMAP Coords: "),
-                    f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
-                ]))
-                details.append(html.P(
-                    "Click points to add or remove neighbors",
-                    className="text-info small"
-                ))
-
-                # Enable generate button only if we have checkpoint
-                # (umap_reducer is optional - only used for diagnostic logging)
-                generate_enabled = self.checkpoint_path is not None
-
-                return (
-                    img_element,
-                    html.Div(details),
-                    not generate_enabled,  # Enable generate if checkpoint available
-                    point_idx,
-                    [],     # Reset manual neighbors
-                    {"fontSize": "20px", "lineHeight": "1", "display": "inline"},  # Show clear button
-                    None    # Clear KNN neighbors
-                )
-
-            # If clicking the same point, do nothing
-            if point_idx == current_selected:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-            # Toggle neighbor: check if in manual or KNN list
-            # Priority: if in manual list, remove from manual; if in KNN list, move to manual (for removal); if in neither, add to manual
-            if point_idx in manual_neighbors:
-                # Remove from manual list
-                manual_neighbors.remove(point_idx)
-                new_knn = knn_neighbors  # Keep KNN unchanged
-            elif point_idx in knn_neighbors:
-                # If clicking a KNN neighbor, remove it from KNN list and add to manual remove list
-                # This effectively removes it since we filter KNN against manual in display
-                new_knn = [idx for idx in knn_neighbors if idx != point_idx]
-                manual_neighbors = manual_neighbors  # Keep manual unchanged
-            else:
-                # Add to manual list
-                manual_neighbors.append(point_idx)
-                new_knn = knn_neighbors  # Keep KNN unchanged
-
-            # Keep the current display but return updated neighbor lists
-            return (
-                dash.no_update,
-                dash.no_update,
-                dash.no_update,
-                dash.no_update,
-                manual_neighbors,
-                dash.no_update,
-                new_knn
-            )
-
-        @self.app.callback(
-            Output("selected-image", "children", allow_duplicate=True),
-            Output("selected-details", "children", allow_duplicate=True),
-            Input("selected-point-store", "data"),
-            prevent_initial_call=True
-        )
-        def update_selection_display(selected_idx):
-            """Update selection display when selected point changes (e.g., after generation)."""
-            if selected_idx is None or self.df.empty:
-                return dash.no_update, dash.no_update
-
-            # Get sample info
-            sample = self.df.iloc[selected_idx]
-            img_b64 = self.get_image_base64(sample['image_path'])
-            img_element = html.Img(
-                src=img_b64,
-                style={"width": "100%", "border": "2px solid #0d6efd", "borderRadius": "4px"}
-            ) if img_b64 else html.Div("Image not found")
-
-            details = []
-            details.append(html.P([html.Strong("Sample ID: "), sample['sample_id']]))
-            class_name = self.get_sample_class_name(sample)
-            if class_name is not None:
-                class_id = int(sample['class_label'])
-                details.append(html.P([html.Strong("Class: "), f"{class_id}: {class_name}"]))
-            if 'conditioning_sigma' in sample and pd.notna(sample['conditioning_sigma']):
-                details.append(html.P([html.Strong("Sigma: "), f"{sample['conditioning_sigma']}"]))
-            details.append(html.P([
-                html.Strong("UMAP Coords: "),
-                f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
-            ]))
-
-            # Check if this is a generated sample
-            is_generated_col = self.df.get('is_generated', pd.Series([False] * len(self.df)))
-            if selected_idx < len(is_generated_col) and is_generated_col.iloc[selected_idx]:
-                details.append(html.P(
-                    "✓ Generated from neighbors",
-                    className="text-success small font-weight-bold"
-                ))
-            else:
-                details.append(html.P(
-                    "Click points to add or remove neighbors",
-                    className="text-info small"
-                ))
-
-            return img_element, html.Div(details)
-
-        @self.app.callback(
-            Output("neighbor-list", "children"),
-            Input("manual-neighbors-store", "data"),
-            Input("neighbor-indices-store", "data"),
-            State("selected-point-store", "data"),
-            prevent_initial_call=False
-        )
-        def display_neighbor_list(manual_neighbors, knn_neighbors, selected_idx):
-            """Display combined neighbor list with remove buttons for manual neighbors."""
-            if self.df.empty:
-                return html.Div("No data loaded", className="text-muted")
-
-            if not manual_neighbors and not knn_neighbors:
-                return html.Div("No neighbors selected", className="text-muted small")
-
-            # Ensure lists are not None
-            manual_neighbors = manual_neighbors or []
-            knn_neighbors = knn_neighbors or []
-
-            # Filter out any indices that are now out of bounds (e.g., after clearing generated)
-            max_idx = len(self.df) - 1
-            manual_neighbors = [idx for idx in manual_neighbors if idx <= max_idx]
-            knn_neighbors = [idx for idx in knn_neighbors if idx <= max_idx]
-
-            # Build combined list (KNN first, then manual additions at bottom)
-            all_neighbors = []
-            # Add KNN neighbors that aren't in manual list
-            for idx in knn_neighbors:
-                if idx not in manual_neighbors:
-                    all_neighbors.append(idx)
-            # Add manual neighbors at the end (most recently added at bottom)
-            all_neighbors.extend(manual_neighbors)
-
-            if not all_neighbors:
-                return html.Div("No neighbors selected", className="text-muted small")
-
-            # Build neighbor cards
-            neighbor_items = []
-            for i, idx in enumerate(all_neighbors):
-                neighbor_sample = self.df.iloc[idx]
-                is_manual = idx in manual_neighbors
-
-                # Get image thumbnail
-                img_b64 = self.get_image_base64(neighbor_sample['image_path'], size=(64, 64))
-
-                # Calculate distance if selected point exists and is valid
-                dist_text = ""
-                if selected_idx is not None and selected_idx <= max_idx:
-                    selected_coords = self.df.iloc[selected_idx][['umap_x', 'umap_y']].values
-                    neighbor_coords = self.df.iloc[idx][['umap_x', 'umap_y']].values
-                    dist = np.linalg.norm(selected_coords - neighbor_coords)
-                    dist_text = f"(dist: {dist:.2f})"
-
-                # Build neighbor card
-                neighbor_card = dbc.Card([
-                    dbc.CardBody([
-                        dbc.Row([
-                            dbc.Col([
-                                html.Img(
-                                    src=img_b64,
-                                    style={"width": "64px", "height": "64px"}
-                                ) if img_b64 else html.Div("No img", style={"width": "64px"})
-                            ], width=4),
-                            dbc.Col([
-                                html.Div([
-                                    html.Strong(f"#{i+1} "),
-                                    html.Span("✓ " if is_manual else "", className="text-success"),
-                                    html.Span(dist_text, className="text-muted small"),
-                                    html.Br(),
-                                    html.Span(
-                                        f"{int(neighbor_sample['class_label'])}: {self.get_sample_class_name(neighbor_sample)}",
-                                        className="small"
-                                    ) if self.get_sample_class_name(neighbor_sample) is not None else None,
-                                    html.Br() if 'conditioning_sigma' in neighbor_sample and pd.notna(neighbor_sample['conditioning_sigma']) else None,
-                                    html.Span(
-                                        f"σ={neighbor_sample['conditioning_sigma']}",
-                                        className="small text-muted"
-                                    ) if 'conditioning_sigma' in neighbor_sample and pd.notna(neighbor_sample['conditioning_sigma']) else None,
-                                ])
-                            ], width=8)
-                        ])
-                    ], className="p-2")
-                ], className="mb-2", style={"border": "2px solid green" if is_manual else "1px solid #dee2e6"})
-
-                neighbor_items.append(neighbor_card)
-
-            return html.Div(neighbor_items)
-
-        @self.app.callback(
-            Output("umap-scatter", "figure", allow_duplicate=True),
-            Input("selected-point-store", "data"),
-            Input("manual-neighbors-store", "data"),
-            Input("neighbor-indices-store", "data"),
-            Input("highlighted-class-store", "data"),
-            State("umap-scatter", "figure"),
-            prevent_initial_call=True
-        )
-        def highlight_neighbors(selected_idx, manual_neighbors, neighbor_indices, highlighted_class, current_figure):
-            """Highlight selected point, neighbors, and class filter on plot."""
-            if current_figure is None:
-                return current_figure
-
-            fig = go.Figure(current_figure)
-
-            # Remove any existing highlight traces but keep main scatter + generated overlay + trajectories
-            # Trace 0 = main scatter, keep 'Generated', 'Trajectory', 'Intended' traces
-            # Remove highlight traces (Selected, KNN Neighbors, Manual Neighbors, Class Highlight)
-            base_traces = []
-            for i, trace in enumerate(fig.data):
-                trace_name = trace.name or ''
-                # Keep main scatter, generated overlay, and trajectory traces
-                if i == 0 or trace_name == 'Generated' or 'Trajectory' in trace_name or trace_name == 'Intended':
-                    base_traces.append(trace)
-            fig.data = base_traces
-
-            # Add class highlight X markers if a class is selected
-            self.add_class_highlight_trace(fig, highlighted_class)
-
-            # If no point selected or index out of bounds, return with class highlights only
-            if selected_idx is None or selected_idx >= len(self.df):
-                return fig
-
-            # Highlight selected point (green if generated, blue if original)
-            selected_coords = self.df.iloc[[selected_idx]][['umap_x', 'umap_y']]
-            is_generated_col = self.df.get('is_generated', pd.Series([False] * len(self.df)))
-            is_selected_generated = is_generated_col.iloc[selected_idx] if selected_idx < len(is_generated_col) else False
-
-            selection_color = '#00FF00' if is_selected_generated else 'blue'
-            selection_name = 'Selected (Generated)' if is_selected_generated else 'Selected Point'
-
-            fig.add_trace(go.Scatter(
-                x=selected_coords['umap_x'],
-                y=selected_coords['umap_y'],
-                mode='markers',
-                marker=dict(
-                    size=12,
-                    color=selection_color,
-                    symbol='circle-open',
-                    line=dict(width=3, color=selection_color)
-                ),
-                name=selection_name,
-                hoverinfo='skip',
-                showlegend=True
-            ))
-
-            # Add KNN neighbors in red with thin line if any
-            if neighbor_indices:
-                knn_coords = self.df.iloc[neighbor_indices][['umap_x', 'umap_y']]
-
-                fig.add_trace(go.Scatter(
-                    x=knn_coords['umap_x'],
-                    y=knn_coords['umap_y'],
-                    mode='markers',
-                    marker=dict(
-                        size=10,
-                        color='red',
-                        symbol='circle-open',
-                        line=dict(width=1, color='red')
-                    ),
-                    name='KNN Neighbors',
-                    hoverinfo='skip',
-                    showlegend=True
-                ))
-
-            # Add manual neighbors in red with thicker line if any
-            if manual_neighbors:
-                manual_coords = self.df.iloc[manual_neighbors][['umap_x', 'umap_y']]
-
-                fig.add_trace(go.Scatter(
-                    x=manual_coords['umap_x'],
-                    y=manual_coords['umap_y'],
-                    mode='markers',
-                    marker=dict(
-                        size=10,
-                        color='red',
-                        symbol='circle-open',
-                        line=dict(width=2, color='red')
-                    ),
-                    name='Manual Neighbors',
-                    hoverinfo='skip',
-                    showlegend=True
-                ))
-
+        Returns:
+            Plotly Figure object
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
+            fig = go.Figure()
+            fig.update_layout(title="No data loaded")
             return fig
 
+        df = model_data.df
+        manual_neighbors = manual_neighbors or []
+        knn_neighbors = knn_neighbors or []
 
-        @self.app.callback(
-            Output("class-filter-dropdown", "options"),
-            Input("status-text", "children"),  # Triggered when plot updates
-            prevent_initial_call=False
+        # Get color map for classes
+        color_map = self.get_color_map(model_name)
+
+        # Build customdata with df indices for click handling
+        customdata = list(range(len(df)))
+
+        # Determine point colors based on class
+        if "class_label" in df.columns:
+            colors = [color_map.get(str(int(c)), "#888888") for c in df["class_label"]]
+        else:
+            colors = ["#1f77b4"] * len(df)
+
+        # Create main scatter trace
+        fig = go.Figure()
+
+        # Add main data points (use scattergl for better performance)
+        fig.add_trace(go.Scattergl(
+            x=df["umap_x"].tolist(),
+            y=df["umap_y"].tolist(),
+            mode="markers",
+            marker=dict(
+                size=6,
+                color=colors,
+                opacity=0.7,
+            ),
+            customdata=customdata,
+            hovertemplate="<b>%{customdata}</b><br>x: %{x:.2f}<br>y: %{y:.2f}<extra></extra>",
+            name="samples",
+        ))
+
+        # Highlight class if specified
+        if highlighted_class is not None and "class_label" in df.columns:
+            class_mask = df["class_label"] == highlighted_class
+            class_indices = df[class_mask].index.tolist()
+            if class_indices:
+                fig.add_trace(go.Scattergl(
+                    x=df.loc[class_mask, "umap_x"].tolist(),
+                    y=df.loc[class_mask, "umap_y"].tolist(),
+                    mode="markers",
+                    marker=dict(size=10, color="yellow", line=dict(width=1, color="black")),
+                    customdata=[int(i) for i in class_indices],
+                    hoverinfo="skip",
+                    name="class_highlight",
+                    showlegend=False,
+                ))
+
+        # Highlight KNN neighbors (green ring)
+        if knn_neighbors:
+            knn_df = df.iloc[knn_neighbors]
+            fig.add_trace(go.Scattergl(
+                x=knn_df["umap_x"].tolist(),
+                y=knn_df["umap_y"].tolist(),
+                mode="markers",
+                marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=2, color="lime")),
+                customdata=knn_neighbors,
+                hoverinfo="skip",
+                name="knn_neighbors",
+                showlegend=False,
+            ))
+
+        # Highlight manual neighbors (blue ring)
+        if manual_neighbors:
+            man_df = df.iloc[manual_neighbors]
+            fig.add_trace(go.Scattergl(
+                x=man_df["umap_x"].tolist(),
+                y=man_df["umap_y"].tolist(),
+                mode="markers",
+                marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=2, color="cyan")),
+                customdata=manual_neighbors,
+                hoverinfo="skip",
+                name="manual_neighbors",
+                showlegend=False,
+            ))
+
+        # Highlight selected point (red ring, highest priority)
+        if selected_idx is not None and selected_idx < len(df):
+            sel_row = df.iloc[selected_idx]
+            fig.add_trace(go.Scattergl(
+                x=[float(sel_row["umap_x"])],
+                y=[float(sel_row["umap_y"])],
+                mode="markers",
+                marker=dict(size=16, color="rgba(0,0,0,0)", line=dict(width=3, color="red")),
+                customdata=[selected_idx],
+                hoverinfo="skip",
+                name="selected",
+                showlegend=False,
+            ))
+
+        # Denoising trajectories (supports multiple)
+        trajectories = trajectory if trajectory else []
+        # Handle both old format (single trajectory) and new format (list of trajectories)
+        if trajectories and isinstance(trajectories[0], tuple):
+            trajectories = [trajectories]  # Wrap single trajectory in list
+
+        for traj_idx, traj in enumerate(trajectories):
+            if len(traj) < 2:
+                continue
+
+            traj_x = [t[0] for t in traj]
+            traj_y = [t[1] for t in traj]
+            traj_sigma = [t[2] for t in traj]
+
+            # Line trace for trajectory path
+            fig.add_trace(go.Scatter(
+                x=traj_x,
+                y=traj_y,
+                mode="lines",
+                line=dict(color="lime", width=3, dash="dash"),
+                hoverinfo="skip",
+                name=f"trajectory_line_{traj_idx}",
+                showlegend=False,
+            ))
+
+            # Markers (sigma labels reserved for hover preview)
+            # Green gradient: light (start/noisy) -> dark (end/clean)
+            fig.add_trace(go.Scatter(
+                x=traj_x,
+                y=traj_y,
+                mode="markers",
+                marker=dict(
+                    size=10,
+                    color=list(range(len(traj))),
+                    colorscale=[[0, "#90EE90"], [1, "#228B22"]],  # lightgreen -> forestgreen
+                    line=dict(width=1, color="white"),
+                ),
+                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>σ=%{{text:.1f}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
+                text=traj_sigma,
+                customdata=list(range(len(traj))),
+                name=f"trajectory_{traj_idx}",
+                showlegend=False,
+            ))
+
+            # Start marker (diamond)
+            fig.add_trace(go.Scatter(
+                x=[traj_x[0]],
+                y=[traj_y[0]],
+                mode="markers",
+                marker=dict(symbol="diamond", size=14, color="lime", line=dict(width=1, color="white")),
+                hovertemplate=f"Traj {traj_idx + 1} Start (σ=%.1f)<extra></extra>" % traj_sigma[0],
+                name=f"traj_start_{traj_idx}",
+                showlegend=False,
+            ))
+
+            # End marker (star)
+            fig.add_trace(go.Scatter(
+                x=[traj_x[-1]],
+                y=[traj_y[-1]],
+                mode="markers",
+                marker=dict(symbol="star", size=18, color="#228B22", line=dict(width=1, color="white")),
+                hovertemplate=f"Traj {traj_idx + 1} End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
+                name=f"traj_end_{traj_idx}",
+                showlegend=False,
+            ))
+
+        # Layout - autosize lets CSS control dimensions
+        fig.update_layout(
+            title="Activation UMAP",
+            xaxis_title="UMAP 1",
+            yaxis_title="UMAP 2",
+            hovermode="closest",
+            template="plotly_white",
+            showlegend=False,
+            autosize=True,
+            margin=dict(l=40, r=10, t=35, b=40),
+            uirevision=model_name,  # Preserve zoom/pan, reset on model switch
         )
-        def populate_class_dropdown(status):
-            """Populate class filter dropdown with available classes."""
-            if self.df.empty or 'class_label' not in self.df.columns:
-                return []
 
-            # Get unique classes and sort by class ID
-            unique_classes = self.df['class_label'].dropna().unique()
-            unique_classes = sorted([int(c) for c in unique_classes])
+        return fig
 
-            # Build options with class name
-            options = []
-            for class_id in unique_classes:
-                class_name = self.get_class_name(class_id)
-                options.append({
-                    "label": f"{class_id}: {class_name}",
-                    "value": class_id
-                })
 
-            return options
+# JavaScript for Plotly click and hover handling
+PLOTLY_HANDLER_JS = r"""
+function attachPlotlyHandlers() {
+    console.log('[Plotly] Attempting to attach handlers...');
 
-        @self.app.callback(
-            Output("highlighted-class-store", "data"),
-            Output("clear-class-highlight-btn", "disabled"),
-            Output("class-filter-status", "children"),
-            Output("class-filter-dropdown", "value"),
-            Input("class-filter-dropdown", "value"),
-            Input("clear-class-highlight-btn", "n_clicks"),
-            prevent_initial_call=True
-        )
-        def handle_class_filter(selected_class, clear_clicks):
-            """Handle class selection and clear button."""
-            ctx = callback_context
-            if not ctx.triggered:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    // Find Plotly plot - try multiple selectors
+    let plotDiv = document.querySelector('#umap-plot .plotly-graph-div');
+    if (!plotDiv) plotDiv = document.querySelector('#umap-plot .js-plotly-plot');
+    if (!plotDiv) plotDiv = document.querySelector('#umap-plot [class*="plotly"]');
 
-            trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    // Find textboxes - Gradio may use input or textarea
+    let clickBox = document.querySelector('#click-data-box textarea');
+    if (!clickBox) clickBox = document.querySelector('#click-data-box input');
+    let hoverBox = document.querySelector('#hover-data-box textarea');
+    if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input');
 
-            # Handle clear button
-            if trigger_id == "clear-class-highlight-btn":
-                return None, True, "", None
+    console.log('[Plotly] plotDiv:', plotDiv);
+    console.log('[Plotly] clickBox:', clickBox);
+    console.log('[Plotly] hoverBox:', hoverBox);
 
-            # Handle class selection
-            if selected_class is not None:
-                # Count samples in this class
-                if 'class_label' in self.df.columns:
-                    count = (self.df['class_label'] == selected_class).sum()
-                    status = f"{count} samples"
-                else:
-                    status = ""
-                return selected_class, False, status, dash.no_update
+    if (!plotDiv || !clickBox || !hoverBox) {
+        console.log('[Plotly] Elements not found, retrying in 200ms...');
+        setTimeout(attachPlotlyHandlers, 200);
+        return;
+    }
 
-            # Dropdown cleared
-            return None, True, "", dash.no_update
+    // Avoid duplicate handlers
+    if (plotDiv._gradioHandlersAttached) {
+        console.log('[Plotly] Handlers already attached');
+        return;
+    }
+    plotDiv._gradioHandlersAttached = true;
 
-        @self.app.callback(
-            Output("generation-status", "children"),
-            Output("umap-scatter", "figure", allow_duplicate=True),
-            Output("selected-point-store", "data", allow_duplicate=True),
-            Output("mask-steps-input", "value", allow_duplicate=True),
-            Output("sigma-max-input", "value", allow_duplicate=True),
-            Output("sigma-min-input", "value", allow_duplicate=True),
-            Input("generate-from-neighbors-btn", "n_clicks"),
-            State("manual-neighbors-store", "data"),
-            State("neighbor-indices-store", "data"),
-            State("selected-point-store", "data"),
-            State("umap-scatter", "figure"),
-            State("highlighted-class-store", "data"),
-            State("num-steps-input", "value"),
-            State("mask-steps-input", "value"),
-            State("guidance-scale-input", "value"),
-            State("sigma-max-input", "value"),
-            State("sigma-min-input", "value"),
-            prevent_initial_call=True
-        )
-        def generate_from_neighbors(n_clicks, manual_neighbors, knn_neighbors, selected_idx, current_figure, highlighted_class,
-                                    num_steps, mask_steps, guidance_scale, sigma_max, sigma_min):
-            """Generate new image from neighbor center activation."""
-            try:
-                # Validate inputs
-                if selected_idx is None:
-                    return "Error: No point selected", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    // Click handler
+    plotDiv.on('plotly_click', function(data) {
+        console.log('[Plotly] Click detected:', data);
+        if (!data || !data.points || data.points.length === 0) return;
 
-                # Combine all neighbors
-                all_neighbors = []
-                if manual_neighbors:
-                    all_neighbors.extend(manual_neighbors)
-                if knn_neighbors:
-                    all_neighbors.extend([n for n in knn_neighbors if n not in all_neighbors])
+        const point = data.points[0];
+        const clickData = {
+            pointIndex: point.customdata,
+            x: point.x,
+            y: point.y,
+            curveNumber: point.curveNumber
+        };
 
-                if self.activations is None:
-                    return "Error: Activations not loaded", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        console.log('[Plotly] Click sending:', clickData);
+        clickBox.value = JSON.stringify(clickData);
+        clickBox.dispatchEvent(new Event('input', { bubbles: true }));
+    });
 
-                # If no neighbors, use selected sample with small random shift
-                use_selected_with_noise = False
-                if not all_neighbors:
-                    all_neighbors = [selected_idx]
-                    use_selected_with_noise = True
-                    print("[GEN] No neighbors selected, using selected sample with random noise")
+    // Hover handler with debounce
+    let hoverTimeout = null;
+    let lastHoverKey = null;
+    plotDiv.on('plotly_hover', function(data) {
+        if (!data || !data.points || data.points.length === 0) return;
 
-                # Validate/default generation parameters and ensure correct types
-                print(f"[GEN] Raw inputs: steps={num_steps}, mask_steps={mask_steps}")
-                num_steps = int(num_steps) if num_steps is not None else self.num_steps
-                mask_steps = int(mask_steps) if mask_steps is not None else self.mask_steps
-                guidance_scale = float(guidance_scale) if guidance_scale is not None else self.guidance_scale
-                sigma_max = float(sigma_max) if sigma_max is not None else self.sigma_max
-                sigma_min = float(sigma_min) if sigma_min is not None else self.sigma_min
-                print(f"[GEN] After defaults: steps={num_steps}, mask_steps={mask_steps}")
+        const point = data.points[0];
+        const traceName = point.data.name || '';
 
-                # Enforce constraints with auto-correction
-                corrections = []
-                if mask_steps > num_steps:
-                    corrections.append(f"mask_steps {mask_steps}→{num_steps}")
-                    mask_steps = num_steps
-                if sigma_max <= sigma_min:
-                    # Detect which field changed and correct that one
-                    max_changed = (sigma_max != self._last_sigma_max)
-                    min_changed = (sigma_min != self._last_sigma_min)
+        // Check if this is a trajectory point (named "trajectory_N")
+        const trajMatch = traceName.match(/^trajectory_(\d+)$/);
+        if (trajMatch) {
+            const trajIdx = parseInt(trajMatch[1]);
+            const stepIdx = point.customdata;  // Step index stored in customdata
+            const hoverKey = `traj_${trajIdx}_${stepIdx}`;
 
-                    if max_changed and not min_changed:
-                        # User lowered max below min → raise max to min + 10%
-                        new_sigma_max = sigma_min * 1.1
-                        corrections.append(f"σ_max {sigma_max}→{new_sigma_max:.4f}")
-                        sigma_max = new_sigma_max
+            if (hoverKey === lastHoverKey) return;
+
+            clearTimeout(hoverTimeout);
+            hoverTimeout = setTimeout(() => {
+                lastHoverKey = hoverKey;
+                const hoverData = {
+                    type: 'trajectory',
+                    trajIdx: trajIdx,
+                    stepIdx: stepIdx,
+                    x: point.x,
+                    y: point.y,
+                    sigma: point.text  // Sigma stored in text
+                };
+                console.log('[Plotly] Trajectory hover:', hoverData);
+                hoverBox.value = JSON.stringify(hoverData);
+                hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+            }, 100);  // Faster for trajectory
+            return;
+        }
+
+        // Only handle main data trace (curve 0) for sample hover
+        if (point.curveNumber !== 0) return;
+
+        const idx = point.customdata;
+        const hoverKey = `sample_${idx}`;
+        if (hoverKey === lastHoverKey) return;
+
+        clearTimeout(hoverTimeout);
+        hoverTimeout = setTimeout(() => {
+            lastHoverKey = hoverKey;
+            const hoverData = {
+                type: 'sample',
+                pointIndex: idx,
+                x: point.x,
+                y: point.y
+            };
+            console.log('[Plotly] Hover sending:', hoverData);
+            hoverBox.value = JSON.stringify(hoverData);
+            hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+        }, 100);  // 100ms debounce
+    });
+
+    console.log('[Plotly] Handlers attached successfully!');
+}
+
+// Attach handlers after plot renders
+setTimeout(attachPlotlyHandlers, 500);
+"""
+
+
+def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
+    """Create Gradio Blocks app."""
+
+    # CSS for layout, plot sizing, and reduced chrome
+    custom_css = """
+    /* Main container fills viewport with min dimensions */
+    .gradio-container {
+        max-width: 100% !important;
+        padding: 0.5rem !important;
+        min-width: 900px !important;
+        min-height: 600px !important;
+        overflow: auto !important;
+    }
+
+    /* Main row uses available height */
+    #main-row {
+        min-height: calc(100vh - 80px) !important;
+        min-height: 500px !important;
+        align-items: stretch !important;
+        flex-wrap: nowrap !important;
+    }
+
+    /* Sidebars: scrollable with max height */
+    #left-sidebar, #right-sidebar {
+        max-height: calc(100vh - 80px) !important;
+        overflow-y: auto !important;
+        padding: 0.25rem !important;
+    }
+
+    /* Center column stretches */
+    #center-column {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    /* Plot uses viewport height - target all nested elements */
+    #umap-plot {
+        min-height: 50vh !important;
+        height: calc(100vh - 120px) !important;
+        flex-grow: 1 !important;
+    }
+
+    #umap-plot > div {
+        height: 100% !important;
+    }
+
+    #umap-plot .js-plotly-plot,
+    #umap-plot .plotly,
+    #umap-plot .plotly-graph-div {
+        height: 100% !important;
+        width: 100% !important;
+    }
+
+    #umap-plot .main-svg {
+        height: 100% !important;
+    }
+
+    /* Reduce group padding */
+    .gr-group {
+        padding: 0.5rem !important;
+        margin-bottom: 0.10rem !important;
+    }
+
+    /* Compact markdown headers */
+    .gr-group h3 {
+        margin: 0 0 0.25rem 0 !important;
+        font-size: 0.9rem !important;
+    }
+
+    /* Smaller image containers */
+    .gr-image {
+        margin: 0 !important;
+    }
+
+    /* Compact sliders and inputs */
+    .gr-slider, .gr-number {
+        margin-bottom: 0.25rem !important;
+    }
+
+    /* Compact buttons */
+    .gr-button-sm {
+        padding: 0.25rem 0.5rem !important;
+        margin: 0.125rem 0 !important;
+    }
+
+    /* Gallery compact */
+    .gr-gallery {
+        margin: 0.25rem 0 !important;
+    }
+
+    /* Hide JS bridge elements */
+    #click-data-box, #hover-data-box {
+        display: none !important;
+    }
+
+    /* Reduce title size */
+    h1 {
+        font-size: 1.5rem !important;
+        margin: 0.25rem 0 0.5rem 0 !important;
+    }
+
+    /* Model selector row: label + dropdown inline */
+    #model-row {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+        margin-bottom: 0.25rem !important;
+    }
+
+    #model-row > div {
+        flex: 0 0 auto !important;
+    }
+
+    #model-label {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 60px !important;
+    }
+
+    #model-label p {
+        margin: 0 !important;
+        font-size: 0.9rem !important;
+    }
+
+    #model-dropdown {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        width: auto !important;
+    }
+
+    /* KNN row styling */
+    #knn-row {
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+    }
+
+    #knn-label {
+        flex-shrink: 0 !important;
+    }
+
+    #knn-label p {
+        margin: 0 !important;
+        white-space: nowrap !important;
+    }
+
+    #knn-input {
+        flex-shrink: 0 !important;
+        max-width: 65px !important;
+    }
+
+    /* Hide spin buttons on K input */
+    #knn-input input[type="number"]::-webkit-inner-spin-button,
+    #knn-input input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none !important;
+        margin: 0 !important;
+    }
+
+    #knn-input input[type="number"] {
+        -moz-appearance: textfield !important;
+    }
+
+    #status-text {
+        font-size: 0.8rem !important;
+        color: #666 !important;
+        margin: 0 0 0.5rem 0 !important;
+    }
+
+    #status-text p {
+        margin: 0 !important;
+    }
+
+    /* Compact generation params - all in one row with inline labels */
+    #gen-params-row {
+        gap: 0.25rem !important;
+        align-items: center !important;
+        flex-wrap: wrap !important;
+    }
+
+    #gen-params-row > div {
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 0.2rem !important;
+        flex: 0 1 auto !important;
+    }
+
+    #gen-params-row label {
+        min-width: fit-content !important;
+        margin: 0 !important;
+        font-size: 0.75rem !important;
+        white-space: nowrap !important;
+    }
+
+    #gen-params-row input {
+        max-width: 50px !important;
+        padding: 0.2rem 0.4rem !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* Hide number input spin buttons */
+    #gen-params-row input[type="number"]::-webkit-inner-spin-button,
+    #gen-params-row input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none !important;
+        margin: 0 !important;
+    }
+
+    #gen-params-row input[type="number"] {
+        -moz-appearance: textfield !important;
+    }
+
+    /* Smooth scaling for 64x64 images (auto = bilinear interpolation) */
+    #preview-image img,
+    #selected-image img,
+    #generated-image img,
+    #intermediate-gallery img,
+    #neighbor-gallery img {
+        image-rendering: auto !important;
+    }
+
+    /* Image containers: fill available space */
+    #preview-image, #selected-image, #generated-image {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        overflow: hidden !important;
+    }
+
+    /* Preview image: fixed size, scale image to fill */
+    #preview-image {
+        width: 100% !important;
+        min-height: 180px !important;
+    }
+
+    #preview-image > div,
+    #preview-image > div > div {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    #preview-image img {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 300px !important;
+        max-width: none !important;
+        object-fit: contain !important;
+    }
+
+    /* Compact preview and selected details text */
+    #preview-details,
+    #selected-details {
+        line-height: 1.3 !important;
+    }
+
+    #preview-details p,
+    #selected-details p {
+        margin: 0.15em 0 !important;
+    }
+
+    /* Selected/generated images: fill container */
+    #selected-image img, #generated-image img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important;
+        max-width: none !important;
+        max-height: none !important;
+    }
+
+    /* Generated image: match preview size */
+    #generated-image {
+        width: 100% !important;
+        min-height: 180px !important;
+    }
+
+    #generated-image img {
+        min-height: 300px !important;
+    }
+
+    /* Gallery images also scale up */
+    #intermediate-gallery img,
+    #neighbor-gallery img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important;
+    }
+
+    /* Neighbor gallery: scrollable with more height */
+    #neighbor-gallery {
+        max-height: 280px !important;
+        overflow-y: auto !important;
+    }
+
+    /* Lock scroll when gallery preview is active */
+    #neighbor-gallery:has(.preview) {
+        overflow-y: hidden !important;
+    }
+
+    /* Make preview fill the container */
+    #neighbor-gallery .preview {
+        max-height: 280px !important;
+    }
+    """
+
+    with gr.Blocks(
+        title="Diffusion Activation Visualizer",
+        theme=gr.themes.Soft(),
+        css=custom_css,
+        head=f"<script>{PLOTLY_HANDLER_JS}</script>",
+    ) as app:
+
+        # Per-session state
+        current_model = gr.State(value=visualizer.default_model)  # Model selection per session
+        selected_idx = gr.State(value=None)
+        manual_neighbors = gr.State(value=[])
+        knn_neighbors = gr.State(value=[])
+        knn_distances = gr.State(value={})  # {idx: distance} for KNN neighbors
+        highlighted_class = gr.State(value=None)
+        trajectory_coords = gr.State(value=[])  # [[(x, y, sigma), ...], ...] list of trajectories
+        intermediate_images = gr.State(value=[])  # [(img, sigma), ...] for trajectory hover/animation
+        animation_frame = gr.State(value=-1)  # Current animation frame (-1 = showing final)
+        generation_info = gr.State(value=None)  # {class_id, class_name, n_traj} for display
+
+        # Get initial model data for default values
+        default_model_data = visualizer.get_model(visualizer.default_model)
+        initial_sample_count = len(default_model_data.df) if default_model_data else 0
+
+        gr.Markdown("# Diffusion Activation Visualizer")
+
+        with gr.Row(elem_id="main-row"):
+            # Left column (sidebar)
+            with gr.Column(scale=1, elem_id="left-sidebar"):
+                # Model selector + status
+                with gr.Row(elem_id="model-row"):
+                    gr.Markdown("**Model**", elem_id="model-label")
+                    if len(visualizer.model_configs) > 1:
+                        model_dropdown = gr.Dropdown(
+                            choices=list(visualizer.model_configs.keys()),
+                            value=visualizer.default_model,
+                            show_label=False,
+                            interactive=True,
+                            elem_id="model-dropdown",
+                        )
                     else:
-                        # User raised min above max (or both changed) → lower min
-                        new_sigma_min = max(0.001, sigma_max * 0.9)
-                        corrections.append(f"σ_min {sigma_min}→{new_sigma_min:.4f}")
-                        sigma_min = new_sigma_min
+                        model_dropdown = gr.Dropdown(
+                            choices=[visualizer.default_model] if visualizer.default_model else [],
+                            value=visualizer.default_model,
+                            show_label=False,
+                            visible=len(visualizer.model_configs) > 0,
+                            elem_id="model-dropdown",
+                        )
+                status_text = gr.Markdown(
+                    f"Showing {initial_sample_count} samples"
+                    + (f" ({visualizer.default_model})" if visualizer.default_model else ""),
+                    elem_id="status-text"
+                )
+                model_status = gr.Markdown("", visible=False)
 
-                # Update tracked values
-                self._last_sigma_max = sigma_max
-                self._last_sigma_min = sigma_min
-                if corrections:
-                    print(f"[GEN] Auto-corrected: {', '.join(corrections)}")
-
-                # NEW: Average neighbors directly in high-D activation space (no inverse_transform!)
-                print(f"[GEN] Neighbors: {all_neighbors}")
-                neighbor_activations = self.activations[all_neighbors]
-                center_activation = np.mean(neighbor_activations, axis=0, keepdims=True)
-
-                # Add small random noise when generating from selected sample only
-                if use_selected_with_noise:
-                    noise_scale = 0.01 * np.std(center_activation)
-                    noise = np.random.randn(*center_activation.shape) * noise_scale
-                    center_activation = center_activation + noise
-                    print(f"[GEN] Added random noise (scale={noise_scale:.4f}) to selected sample activation")
-                else:
-                    print(f"[GEN] Averaged {len(all_neighbors)} neighbor activations in high-D space")
-                print(f"[GEN] Center activation shape: {center_activation.shape}")
-
-                # Forward transform to get intended 2D position for visualization
-                center_scaled = center_activation
-                if self.umap_scaler is not None:
-                    center_scaled = self.umap_scaler.transform(center_activation)
-                if self.umap_reducer is not None:
-                    center_2d = self.umap_reducer.transform(center_scaled)
-                    print(f"[GEN] Intended center in UMAP: ({center_2d[0,0]:.3f}, {center_2d[0,1]:.3f})")
-                else:
-                    # Fallback: average UMAP coords of neighbors
-                    neighbor_coords = self.df.iloc[all_neighbors][['umap_x', 'umap_y']].values
-                    center_2d = np.mean(neighbor_coords, axis=0).reshape(1, -1)
-                    print(f"[GEN] Intended center (avg UMAP coords): ({center_2d[0,0]:.3f}, {center_2d[0,1]:.3f})")
-
-                # Load adapter if not already loaded
-                if self.adapter is None:
-                    if self.checkpoint_path is None:
-                        return "Error: No checkpoint path provided", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-                    print(f"Loading adapter '{self.adapter_name}' ({num_steps}-step)...")
-                    AdapterClass = get_adapter(self.adapter_name)
-                    self.adapter = AdapterClass.from_checkpoint(
-                        self.checkpoint_path,
-                        device=self.device,
-                        label_dropout=self.label_dropout
+                # Preview section (updated on hover)
+                with gr.Group():
+                    gr.Markdown("### Preview")
+                    preview_image = gr.Image(
+                        label=None, show_label=False, elem_id="preview-image"
+                    )
+                    preview_details = gr.Markdown(
+                        "Hover over a point to preview", elem_id="preview-details"
                     )
 
-                # Determine which layers were used (from UMAP params or default)
-                layers = self.umap_params.get('layers', ['encoder_bottleneck', 'midblock'])
-                if isinstance(layers, str):
-                    layers = [layers]
-
-                # Get layer shapes from adapter
-                if not self.layer_shapes:
-                    self.layer_shapes = self.adapter.get_layer_shapes()
-
-                # Split center activation back into per-layer activations
-                # This assumes layers are concatenated in sorted order (same as process_embeddings.py)
-                activation_dict = {}
-                offset = 0
-                for layer_name in sorted(layers):
-                    shape = self.layer_shapes[layer_name]
-                    size = np.prod(shape)
-                    layer_act_flat = center_activation[0, offset:offset+size]
-                    offset += size
-
-                    # Reshape to (1, C, H, W)
-                    layer_act = unflatten_activation(
-                        torch.from_numpy(layer_act_flat).float(),
-                        shape
+                # Class filter
+                with gr.Group():
+                    gr.Markdown("### Class Filter")
+                    class_dropdown = gr.Dropdown(
+                        choices=visualizer.get_class_options(visualizer.default_model) if visualizer.default_model else [],
+                        label="Select class",
+                        interactive=True,
                     )
-                    activation_dict[layer_name] = layer_act
+                    clear_class_btn = gr.Button("Clear Highlight", size="sm")
+                    class_status = gr.Markdown("")
 
-                print(f"[GEN] Split activation into {len(activation_dict)} layers", flush=True)
+                # Selected sample (moved from right sidebar)
+                with gr.Group():
+                    gr.Markdown("### Selected Sample")
+                    selected_image = gr.Image(
+                        label=None, show_label=False, height=150, elem_id="selected-image"
+                    )
+                    selected_details = gr.Markdown(
+                        "Click a point to select", elem_id="selected-details"
+                    )
+                    clear_selection_btn = gr.Button("Clear Selection", size="sm")
 
-                # Create activation masker using adapter interface
-                print("[GEN] Creating activation masker...", flush=True)
-                masker = ActivationMasker(self.adapter)
-                for layer_name, activation in activation_dict.items():
-                    print(f"[GEN] Setting mask for {layer_name}, shape={activation.shape}", flush=True)
-                    masker.set_mask(layer_name, activation)
+            # Center column (main plot)
+            with gr.Column(scale=3, min_width=500, elem_id="center-column"):
+                # Hidden textboxes for JS bridge (receives data from Plotly)
+                click_data_box = gr.Textbox(
+                    value="",
+                    elem_id="click-data-box",
+                    visible=False,
+                )
+                hover_data_box = gr.Textbox(
+                    value="",
+                    elem_id="hover-data-box",
+                    visible=False,
+                )
+                # Use Plotly via gr.Plot for proper click handling
+                umap_plot = gr.Plot(
+                    value=visualizer.create_umap_figure(visualizer.default_model) if visualizer.default_model else None,
+                    elem_id="umap-plot",
+                    show_label=False,
+                )
 
-                # Register hooks
-                print("[GEN] Registering hooks...", flush=True)
-                masker.register_hooks(list(activation_dict.keys()))
-                print(f"[GEN] Registered {len(masker._handles)} hooks", flush=True)
+            # Right column (generation & neighbors)
+            with gr.Column(scale=1, elem_id="right-sidebar"):
+                # Generation settings
+                with gr.Group(elem_id="gen-group"):
+                    gr.Markdown("### Generation")
+                    # Parameters and buttons first (use model defaults)
+                    default_steps = default_model_data.default_steps if default_model_data else 5
+                    default_sigma_max = default_model_data.sigma_max if default_model_data else 80.0
+                    default_sigma_min = default_model_data.sigma_min if default_model_data else 0.5
+                    with gr.Row(elem_id="gen-params-row"):
+                        num_steps_slider = gr.Number(
+                            value=default_steps, label="Steps",
+                            elem_id="num-steps", min_width=50, precision=0
+                        )
+                        mask_steps_slider = gr.Number(
+                            value=visualizer.mask_steps, label="Mask",
+                            elem_id="mask-steps", min_width=50, precision=0
+                        )
+                        guidance_slider = gr.Number(
+                            value=visualizer.guidance_scale, label="CFG",
+                            elem_id="guidance", min_width=50
+                        )
+                        sigma_max_input = gr.Number(
+                            value=default_sigma_max, label="σ max",
+                            elem_id="sigma-max", min_width=50
+                        )
+                        sigma_min_input = gr.Number(
+                            value=default_sigma_min, label="σ min",
+                            elem_id="sigma-min", min_width=50
+                        )
+                    generate_btn = gr.Button("Generate from Neighbors", variant="primary")
+                    gen_status = gr.Markdown("Select neighbors, then generate")
+                    # Generated output
+                    generated_image = gr.Image(
+                        label=None, show_label=False, elem_id="generated-image"
+                    )
+                    # Denoising steps gallery with frame nav
+                    intermediate_gallery = gr.Gallery(
+                        label="Denoising Steps",
+                        show_label=True,
+                        columns=5,
+                        rows=1,
+                        height=70,
+                        object_fit="contain",
+                        show_download_button=False,
+                        elem_id="intermediate-gallery",
+                    )
+                    with gr.Row():
+                        prev_frame_btn = gr.Button("◀", size="sm", min_width=40)
+                        next_frame_btn = gr.Button("▶", size="sm", min_width=40)
+                    clear_gen_btn = gr.Button("Clear", size="sm")
 
-                print("[GEN] Starting image generation...", flush=True)
+                # Neighbor list
+                with gr.Group():
+                    gr.Markdown("### Neighbors")
+                    with gr.Row(elem_id="knn-row"):
+                        gr.Markdown("**K-neighbors**", elem_id="knn-label")
+                        knn_k_slider = gr.Number(
+                            value=5, show_label=False, precision=0, minimum=1,
+                            elem_id="knn-input", min_width=50
+                        )
+                        suggest_btn = gr.Button("Suggest KNN", size="sm")
+                    neighbor_gallery = gr.Gallery(
+                        label=None,
+                        show_label=False,
+                        columns=2,
+                        height="auto",
+                        object_fit="contain",
+                        allow_preview=True,
+                        elem_id="neighbor-gallery",
+                    )
+                    neighbor_info = gr.Markdown("No neighbors selected")
+                    clear_neighbors_btn = gr.Button("Clear Neighbors", size="sm")
 
-                # Generate image (use same class as selected point if available)
-                # All data uses Standard ImageNet ordering - no remapping needed
+        # --- Event Handlers ---
+
+        def on_load():
+            """No-op - KNN models are already fit during init."""
+            pass
+
+        def build_neighbor_gallery(model_name, sel_idx, man_n, knn_n, knn_dist):
+            """Build neighbor gallery and info text."""
+            model_data = visualizer.get_model(model_name)
+            if sel_idx is None or model_data is None:
+                return [], "No neighbors selected"
+
+            man_n = man_n or []
+            knn_n = knn_n or []
+            knn_dist = knn_dist or {}
+
+            # Combine neighbors: KNN first (sorted by distance), then manual
+            all_neighbors = []
+            knn_with_dist = [(idx, knn_dist.get(idx, 999)) for idx in knn_n if idx not in man_n]
+            knn_with_dist.sort(key=lambda x: x[1])
+            all_neighbors.extend([idx for idx, _ in knn_with_dist])
+            all_neighbors.extend(man_n)
+
+            if not all_neighbors:
+                return [], "Click points or use Suggest"
+
+            images = []
+            for idx in all_neighbors[:20]:
+                if idx < len(model_data.df):
+                    sample = model_data.df.iloc[idx]
+                    img = visualizer.get_image(model_name, sample["image_path"])
+                    if img is not None:
+                        if "class_label" in sample:
+                            cls_id = int(sample["class_label"])
+                            cls_name = visualizer.get_class_name(cls_id)
+                            label = f"{cls_id}: {cls_name}"
+                        else:
+                            label = f"#{idx}"
+                        if idx in knn_dist:
+                            label += f" (d={knn_dist[idx]:.2f})"
+                        elif idx in man_n:
+                            label += " (manual)"
+                        images.append((img, label))
+
+            knn_count = len([n for n in knn_n if n not in man_n])
+            man_count = len(man_n)
+            info = f"{len(all_neighbors)} neighbors"
+            if knn_count > 0:
+                info += f" ({knn_count} KNN"
+            if man_count > 0:
+                info += f", {man_count} manual" if knn_count > 0 else f" ({man_count} manual"
+            if knn_count > 0 or man_count > 0:
+                info += ")"
+            return images, info
+
+        def on_hover_data(hover_json, intermediates, model_name):
+            """Handle plot hover via JS bridge - update preview panel.
+
+            Handles two types:
+            - Sample hover: show sample image from dataset
+            - Trajectory hover: show intermediate image from generation
+            """
+            if not hover_json:
+                return gr.update(), gr.update()
+
+            try:
+                hover_data = json.loads(hover_json)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return gr.update(), gr.update()
+
+            hover_type = hover_data.get("type", "sample")
+
+            # Trajectory point hover - show intermediate image
+            if hover_type == "trajectory":
+                step_idx = hover_data.get("stepIdx")
+                traj_idx = hover_data.get("trajIdx", 0)
+                sigma = hover_data.get("sigma", "?")
+
+                if intermediates and step_idx is not None:
+                    step_idx = int(step_idx)
+                    if 0 <= step_idx < len(intermediates):
+                        img, stored_sigma = intermediates[step_idx]
+                        details = f"**Trajectory {traj_idx + 1}, Step {step_idx}**\n\n"
+                        details += f"σ = {stored_sigma:.1f}\n\n"
+                        details += f"Coords: ({hover_data.get('x', 0):.2f}, {hover_data.get('y', 0):.2f})"
+                        return img, details
+
+                # No intermediates stored
+                details = f"**Trajectory step {step_idx}**\n\nσ = {sigma}"
+                return gr.update(), details
+
+            # Sample hover - show dataset image
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
+                return gr.update(), gr.update()
+
+            point_idx = hover_data.get("pointIndex")
+            if point_idx is None:
+                return gr.update(), gr.update()
+            point_idx = int(point_idx)
+
+            if point_idx < 0 or point_idx >= len(model_data.df):
+                return gr.update(), gr.update()
+
+            sample = model_data.df.iloc[point_idx]
+            img = visualizer.get_image(model_name, sample["image_path"])
+
+            # Format details
+            if "class_label" in sample:
+                class_name = visualizer.get_class_name(int(sample["class_label"]))
+            else:
+                class_name = "N/A"
+            details = f"**{sample['sample_id']}**<br>"
+            if "class_label" in sample:
+                details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
+            if "conditioning_sigma" in sample:
+                details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
+            details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+
+            return img, details
+
+        def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class, traj, model_name):
+            """Handle plot click via JS bridge - select point or toggle neighbor."""
+            if not click_json:
+                return (gr.update(),) * 9
+
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
+                return (gr.update(),) * 9
+
+            try:
+                click_data = json.loads(click_json)
+                # Only handle clicks on main samples trace (curve 0)
+                # Ignore trajectory and other overlay traces
+                if click_data.get("curveNumber", 0) != 0:
+                    return (gr.update(),) * 9
+                point_idx = click_data.get("pointIndex")
+                if point_idx is None:
+                    return (gr.update(),) * 9
+                point_idx = int(point_idx)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return (gr.update(),) * 9
+
+            if point_idx < 0 or point_idx >= len(model_data.df):
+                return (gr.update(),) * 9
+
+            knn_dist = knn_dist or {}
+
+            # First click: select this point
+            if sel_idx is None:
+                sample = model_data.df.iloc[point_idx]
+                img = visualizer.get_image(model_name, sample["image_path"])
+
+                # Format details
+                if "class_label" in sample:
+                    class_name = visualizer.get_class_name(int(sample["class_label"]))
+                else:
+                    class_name = "N/A"
+                details = f"**{sample['sample_id']}**<br>"
+                if "class_label" in sample:
+                    details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
+                if "conditioning_sigma" in sample:
+                    details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
+                details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+
+                # Build updated Plotly figure with selection (preserve trajectory)
+                fig = visualizer.create_umap_figure(
+                    model_name,
+                    selected_idx=point_idx,
+                    highlighted_class=high_class,
+                    trajectory=traj if traj else None,
+                )
+
+                return (
+                    img,           # selected_image
+                    details,       # selected_details
+                    point_idx,     # selected_idx
+                    [],            # manual_neighbors
+                    [],            # knn_neighbors
+                    fig,           # umap_plot
+                    [],            # neighbor_gallery
+                    "Click points or use Suggest",  # neighbor_info
+                    traj,          # trajectory_coords (preserved)
+                )
+
+            # Clicking same point: do nothing
+            if point_idx == sel_idx:
+                return (gr.update(),) * 9
+
+            # Toggle neighbor (preserve trajectory)
+            man_n = list(man_n) if man_n else []
+            knn_n = list(knn_n) if knn_n else []
+            at_limit = False
+
+            if point_idx in man_n:
+                man_n.remove(point_idx)
+            elif point_idx in knn_n:
+                knn_n.remove(point_idx)
+            else:
+                # Check total neighbor limit
+                total = len(man_n) + len(knn_n)
+                if total >= 20:
+                    at_limit = True
+                else:
+                    man_n.append(point_idx)
+
+            # Rebuild Plotly figure with updated highlights (preserve trajectory)
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                manual_neighbors=man_n,
+                knn_neighbors=knn_n,
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
+            )
+
+            # Build gallery for neighbors
+            gallery, info = build_neighbor_gallery(model_name, sel_idx, man_n, knn_n, knn_dist)
+
+            # Add limit notice if needed
+            if at_limit:
+                info += " (max 20)"
+
+            return (
+                gr.update(),   # selected_image
+                gr.update(),   # selected_details
+                sel_idx,       # selected_idx (unchanged)
+                man_n,         # manual_neighbors
+                knn_n,         # knn_neighbors
+                fig,           # umap_plot
+                gallery,       # neighbor_gallery
+                info,          # neighbor_info
+                traj,          # trajectory_coords (preserved)
+            )
+
+        def on_clear_selection(high_class, traj, model_name):
+            """Clear selection and neighbors (preserves trajectory, preview unchanged)."""
+            fig = visualizer.create_umap_figure(
+                model_name,
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
+            )
+            return (
+                None,                      # selected_image
+                "Click a point to select", # selected_details
+                None,                      # selected_idx
+                [],                        # manual_neighbors
+                [],                        # knn_neighbors
+                {},                        # knn_distances
+                fig,                       # umap_plot
+                [],                        # neighbor_gallery
+                "No neighbors selected",   # neighbor_info
+            )
+
+        def on_class_filter(class_value, sel_idx, man_n, knn_n, traj, model_name):
+            """Handle class filter selection (preserves trajectory)."""
+            model_data = visualizer.get_model(model_name)
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                manual_neighbors=man_n,
+                knn_neighbors=knn_n,
+                highlighted_class=class_value,
+                trajectory=traj if traj else None,
+            )
+
+            if class_value is not None and model_data and "class_label" in model_data.df.columns:
+                count = (model_data.df["class_label"] == class_value).sum()
+                status = f"{count} samples"
+            else:
+                status = ""
+
+            return fig, class_value, status
+
+        def on_clear_class(sel_idx, man_n, knn_n, traj, model_name):
+            """Clear class highlight (preserves trajectory)."""
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                manual_neighbors=man_n,
+                knn_neighbors=knn_n,
+                trajectory=traj if traj else None,
+            )
+            return fig, None, None, ""
+
+        def on_model_switch(new_model_name, cur_model, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
+            """Handle model switching (resets all state including preview).
+
+            Note: This now just updates the session's current_model state.
+            All model data is preloaded, so no shared state is modified.
+            """
+            if new_model_name == cur_model:
+                return (gr.update(),) * 23  # +1 for current_model state
+
+            if not visualizer.is_valid_model(new_model_name):
+                return (gr.update(),) * 23
+
+            model_data = visualizer.get_model(new_model_name)
+            fig = visualizer.create_umap_figure(new_model_name)
+            status = f"Showing {len(model_data.df)} samples ({new_model_name})"
+
+            return (
+                new_model_name,                    # current_model (session state)
+                fig,                               # umap_plot
+                status,                            # status_text
+                f"Switched to {new_model_name}",   # model_status
+                None,                              # selected_idx
+                [],                                # manual_neighbors
+                [],                                # knn_neighbors
+                {},                                # knn_distances
+                None,                              # highlighted_class
+                [],                                # trajectory_coords
+                None,                              # preview_image
+                "Hover over a point to preview",   # preview_details
+                None,                              # selected_image
+                "Click a point to select",         # selected_details
+                gr.update(choices=visualizer.get_class_options(new_model_name), value=None),  # class_dropdown
+                None,                              # generated_image
+                gr.update(value=[], label="Denoising Steps"),  # intermediate_gallery
+                "Select neighbors, then generate", # gen_status
+                [],                                # intermediate_images
+                -1,                                # animation_frame
+                None,                              # generation_info
+                [],                                # neighbor_gallery
+                "No neighbors selected",           # neighbor_info
+            )
+
+        # Wire up events
+        # on_load initializes KNN model
+        app.load(on_load, outputs=[])
+
+        # Hover handling via JS bridge (updates preview panel)
+        hover_data_box.input(
+            on_hover_data,
+            inputs=[hover_data_box, intermediate_images, current_model],
+            outputs=[preview_image, preview_details],
+        )
+
+        # Click handling via JS bridge (click_data_box receives JSON from Plotly click)
+        click_data_box.input(
+            on_click_data,
+            inputs=[
+                click_data_box, selected_idx, manual_neighbors,
+                knn_neighbors, knn_distances, highlighted_class, trajectory_coords,
+                current_model
+            ],
+            outputs=[
+                selected_image,
+                selected_details,
+                selected_idx,
+                manual_neighbors,
+                knn_neighbors,
+                umap_plot,
+                neighbor_gallery,
+                neighbor_info,
+                trajectory_coords,
+            ],
+        )
+
+        clear_selection_btn.click(
+            on_clear_selection,
+            inputs=[highlighted_class, trajectory_coords, current_model],
+            outputs=[
+                selected_image,
+                selected_details,
+                selected_idx,
+                manual_neighbors,
+                knn_neighbors,
+                knn_distances,
+                umap_plot,
+                neighbor_gallery,
+                neighbor_info,
+            ],
+        )
+
+        class_dropdown.change(
+            on_class_filter,
+            inputs=[class_dropdown, selected_idx, manual_neighbors, knn_neighbors, trajectory_coords, current_model],
+            outputs=[umap_plot, highlighted_class, class_status],
+        )
+
+        clear_class_btn.click(
+            on_clear_class,
+            inputs=[selected_idx, manual_neighbors, knn_neighbors, trajectory_coords, current_model],
+            outputs=[umap_plot, highlighted_class, class_dropdown, class_status],
+        )
+
+        if len(visualizer.model_configs) > 1:
+            model_dropdown.change(
+                on_model_switch,
+                inputs=[
+                    model_dropdown, current_model, selected_idx, manual_neighbors,
+                    knn_neighbors, knn_distances, highlighted_class
+                ],
+                outputs=[
+                    current_model,
+                    umap_plot,
+                    status_text,
+                    model_status,
+                    selected_idx,
+                    manual_neighbors,
+                    knn_neighbors,
+                    knn_distances,
+                    highlighted_class,
+                    trajectory_coords,
+                    preview_image,
+                    preview_details,
+                    selected_image,
+                    selected_details,
+                    class_dropdown,
+                    generated_image,
+                    intermediate_gallery,
+                    gen_status,
+                    intermediate_images,
+                    animation_frame,
+                    generation_info,
+                    neighbor_gallery,
+                    neighbor_info,
+                ],
+            )
+
+        # Note: neighbor display is updated directly in click/suggest handlers
+        # No need for state.change() listeners which can cause duplicate events
+
+        # --- Suggest neighbors button ---
+        def on_suggest_neighbors(sel_idx, k_val, high_class, man_n, traj, model_name):
+            """Auto-suggest K nearest neighbors (preserves trajectory)."""
+            if sel_idx is None:
+                return gr.update(), [], {}, [], "Select a point first"
+
+            # Clamp k to max 20
+            k_val = int(k_val)
+            clamped = k_val > 20
+            k_val = min(k_val, 20)
+
+            # Find KNN neighbors
+            neighbors = visualizer.find_knn_neighbors(model_name, sel_idx, k=k_val)
+            if not neighbors:
+                return gr.update(), [], {}, [], "No neighbors found"
+
+            # Extract indices and distances
+            knn_idx = [idx for idx, _ in neighbors]
+            knn_dist = dict(neighbors)
+
+            # Update plot (preserve trajectory)
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                manual_neighbors=man_n or [],
+                knn_neighbors=knn_idx,
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
+            )
+
+            # Build neighbor gallery
+            gallery, info = build_neighbor_gallery(model_name, sel_idx, man_n or [], knn_idx, knn_dist)
+
+            # Add clamped notice if needed
+            if clamped:
+                info += " (max 20)"
+
+            return fig, knn_idx, knn_dist, gallery, info
+
+        suggest_btn.click(
+            on_suggest_neighbors,
+            inputs=[selected_idx, knn_k_slider, highlighted_class, manual_neighbors, trajectory_coords, current_model],
+            outputs=[umap_plot, knn_neighbors, knn_distances, neighbor_gallery, neighbor_info],
+        )
+
+        # --- Clear neighbors button ---
+        def on_clear_neighbors(sel_idx, high_class, traj, model_name):
+            """Clear all neighbors (preserves trajectory)."""
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                highlighted_class=high_class,
+                trajectory=traj if traj else None,
+            )
+            return fig, [], [], {}, [], "No neighbors selected"
+
+        clear_neighbors_btn.click(
+            on_clear_neighbors,
+            inputs=[selected_idx, highlighted_class, trajectory_coords, current_model],
+            outputs=[
+                umap_plot, manual_neighbors, knn_neighbors,
+                knn_distances, neighbor_gallery, neighbor_info
+            ],
+        )
+
+        # --- Generate button ---
+        def on_generate(
+            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class, existing_traj, model_name
+        ):
+            """Generate image from selected neighbors with trajectory visualization."""
+            existing_traj = existing_traj or []
+
+            # Get model data
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
+                return None, gr.update(), "Model not loaded", gr.update(), existing_traj, [], None
+
+            # Combine all neighbors
+            all_neighbors = list(set((man_n or []) + (knn_n or [])))
+            if sel_idx is not None and sel_idx not in all_neighbors:
+                all_neighbors.insert(0, sel_idx)
+
+            if not all_neighbors:
+                return None, gr.update(), "Select neighbors first", gr.update(), existing_traj, [], None
+
+            # Get class label from selected point (or first neighbor)
+            ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
+            if "class_label" in model_data.df.columns:
+                class_label = int(model_data.df.iloc[ref_idx]["class_label"])
+            else:
                 class_label = None
-                if 'class_label' in self.df.columns:
-                    class_label = int(self.df.iloc[selected_idx]['class_label'])
-                    print(f"Using class_label: {class_label} ({self.get_class_name(class_label)})")
 
-                # Use multi-step or single-step generation based on config
-                if num_steps > 1:
-                    mask_info = f", mask_steps={mask_steps or num_steps}"
-                    print(f"Using {num_steps}-step generation{mask_info}")
-                    # pylint: disable=unbalanced-tuple-unpacking
-                    images, labels, trajectory_acts, intermediate_imgs, noised_inputs = generate_with_mask_multistep(
-                        self.adapter,
+            # Get layers for trajectory extraction
+            extract_layers = sorted(model_data.umap_params.get("layers", []))
+            can_project = model_data.umap_reducer is not None and len(extract_layers) > 0
+
+            # Load adapter (lazy)
+            with visualizer._generation_lock:
+                adapter = visualizer.load_adapter(model_name)
+                if adapter is None:
+                    return None, gr.update(), "Checkpoint not found", gr.update(), [], [], None
+
+                # Prepare activation dict
+                activation_dict = visualizer.prepare_activation_dict(model_name, all_neighbors)
+                if activation_dict is None:
+                    return None, gr.update(), "Failed to prepare activations", gr.update(), [], [], None
+
+                # Create masker and register hooks
+                masker = ActivationMasker(adapter)
+                for layer_name, activation in activation_dict.items():
+                    masker.set_mask(layer_name, activation)
+                masker.register_hooks(list(activation_dict.keys()))
+
+                try:
+                    # Generate with trajectory, intermediates, and noised inputs
+                    result = generate_with_mask_multistep(
+                        adapter,
                         masker,
                         class_label=class_label,
-                        num_steps=num_steps,
-                        mask_steps=mask_steps,
-                        sigma_max=sigma_max,
-                        sigma_min=sigma_min,
-                        guidance_scale=guidance_scale,
+                        num_steps=int(n_steps),
+                        mask_steps=int(m_steps),
+                        sigma_max=float(s_max),
+                        sigma_min=float(s_min),
+                        guidance_scale=float(guidance),
                         stochastic=True,
                         num_samples=1,
-                        device=self.device,
-                        extract_layers=sorted(layers),
-                        return_trajectory=True,
+                        device=visualizer.device,
+                        extract_layers=extract_layers if can_project else None,
+                        return_trajectory=can_project,
                         return_intermediates=True,
-                        return_noised_inputs=True
+                        return_noised_inputs=True,
                     )
-                else:
-                    images, labels = generate_with_mask(
-                        self.adapter,
-                        masker,
-                        class_label=class_label,
-                        conditioning_sigma=sigma_max,
-                        num_samples=1,
-                        device=self.device
-                    )
-                    trajectory_acts = None  # No trajectory for single-step
-                    intermediate_imgs = None  # No intermediates for single-step
-                    noised_inputs = None  # No noised inputs for single-step
+                finally:
+                    masker.remove_hooks()
 
-                # Clean up masker hooks
-                masker.remove_hooks()
+            # Unpack results: (images, labels, [trajectory], [intermediates], [noised_inputs])
+            images = result[0]
+            trajectory_acts = []
+            intermediate_imgs = []
+            noised_inputs = []
+            idx = 2  # Start after images, labels
+            if can_project:
+                trajectory_acts = result[idx] if len(result) > idx else []
+                idx += 1
+            intermediate_imgs = result[idx] if len(result) > idx else []
+            idx += 1
+            noised_inputs = result[idx] if len(result) > idx else []
 
-                print("Image generated successfully")
+            # Compute sigma schedule used during this generation (store with results)
+            rho = 7.0
+            sigmas = []
+            for i in range(int(n_steps)):
+                ramp = i / max(int(n_steps) - 1, 1)
+                min_inv_rho = float(s_min) ** (1 / rho)
+                max_inv_rho = float(s_max) ** (1 / rho)
+                sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+                sigmas.append(sigma)
 
-                # Project trajectory through UMAP and save intermediate images
-                trajectory_coords = []
-                if trajectory_acts is not None and len(trajectory_acts) > 0:
-                    # Create directory for intermediate images
-                    intermediate_dir = self.data_dir / "images" / "intermediates"
-                    intermediate_dir.mkdir(parents=True, exist_ok=True)
+            # Project trajectory through UMAP
+            traj_coords = []
+            if trajectory_acts and model_data.umap_reducer:
+                for i, act in enumerate(trajectory_acts):
+                    try:
+                        # Scale if scaler exists
+                        if model_data.umap_scaler is not None:
+                            act = model_data.umap_scaler.transform(act)
+                        # Project to 2D
+                        coords = model_data.umap_reducer.transform(act)
+                        sigma = sigmas[i] if i < len(sigmas) else 0.0
+                        traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
+                    except Exception as e:
+                        print(f"[Trajectory] Failed to project step {i}: {e}")
 
-                    # Compute sigma schedule for this trajectory
-                    sigmas = get_denoising_sigmas(
-                        num_steps, sigma_max, sigma_min
-                    ).cpu().numpy()
+            # Append new trajectory to existing list
+            all_trajectories = list(existing_traj)
+            if traj_coords:
+                all_trajectories.append(traj_coords)
 
-                    # Only do UMAP projection if reducer is available
-                    if self.umap_reducer is not None:
-                        print(f"[GEN] Projecting {len(trajectory_acts)} trajectory points through UMAP...")
-
-                        for step_idx, act in enumerate(trajectory_acts):
-                            # Apply scaler if used during UMAP training
-                            act_scaled = act
-                            if self.umap_scaler is not None:
-                                act_scaled = self.umap_scaler.transform(act)
-                            # Project to 2D
-                            coords = self.umap_reducer.transform(act_scaled)
-
-                            # Save intermediate image (denoised output) if available
-                            img_path = None
-                            if intermediate_imgs is not None and step_idx < len(intermediate_imgs):
-                                img_filename = f"sample_{len(self.df):06d}_step{step_idx}.png"
-                                img_path = f"images/intermediates/{img_filename}"
-                                full_path = self.data_dir / img_path
-                                Image.fromarray(intermediate_imgs[step_idx][0].numpy()).save(full_path)
-
-                            # Save noised input image if available
-                            noised_path = None
-                            if noised_inputs is not None and step_idx < len(noised_inputs):
-                                noised_filename = f"sample_{len(self.df):06d}_step{step_idx}_noised.png"
-                                noised_path = f"images/intermediates/{noised_filename}"
-                                full_noised_path = self.data_dir / noised_path
-                                Image.fromarray(noised_inputs[step_idx][0].numpy()).save(full_noised_path)
-
-                            # Get sigma for this step
-                            step_sigma = float(sigmas[step_idx]) if step_idx < len(sigmas) else None
-
-                            trajectory_coords.append({
-                                'step': step_idx,
-                                'sigma': step_sigma,
-                                'x': float(coords[0, 0]),
-                                'y': float(coords[0, 1]),
-                                'image_path': img_path,
-                                'noised_path': noised_path
-                            })
-                        print(f"[GEN] Trajectory: {[(t['step'], round(t['sigma'], 3), round(t['x'], 3), round(t['y'], 3)) for t in trajectory_coords]}")
-                    else:
-                        # No UMAP reducer - just save intermediate images without trajectory
-                        print(f"[GEN] Saving {len(trajectory_acts)} intermediate images (no UMAP projection)")
-                        for step_idx in range(len(trajectory_acts)):
-                            if intermediate_imgs is not None and step_idx < len(intermediate_imgs):
-                                img_filename = f"sample_{len(self.df):06d}_step{step_idx}.png"
-                                img_path = f"images/intermediates/{img_filename}"
-                                full_path = self.data_dir / img_path
-                                Image.fromarray(intermediate_imgs[step_idx][0].numpy()).save(full_path)
-
-                            # Save noised input image if available
-                            if noised_inputs is not None and step_idx < len(noised_inputs):
-                                noised_filename = f"sample_{len(self.df):06d}_step{step_idx}_noised.png"
-                                noised_path = f"images/intermediates/{noised_filename}"
-                                full_noised_path = self.data_dir / noised_path
-                                Image.fromarray(noised_inputs[step_idx][0].numpy()).save(full_noised_path)
-
-                # Save the generated sample
-                model_type = self.umap_params.get('model', 'imagenet')
-                next_sample_id = f"sample_{len(self.df):06d}_generated"
-
-                metadata = {
-                    'sample_id': next_sample_id,
-                    'class_label': int(labels[0]),
-                    'model': model_type,
-                    'generated_from_neighbors': all_neighbors,
-                    'neighbor_center_umap': center_2d.tolist()[0],
-                    'trajectory': trajectory_coords
-                }
-
-                sample_record = save_generated_sample(
-                    images[0],
-                    {},  # Activations captured via trajectory, not needed here
-                    metadata,
-                    self.data_dir,
-                    next_sample_id
-                )
-
-                # Use final trajectory point as actual position, or center_2d if no trajectory
-                if trajectory_coords:
-                    final_x = trajectory_coords[-1]['x']
-                    final_y = trajectory_coords[-1]['y']
-                else:
-                    final_x = center_2d[0, 0]
-                    final_y = center_2d[0, 1]
-
-                # Add to dataframe with actual UMAP coordinates
-                new_row = pd.DataFrame([{
-                    'sample_id': next_sample_id,
-                    'image_path': sample_record['image_path'],
-                    'class_label': int(labels[0]),
-                    'umap_x': final_x,
-                    'umap_y': final_y,
-                    'is_generated': True
-                }])
-
-                # Store trajectory for visualization
-                if not hasattr(self, 'generated_trajectories'):
-                    self.generated_trajectories = []
-                self.generated_trajectories.append({
-                    'sample_id': next_sample_id,
-                    'intended_x': float(center_2d[0, 0]),
-                    'intended_y': float(center_2d[0, 1]),
-                    'trajectory': trajectory_coords
-                })
-                # Mark existing points as not generated if column doesn't exist
-                if 'is_generated' not in self.df.columns:
-                    self.df['is_generated'] = False
-                self.df = pd.concat([self.df, new_row], ignore_index=True)
-
-                # Append center_activation to activations so generated samples can be re-used
-                self.activations = np.vstack([self.activations, center_activation])
-
-                # Refit nearest neighbors
-                self.fit_nearest_neighbors()
-
-                # Regenerate entire plot with new point included
-                new_idx = len(self.df) - 1
-
-                # Determine color column
-                if 'class_label' in self.df.columns:
-                    color_col = 'class_label'
-                    hover_data = ['class_label']
-                else:
-                    color_col = None
-                    hover_data = []
-
-                # Create figure with all points
-                fig = px.scatter(
-                    self.df,
-                    x='umap_x',
-                    y='umap_y',
-                    color=color_col,
-                    hover_data=hover_data + ['sample_id'],
-                    title="Activation UMAP",
-                    labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
-                )
-
-                fig.update_traces(marker=dict(size=5, opacity=0.7))
-
-                # Add trajectory traces for generated samples
-                if hasattr(self, 'generated_trajectories') and self.generated_trajectories:
-                    for traj_data in self.generated_trajectories:
-                        sample_id = traj_data['sample_id']
-                        intended_x = traj_data['intended_x']
-                        intended_y = traj_data['intended_y']
-                        trajectory = traj_data.get('trajectory', [])
-
-                        if trajectory:
-                            # Build path: intended point -> step 0 -> step 1 -> ... -> final
-                            path_x = [intended_x] + [t['x'] for t in trajectory]
-                            path_y = [intended_y] + [t['y'] for t in trajectory]
-                            # Include sigma in step labels if available
-                            step_labels = []
-                            for t in trajectory:
-                                if t.get('sigma') is not None:
-                                    step_labels.append(f"step {t['step']}, σ={t['sigma']:.3f}")
-                                else:
-                                    step_labels.append(f"step {t['step']}")
-                            steps = ['intended'] + step_labels
-                            # Image paths: None for intended, then step images
-                            img_paths = [None] + [t.get('image_path') for t in trajectory]
-                            # Noised input paths: None for intended, then noised images
-                            noised_paths = [None] + [t.get('noised_path') for t in trajectory]
-
-                            # Add trajectory line (dotted)
-                            fig.add_trace(go.Scatter(
-                                x=path_x,
-                                y=path_y,
-                                mode='lines+markers',
-                                line=dict(color='rgba(0, 180, 0, 0.7)', width=3, dash='dot'),
-                                marker=dict(size=8, color='rgba(0, 180, 0, 0.8)'),
-                                name=f'Trajectory: {sample_id}',
-                                text=steps,
-                                customdata=[[sample_id, step, img, noised] for step, img, noised in zip(steps, img_paths, noised_paths)],
-                                hovertemplate=f'{sample_id}<br>%{{text}}<br>(%{{x:.3f}}, %{{y:.3f}})<extra></extra>',
-                                showlegend=False
-                            ))
-
-                            # Add hollow circle at intended point
-                            fig.add_trace(go.Scatter(
-                                x=[intended_x],
-                                y=[intended_y],
-                                mode='markers',
-                                marker=dict(
-                                    size=10,
-                                    color='rgba(255,255,255,0)',
-                                    line=dict(width=2, color='#00CC00')
-                                ),
-                                name='Intended',
-                                customdata=[[sample_id, 'intended', None, None]],  # Match trajectory format
-                                hovertemplate=f'{sample_id}<br>intended<br>(%{{x:.3f}}, %{{y:.3f}})<extra></extra>',
-                                showlegend=False
-                            ))
-
-                # Add bright overlay for generated points
-                is_generated_col = self.df.get('is_generated', pd.Series([False] * len(self.df)))
-                generated_df = self.df[is_generated_col]
-
-                if len(generated_df) > 0:
-                    # Get actual dataframe indices for generated samples
-                    generated_indices = generated_df.index.tolist()
-
-                    # Add bright green circles with black border as overlay
-                    fig.add_trace(go.Scatter(
-                        x=generated_df['umap_x'],
-                        y=generated_df['umap_y'],
-                        mode='markers',
-                        marker=dict(
-                            size=12,
-                            color='#00FF00',  # Bright green
-                            line=dict(width=2, color='#000000')  # Black border
-                        ),
-                        name='Generated',
-                        text=generated_df['sample_id'],
-                        customdata=[[idx] for idx in generated_indices],  # Store real df indices as list of lists
-                        hovertemplate='<b>GENERATED: %{text}</b><extra></extra>',
-                        showlegend=True
-                    ))
-
-                # Add class highlight if active
-                self.add_class_highlight_trace(fig, highlighted_class)
-
-                fig.update_layout(
-                    hovermode='closest',
-                    template='plotly_white'
-                )
-
-                success_msg = f"✓ Generated image saved as {next_sample_id}"
-                return success_msg, fig, new_idx, mask_steps, sigma_max, sigma_min
-
-            except Exception as e:
-                import traceback
-                error_msg = f"Error: {str(e)}"
-                print(error_msg)
-                print(traceback.format_exc())
-                return error_msg, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-        # Clear Generated callback
-        @self.app.callback(
-            Output("umap-scatter", "figure", allow_duplicate=True),
-            Output("generation-status", "children", allow_duplicate=True),
-            Output("selected-point-store", "data", allow_duplicate=True),
-            Output("manual-neighbors-store", "data", allow_duplicate=True),
-            Output("neighbor-indices-store", "data", allow_duplicate=True),
-            Output("selected-image", "children", allow_duplicate=True),
-            Output("selected-details", "children", allow_duplicate=True),
-            Input("clear-generated-btn", "n_clicks"),
-            State("umap-scatter", "figure"),
-            prevent_initial_call=True
-        )
-        def clear_generated(n_clicks, current_fig):
-            if not n_clicks:
-                return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-            # Remove generated samples from dataframe and activations
-            if 'is_generated' in self.df.columns:
-                # Count original (non-generated) samples to trim activations
-                n_original = (~self.df['is_generated']).sum()
-                self.df = self.df[~self.df['is_generated']].reset_index(drop=True)
-                # Trim activations to match (generated were appended at end)
-                if self.activations is not None and len(self.activations) > n_original:
-                    self.activations = self.activations[:n_original]
-
-            # Clear stored trajectories
-            if hasattr(self, 'generated_trajectories'):
-                self.generated_trajectories = []
-
-            # Refit nearest neighbors
-            self.fit_nearest_neighbors()
-
-            # Regenerate plot without generated points/trajectories
-            color_col = 'class_label' if 'class_label' in self.df.columns else None
-            hover_data = ['class_label'] if 'class_label' in self.df.columns else []
-
-            fig = px.scatter(
-                self.df,
-                x='umap_x',
-                y='umap_y',
-                color=color_col,
-                hover_data=hover_data + ['sample_id'],
-                title="Activation UMAP",
-                labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2'}
+            # Build updated plot with all trajectories
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                manual_neighbors=man_n or [],
+                knn_neighbors=knn_n or [],
+                highlighted_class=high_class,
+                trajectory=all_trajectories if all_trajectories else None,
             )
-            fig.update_traces(marker=dict(size=5, opacity=0.7))
-            fig.update_layout(hovermode='closest', template='plotly_white')
 
-            # Reset selection state
-            empty_selection_img = html.Div("Click a point to select", className="text-muted")
-            empty_selection_details = html.Div("No sample selected", className="text-muted small")
+            # Convert to numpy for gr.Image
+            gen_img_raw = images[0].numpy()
+            class_name = visualizer.get_class_name(class_label) if class_label else "random"
+            n_traj = len(all_trajectories) if all_trajectories else 0
+            n_steps = len(intermediate_imgs)
 
-            return (fig, "Generated samples cleared",
-                    None, [], None,  # selected-point, manual-neighbors, knn-neighbors
-                    empty_selection_img, empty_selection_details)
+            # Create composite for final image (output + last noised input as inset)
+            if noised_inputs and len(noised_inputs) > 0:
+                last_noised = noised_inputs[-1][0].numpy()
+                gen_img = GradioVisualizer.create_composite_image(gen_img_raw, last_noised)
+            else:
+                gen_img = gen_img_raw
 
-    def run(self, debug: bool = False, port: int = 8050):
-        """Run the Dash app."""
-        print(f"\nStarting DMD2 Visualizer on http://localhost:{port}")
-        self.app.run(debug=debug, port=port)
+            # Build generation info for frame display
+            gen_info = {
+                "class_id": class_label,
+                "class_name": class_name,
+                "n_traj": n_traj,
+                "n_steps": n_steps,
+            }
+
+            # Status shows final result info
+            traj_info = f" | {n_traj} traj" if n_traj else ""
+            status = f"Class {class_label}: {class_name}{traj_info} | Final"
+
+            # Build intermediate gallery and state: list of (image, sigma) tuples
+            # Each step shows denoised output with noised input as inset
+            step_gallery = []
+            intermediates_state = []  # For trajectory hover
+            for i, step_img in enumerate(intermediate_imgs):
+                sigma = sigmas[i] if i < len(sigmas) else 0.0
+                img_np = step_img[0].numpy()
+
+                # Create composite with noised input inset if available
+                if noised_inputs and i < len(noised_inputs):
+                    noised_np = noised_inputs[i][0].numpy()
+                    composite_img = GradioVisualizer.create_composite_image(img_np, noised_np)
+                else:
+                    composite_img = img_np
+
+                caption = f"{class_label}: {class_name} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                step_gallery.append((composite_img, caption))
+                intermediates_state.append((composite_img, sigma))
+
+            # Gallery label (shown when nothing selected)
+            gallery_label = f"{class_label}: {class_name} | {n_steps} steps"
+            gallery_update = gr.update(value=step_gallery, label=gallery_label)
+
+            return gen_img, gallery_update, status, fig, all_trajectories, intermediates_state, gen_info
+
+        generate_btn.click(
+            on_generate,
+            inputs=[
+                selected_idx, manual_neighbors, knn_neighbors,
+                num_steps_slider, mask_steps_slider, guidance_slider,
+                sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords, current_model,
+            ],
+            outputs=[
+                generated_image, intermediate_gallery, gen_status,
+                umap_plot, trajectory_coords, intermediate_images,
+                generation_info
+            ],
+        )
+
+        # --- Clear generated button ---
+        def on_clear_generated(sel_idx, man_n, knn_n, high_class, model_name):
+            """Clear generated image, intermediates, and trajectory."""
+            fig = visualizer.create_umap_figure(
+                model_name,
+                selected_idx=sel_idx,
+                manual_neighbors=man_n or [],
+                knn_neighbors=knn_n or [],
+                highlighted_class=high_class,
+            )
+            gallery_update = gr.update(value=[], label="Denoising Steps")
+            return None, gallery_update, "Select neighbors, then generate", fig, [], [], -1, None
+
+        clear_gen_btn.click(
+            on_clear_generated,
+            inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class, current_model],
+            outputs=[
+                generated_image, intermediate_gallery, gen_status,
+                umap_plot, trajectory_coords, intermediate_images,
+                animation_frame, generation_info
+            ],
+        )
+
+        # --- Frame navigation for intermediate images ---
+        def format_frame_info(gen_info, frame_idx, n_frames, sigma):
+            """Format frame info string with class, step, sigma (compact)."""
+            if not gen_info:
+                return f"Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+
+            class_id = gen_info.get("class_id", "?")
+            class_name = gen_info.get("class_name", "")
+
+            return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+
+        def on_next_frame(intermediates, current_frame, gen_info):
+            """Show next intermediate frame."""
+            if not intermediates:
+                return gr.update(), -1, gr.update()
+
+            n_frames = len(intermediates)
+            # If at final (-1), go to first frame; otherwise advance
+            if current_frame == -1:
+                new_frame = 0
+            else:
+                new_frame = (current_frame + 1) % n_frames
+
+            img, sigma = intermediates[new_frame]
+            label = format_frame_info(gen_info, new_frame, n_frames, sigma)
+            return img, new_frame, gr.update(label=label)
+
+        def on_prev_frame(intermediates, current_frame, gen_info):
+            """Show previous intermediate frame."""
+            if not intermediates:
+                return gr.update(), -1, gr.update()
+
+            n_frames = len(intermediates)
+            # If at final (-1) or first, go to last frame; otherwise go back
+            if current_frame <= 0:
+                new_frame = n_frames - 1
+            else:
+                new_frame = current_frame - 1
+
+            img, sigma = intermediates[new_frame]
+            label = format_frame_info(gen_info, new_frame, n_frames, sigma)
+            return img, new_frame, gr.update(label=label)
+
+        next_frame_btn.click(
+            on_next_frame,
+            inputs=[intermediate_images, animation_frame, generation_info],
+            outputs=[generated_image, animation_frame, intermediate_gallery],
+        )
+
+        prev_frame_btn.click(
+            on_prev_frame,
+            inputs=[intermediate_images, animation_frame, generation_info],
+            outputs=[generated_image, animation_frame, intermediate_gallery],
+        )
+
+        # Clicking gallery item shows it in main image
+        def on_gallery_select(evt: gr.SelectData, intermediates, gen_info):
+            """Show selected gallery item in main generated image."""
+            if not intermediates or evt.index >= len(intermediates):
+                return gr.update(), -1, gr.update()
+
+            img, sigma = intermediates[evt.index]
+            n_frames = len(intermediates)
+            label = format_frame_info(gen_info, evt.index, n_frames, sigma)
+            return img, evt.index, gr.update(label=label)
+
+        intermediate_gallery.select(
+            on_gallery_select,
+            inputs=[intermediate_images, generation_info],
+            outputs=[generated_image, animation_frame, intermediate_gallery],
+        )
+
+    return app
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Diffusion Activation Visualizer"
-    )
-    parser.add_argument(
-        "--data_dir",
-        type=str,
-        default="data",
-        help="Root data directory"
-    )
-    parser.add_argument(
-        "--embeddings",
-        type=str,
-        default=None,
-        help="Path to precomputed embeddings CSV (optional)"
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8050,
-        help="Port to run server on"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Run in debug mode"
-    )
-    parser.add_argument(
-        "--checkpoint_path",
-        type=str,
-        default=None,
-        help="Path to DMD2 checkpoint for generation (optional)"
-    )
+    parser = argparse.ArgumentParser(description="Gradio Diffusion Activation Visualizer")
+    parser.add_argument("--data-dir", type=str, default="data", help="Root data directory")
+    parser.add_argument("--embeddings", type=str, default=None, help="Path to embeddings CSV")
+    parser.add_argument("--port", type=int, default=7860, help="Port to run server on")
+    parser.add_argument("--share", action="store_true", help="Create public share link")
     parser.add_argument(
         "--device",
         type=str,
         default=None,
         choices=["cuda", "mps", "cpu"],
-        help="Device for generation (auto-detected if not specified)"
+        help="Device (auto-detected if not specified)",
     )
-    parser.add_argument(
-        "--num_steps",
-        type=int,
-        default=5,
-        help="Number of denoising steps (1=single-step, 4/10=multi-step)"
-    )
-    parser.add_argument(
-        "--guidance_scale",
-        type=float,
-        default=1.0,
-        help="CFG scale (0=uncond, 1=class, >1=amplify, <0=anti-class)"
-    )
-    parser.add_argument(
-        "--sigma_max",
-        type=float,
-        default=80.0,
-        help="Maximum sigma for denoising schedule"
-    )
-    parser.add_argument(
-        "--sigma_min",
-        type=float,
-        default=0.5,
-        help="Minimum sigma for denoising schedule"
-    )
-    parser.add_argument(
-        "--label_dropout",
-        type=float,
-        default=0.0,
-        help="Label dropout (use 0.1 for CFG-trained models, including ~imagenet499.5k~ )"
-    )
-    parser.add_argument(
-        "--mask_steps",
-        type=int,
-        default=1,
-        help="Steps to apply activation mask (default=1, first-step-only)"
-    )
-    parser.add_argument(
-        "--adapter",
-        type=str,
-        default="dmd2-imagenet-64",
-        help="Adapter name for model loading"
-    )
-    parser.add_argument(
-        "--umap_n_neighbors",
-        type=int,
-        default=15,
-        help="UMAP n_neighbors parameter"
-    )
-    parser.add_argument(
-        "--umap_min_dist",
-        type=float,
-        default=0.1,
-        help="UMAP min_dist parameter"
-    )
-    parser.add_argument(
-        "--max_classes",
-        "-c",
-        type=int,
-        default=None,
-        help="Maximum classes to load (default: all)"
-    )
-    parser.add_argument(
-        "--model",
-        "-m",
-        type=str,
-        default=None,
-        help="Initial model to load (e.g., dmd2, edm)"
-    )
+    parser.add_argument("--num-steps", type=int, default=5, help="Number of denoising steps")
+    parser.add_argument("--mask-steps", type=int, default=1, help="Steps to apply mask")
+    parser.add_argument("--guidance-scale", type=float, default=1.0, help="CFG scale")
+    parser.add_argument("--sigma-max", type=float, default=80.0, help="Maximum sigma")
+    parser.add_argument("--sigma-min", type=float, default=0.5, help="Minimum sigma")
+    parser.add_argument("--max-classes", "-c", type=int, default=None, help="Max classes to load")
+    parser.add_argument("--model", "-m", type=str, default=None, help="Initial model to load")
     args = parser.parse_args()
 
-    visualizer = DMD2Visualizer(
+    visualizer = GradioVisualizer(
         data_dir=args.data_dir,
         embeddings_path=args.embeddings,
-        checkpoint_path=args.checkpoint_path,
         device=get_device(args.device),
         num_steps=args.num_steps,
         mask_steps=args.mask_steps,
         guidance_scale=args.guidance_scale,
         sigma_max=args.sigma_max,
         sigma_min=args.sigma_min,
-        label_dropout=args.label_dropout,
-        adapter_name=args.adapter,
-        umap_n_neighbors=args.umap_n_neighbors,
-        umap_min_dist=args.umap_min_dist,
         max_classes=args.max_classes,
-        initial_model=args.model
+        initial_model=args.model,
     )
 
-    visualizer.run(debug=args.debug, port=args.port)
+    app = create_gradio_app(visualizer)
+    app.queue(max_size=20).launch(
+        server_name="0.0.0.0",
+        server_port=args.port,
+        share=args.share,
+    )
 
 
 if __name__ == "__main__":

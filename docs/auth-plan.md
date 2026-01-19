@@ -629,7 +629,7 @@ def on_generate(..., profile: gr.OAuthProfile | None):
 | File | Purpose |
 |------|---------|
 | `diffviews/scripts/cli.py` | Add auth CLI flags, launch params |
-| `diffviews/visualization/gradio_app.py` | Add persistence calls, UI elements |
+| `diffviews/visualization/app.py` | Add persistence calls, UI elements |
 | `diffviews/persistence/` (new) | Database, models, repositories, storage |
 | `pyproject.toml` | Add optional persistence dependencies |
 | `tests/test_persistence.py` (new) | Unit tests for persistence |

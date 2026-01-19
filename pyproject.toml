@@ -38,11 +38,6 @@ dependencies = [
 
 [project.optional-dependencies]
 viz = [
-    "dash>=2.14.0",
-    "dash-bootstrap-components>=1.5.0",
-    "plotly>=5.18.0",
-]
-gradio = [
     "gradio>=4.0.0",
     "plotly>=5.18.0",
 ]
@@ -56,7 +51,7 @@ dev = [
     "ruff>=0.1.0",
 ]
 all = [
-    "diffviews[viz,gradio,lmdb,dev]",
+    "diffviews[viz,lmdb,dev]",
 ]
 
 [project.urls]

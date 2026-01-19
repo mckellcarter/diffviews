@@ -1,15 +1,13 @@
-# Continuation Prompt for Gradio Port
+# Continuation Prompt for DiffViews Visualizer
 
 ---
 
-I'm continuing a Gradio port of a Dash visualization app.
-
 Repo: diffviews
-Branch: feature/gradio-port-phase4-polish
+Branch: main (Gradio-only, Dash removed)
 
-**Phase 4 COMPLETE: Polish Features + Multi-User Thread Safety**
+**Status: Gradio visualizer complete, ready for deployment**
 
-Start by reading @diffviews/visualization/gradio_app.py
+Start by reading @diffviews/visualization/app.py
 
 ---
 
@@ -30,7 +28,7 @@ Start by reading @diffviews/visualization/gradio_app.py
 - **Gallery captions** show full generation info (class ID, class name, step, sigma)
 - **Composite images** with noised input inset in upper-left corner
 - **Download button** on generated image (Gradio built-in, hidden on intermediate gallery)
-- **CLI command** `diffviews viz-gradio` (alongside `diffviews viz` for Dash)
+- **CLI command** `diffviews viz` (Gradio-only)
 - **CSS styling** compact layouts, vh-based sizing, smooth image scaling
 - **Multi-user thread safety** (see Thread Safety section below)
 
@@ -159,27 +157,26 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 
 ## Current State
 
-- `gradio_app.py` (~2200 lines) with Plotly + generation + hover + intermediates + thread safety
+- `app.py` (~2200 lines) with Plotly + generation + hover + intermediates + thread safety
 - 33 Gradio tests + 24 generator tests (57 total)
 - Phase 4 complete, ready for deployment
 
 **Key files:**
-- `diffviews/visualization/gradio_app.py` - main Gradio app
-- `diffviews/visualization/app.py` - Dash app (legacy)
-- `diffviews/scripts/cli.py` - CLI with `viz-gradio` command
+- `diffviews/visualization/app.py` - main Gradio app
+- `diffviews/scripts/cli.py` - CLI with `viz` command
 - `diffviews/core/generator.py` - generation functions
-- `tests/test_gradio_visualizer.py` - gradio tests
-- `tests/test_generator.py` - generator tests (includes gradio generation tests)
+- `tests/test_gradio_visualizer.py` - visualizer tests
+- `tests/test_generator.py` - generator tests
 
 ```bash
 # Run tests
 python -m pytest tests/test_gradio_visualizer.py tests/test_generator.py -v
 
 # Run via CLI (recommended)
-diffviews viz-gradio --data-dir data
+diffviews viz --data-dir data
 
 # Run directly
-python -m diffviews.visualization.gradio_app --data-dir data
+python -m diffviews.visualization.app --data-dir data
 ```
 
 ---
