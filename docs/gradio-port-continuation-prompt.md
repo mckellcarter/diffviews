@@ -7,7 +7,7 @@ I'm continuing a Gradio port of a Dash visualization app.
 Repo: diffviews
 Branch: feature/gradio-port-phase4-polish
 
-**Phase 4 NEARLY COMPLETE: Polish Features**
+**Phase 4 COMPLETE: Polish Features + Multi-User Thread Safety**
 
 Start by reading @diffviews/visualization/gradio_app.py
 
@@ -32,6 +32,7 @@ Start by reading @diffviews/visualization/gradio_app.py
 - **Download button** on generated image (Gradio built-in, hidden on intermediate gallery)
 - **CLI command** `diffviews viz-gradio` (alongside `diffviews viz` for Dash)
 - **CSS styling** compact layouts, vh-based sizing, smooth image scaling
+- **Multi-user thread safety** (see Thread Safety section below)
 
 ## Hover Preview Implementation
 
@@ -87,14 +88,34 @@ Start by reading @diffviews/visualization/gradio_app.py
 - `animation_frame = gr.State(value=-1)` - current frame (-1 = final)
 - `generation_info = gr.State(value=None)` - `{class_id, class_name, n_traj, n_steps}`
 
-## Remaining Phase 4 Items
+## Thread Safety (Multi-User Support)
+
+**Architecture:**
+- `ModelData` dataclass holds all per-model data (df, activations, nn_model, umap_reducer, adapter)
+- All models preloaded at init into `model_data` dict - **read-only after init**
+- No mutable `current_model` on visualizer - model selection is per-session via `gr.State`
+- All methods take `model_name` as first parameter
+- All event handlers receive `current_model` from gr.State
+
+**Verified behaviors:**
+- Sessions in different browser tabs maintain independent state
+- Model switch in one tab doesn't affect another tab
+- Selection, neighbors, trajectories isolated per-session
+- Generation uses correct model per-session
+
+**Key classes/methods:**
+- `ModelData` (dataclass, lines 29-56)
+- `_load_all_models()` - preloads all models at init
+- `get_model(model_name)` - returns ModelData or None
+- `is_valid_model(model_name)` - validation helper
+- `current_model = gr.State(value=visualizer.default_model)` in app
+
+## Remaining Items
 
 Deployment & production:
 1. Add authentication option for deployment
-2. Configure queue settings for concurrent users
-3. Test multi-user scenarios
-4. Add deployment documentation (HuggingFace Spaces, Modal)
-5. Performance optimization for large datasets
+2. Add deployment documentation (HuggingFace Spaces, Modal)
+3. Performance optimization for large datasets
 
 ---
 
@@ -131,9 +152,9 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 
 ## Current State
 
-- `gradio_app.py` (~2100 lines) with Plotly + generation + hover + intermediates
-- 30 Gradio tests + 24 generator tests (54 total)
-- Phase 4 nearly complete
+- `gradio_app.py` (~2200 lines) with Plotly + generation + hover + intermediates + thread safety
+- 33 Gradio tests + 24 generator tests (57 total)
+- Phase 4 complete, ready for deployment
 
 **Key files:**
 - `diffviews/visualization/gradio_app.py` - main Gradio app
@@ -164,8 +185,10 @@ python -m diffviews.visualization.gradio_app --data-dir data
 3. `prepare_activation_dict()` splits back by layer using same sorted order
 4. Each layer activation reshaped to `(1, C, H, W)` for masking
 
-**Key methods:**
-- `load_adapter()`: Lazy loads checkpoint, caches layer shapes
-- `prepare_activation_dict(neighbor_indices)`: Averages neighbors, splits by layer
-- `on_generate()`: Combines neighbors, creates masker, generates image, extracts trajectory
-- `create_umap_figure(..., trajectory=)`: Renders denoising path on plot
+**Key methods (all take model_name as first param):**
+- `load_adapter(model_name)`: Lazy loads checkpoint, caches layer shapes in model_data
+- `prepare_activation_dict(model_name, neighbor_indices)`: Averages neighbors, splits by layer
+- `on_generate(..., model_name)`: Combines neighbors, creates masker, generates image, extracts trajectory
+- `create_umap_figure(model_name, ..., trajectory=)`: Renders denoising path on plot
+- `find_knn_neighbors(model_name, idx, k)`: KNN search using model's nn_model
+- `get_image(model_name, path)`: Load image from model's data_dir

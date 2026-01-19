@@ -7,8 +7,9 @@ import argparse
 import json
 import pickle
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 import numpy as np
@@ -25,8 +26,44 @@ from diffviews.core.masking import ActivationMasker, unflatten_activation
 from diffviews.core.generator import generate_with_mask_multistep
 
 
+@dataclass
+class ModelData:
+    """Per-model data container for thread-safe multi-user access.
+
+    All fields are populated during initialization and should be treated
+    as read-only afterward to ensure thread safety.
+    """
+    name: str
+    data_dir: Path
+    adapter_name: str
+    checkpoint_path: Optional[Path]
+    sigma_max: float
+    sigma_min: float
+    default_steps: int
+
+    # Loaded data
+    df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    activations: Optional[np.ndarray] = None
+    metadata_df: Optional[pd.DataFrame] = None
+    umap_reducer: Any = None
+    umap_scaler: Any = None
+    umap_params: Dict = field(default_factory=dict)
+    nn_model: Optional[NearestNeighbors] = None
+
+    # Lazy-loaded adapter (protected by lock in visualizer)
+    adapter: Any = None
+    layer_shapes: Dict[str, tuple] = field(default_factory=dict)
+
+
 class GradioVisualizer:
-    """Gradio-based visualizer with multi-user support."""
+    """Gradio-based visualizer with multi-user support.
+
+    Thread-safety model:
+    - model_data dict is populated at init, read-only afterward
+    - Each model's ModelData contains all model-specific state
+    - current_model selection is per-session via gr.State (not instance attr)
+    - Adapter loading protected by _generation_lock
+    """
 
     def __init__(
         self,
@@ -62,70 +99,46 @@ class GradioVisualizer:
             initial_model: Initial model to load
         """
         self.root_data_dir = Path(data_dir)
-        self.embeddings_path = embeddings_path
-        self.checkpoint_path = checkpoint_path
         self.device = device
-        self.num_steps = num_steps
         self.mask_steps = mask_steps
         self.guidance_scale = guidance_scale
-        self.sigma_max = sigma_max
-        self.sigma_min = sigma_min
         self.label_dropout = label_dropout
-        self.adapter_name = adapter_name
         self.max_classes = max_classes
 
-        # Shared state (read-only after init for thread safety)
-        self.model_configs: Dict[str, dict] = {}
-        self.current_model: Optional[str] = None
-        self.df: pd.DataFrame = pd.DataFrame()
-        self.activations: Optional[np.ndarray] = None
-        self.metadata_df: Optional[pd.DataFrame] = None
-        self.class_labels: Dict[int, str] = {}
-        self.umap_reducer = None
-        self.umap_scaler = None
-        self.umap_params: Dict = {}
-        self.layer_shapes: Dict[str, tuple] = {}
-        self.nn_model = None
+        # Fallback defaults (used if no model config overrides)
+        self._default_num_steps = num_steps
+        self._default_sigma_max = sigma_max
+        self._default_sigma_min = sigma_min
+        self._default_adapter_name = adapter_name
+        self._default_checkpoint_path = checkpoint_path
+        self._default_embeddings_path = embeddings_path
 
-        # Adapter with thread lock for generation
-        self.adapter = None
+        # Thread lock for adapter loading
         self._generation_lock = threading.Lock()
 
-        # Discover available models
-        self.discover_models()
-
-        # Set initial model
-        if initial_model and initial_model in self.model_configs:
-            self.current_model = initial_model
-        elif "dmd2" in self.model_configs:
-            self.current_model = "dmd2"
-        elif self.model_configs:
-            self.current_model = list(self.model_configs.keys())[0]
-
-        # Set data_dir to current model's directory
-        if self.current_model and self.current_model in self.model_configs:
-            config = self.model_configs[self.current_model]
-            self.data_dir = config["data_dir"]
-            self.adapter_name = config["adapter"]
-            if config.get("checkpoint"):
-                ckpt = Path(config["checkpoint"])
-                if not ckpt.is_absolute():
-                    candidate = config["data_dir"] / ckpt
-                    if candidate.exists():
-                        ckpt = candidate
-                self.checkpoint_path = ckpt
-            if self.embeddings_path is None and config.get("embeddings_path"):
-                self.embeddings_path = config["embeddings_path"]
-            self.sigma_max = config.get("sigma_max", self.sigma_max)
-            self.sigma_min = config.get("sigma_min", self.sigma_min)
-            self.num_steps = config.get("default_steps", self.num_steps)
-        else:
-            self.data_dir = self.root_data_dir
-
-        # Load class labels and data
+        # Shared class labels (typically same across models for ImageNet)
+        self.class_labels: Dict[int, str] = {}
         self.load_class_labels()
-        print(f"Data directory: {self.data_dir.absolute()}")
-        self.load_data()
+
+        # Discover and load all models (read-only after init)
+        self.model_configs: Dict[str, dict] = {}
+        self.model_data: Dict[str, ModelData] = {}
+        self.discover_models()
+        self._load_all_models()
+
+        # Determine default model (for initial UI state, not mutable)
+        if initial_model and initial_model in self.model_data:
+            self.default_model = initial_model
+        elif "dmd2" in self.model_data:
+            self.default_model = "dmd2"
+        elif self.model_data:
+            self.default_model = list(self.model_data.keys())[0]
+        else:
+            self.default_model = None
+
+        if self.default_model:
+            print(f"Default model: {self.default_model}")
+            print(f"Loaded {len(self.model_data[self.default_model].df)} samples")
 
     def discover_models(self):
         """Discover available models in the data directory."""
@@ -152,77 +165,149 @@ class GradioVisualizer:
                 }
                 print(f"Discovered model: {model_name} (adapter={config.get('adapter')})")
 
-    def switch_model(self, model_name: str) -> bool:
-        """Switch to a different model.
+    def _load_all_models(self):
+        """Load data for all discovered models into model_data dict.
 
-        Args:
-            model_name: Name of the model to switch to
-
-        Returns:
-            True if switch succeeded, False otherwise
+        This is called once during __init__ to preload all model data.
+        After this, model_data is read-only for thread safety.
         """
-        if model_name not in self.model_configs:
-            print(f"Warning: Model '{model_name}' not found in configs")
-            return False
+        for model_name, config in self.model_configs.items():
+            print(f"Loading model: {model_name}")
+            model_data = self._load_model_data(model_name, config)
+            if model_data is not None:
+                self.model_data[model_name] = model_data
 
-        config = self.model_configs[model_name]
-        print(f"Switching to model: {model_name}")
+    def _load_model_data(self, model_name: str, config: dict) -> Optional[ModelData]:
+        """Load all data for a single model into a ModelData instance."""
+        data_dir = config["data_dir"]
+        embeddings_path = config.get("embeddings_path")
 
-        # Reset model-specific state
-        self.adapter = None
-        self.layer_shapes = {}
-        self.umap_reducer = None
-        self.umap_scaler = None
-        self.nn_model = None
-        self.activations = None
-        self.metadata_df = None
-
-        # Update paths and config
-        self.current_model = model_name
-        self.data_dir = config["data_dir"]
-        self.adapter_name = config["adapter"]
+        # Resolve checkpoint path
+        checkpoint_path = None
         if config.get("checkpoint"):
             ckpt = Path(config["checkpoint"])
             if not ckpt.is_absolute():
-                for base in [config["data_dir"], self.root_data_dir, Path.cwd()]:
+                for base in [data_dir, self.root_data_dir, Path.cwd()]:
                     candidate = base / ckpt
                     if candidate.exists():
                         ckpt = candidate
                         break
-            self.checkpoint_path = ckpt
-        self.embeddings_path = config["embeddings_path"]
+            checkpoint_path = ckpt
 
-        # Apply model-specific defaults
-        self.sigma_max = config.get("sigma_max", 80.0)
-        self.sigma_min = config.get("sigma_min", 0.5)
-        self.num_steps = config.get("default_steps", 5)
+        # Create ModelData instance
+        model_data = ModelData(
+            name=model_name,
+            data_dir=data_dir,
+            adapter_name=config.get("adapter", self._default_adapter_name),
+            checkpoint_path=checkpoint_path,
+            sigma_max=config.get("sigma_max", self._default_sigma_max),
+            sigma_min=config.get("sigma_min", self._default_sigma_min),
+            default_steps=config.get("default_steps", self._default_num_steps),
+        )
 
-        # Reload data
-        self.load_data()
-        self.fit_nearest_neighbors()
+        # Load embeddings
+        if embeddings_path and Path(embeddings_path).exists():
+            print(f"  Loading embeddings from {embeddings_path}")
+            model_data.df = pd.read_csv(embeddings_path)
 
-        return True
+            # Load UMAP params
+            param_path = Path(embeddings_path).with_suffix(".json")
+            if param_path.exists():
+                with open(param_path, "r", encoding="utf-8") as f:
+                    model_data.umap_params = json.load(f)
 
-    def load_class_labels(self):
-        """Load ImageNet class labels."""
-        label_path = self.root_data_dir / "imagenet_standard_class_index.json"
-        if not label_path.exists():
-            label_path = self.data_dir / "imagenet_standard_class_index.json"
-        if not label_path.exists():
-            label_path = self.data_dir / "imagenet_class_labels.json"
-        if not label_path.exists():
-            label_path = (
-                Path(__file__).parent.parent / "data" / "imagenet_standard_class_index.json"
+            # Load UMAP model for inverse_transform (optional)
+            umap_model_path = Path(embeddings_path).with_suffix(".pkl")
+            if umap_model_path.exists():
+                print(f"  Loading UMAP model from {umap_model_path}")
+                with open(umap_model_path, "rb") as f:
+                    umap_data = pickle.load(f)
+                    model_data.umap_reducer = umap_data["reducer"]
+                    model_data.umap_scaler = umap_data["scaler"]
+
+            # Filter by max_classes if specified
+            if self.max_classes is not None and "class_label" in model_data.df.columns:
+                unique_classes = model_data.df["class_label"].unique()
+                if len(unique_classes) > self.max_classes:
+                    classes_to_keep = unique_classes[: self.max_classes]
+                    original_count = len(model_data.df)
+                    model_data.df = model_data.df[
+                        model_data.df["class_label"].isin(classes_to_keep)
+                    ].reset_index(drop=True)
+                    print(
+                        f"  Filtered to {self.max_classes} classes: "
+                        f"{original_count} -> {len(model_data.df)} samples"
+                    )
+
+            # Load activations for generation
+            model_data.activations, model_data.metadata_df = self._load_activations(
+                data_dir, "imagenet_real"
             )
 
-        if label_path.exists():
-            with open(label_path, "r", encoding="utf-8") as f:
-                raw_labels = json.load(f)
-                self.class_labels = {int(k): v[1] for k, v in raw_labels.items()}
-            print(f"Loaded {len(self.class_labels)} ImageNet class labels")
+            # Fit KNN model
+            self._fit_knn_model(model_data)
+
+            print(f"  Loaded {len(model_data.df)} samples")
         else:
-            print(f"Warning: Class labels not found at {label_path}")
-            self.class_labels = {}
+            print(f"  Warning: No embeddings found for {model_name}")
+            model_data.df = pd.DataFrame()
+
+        return model_data
+
+    def _load_activations(
+        self, data_dir: Path, model_type: str
+    ) -> Tuple[Optional[np.ndarray], Optional[pd.DataFrame]]:
+        """Load raw activations for generation."""
+        activation_dir = data_dir / "activations" / model_type
+        metadata_path = data_dir / "metadata" / model_type / "dataset_info.json"
+
+        if not activation_dir.exists():
+            print(f"  Warning: Activation dir not found: {activation_dir}")
+            return None, None
+
+        if not metadata_path.exists():
+            print(f"  Warning: No metadata found: {metadata_path}")
+            return None, None
+
+        activations, metadata_df = load_dataset_activations(activation_dir, metadata_path)
+        return activations, metadata_df
+
+    def _fit_knn_model(self, model_data: ModelData):
+        """Fit KNN model on UMAP coordinates for a model."""
+        if model_data.df.empty or "umap_x" not in model_data.df.columns:
+            return
+
+        umap_coords = model_data.df[["umap_x", "umap_y"]].values
+        print(f"  [KNN] Fitting on {umap_coords.shape[0]} points")
+        model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
+        model_data.nn_model.fit(umap_coords)
+
+    def get_model(self, model_name: str) -> Optional[ModelData]:
+        """Get ModelData for a model name, or None if not found."""
+        return self.model_data.get(model_name)
+
+    def is_valid_model(self, model_name: str) -> bool:
+        """Check if a model name is valid."""
+        return model_name in self.model_data
+
+    def load_class_labels(self):
+        """Load ImageNet class labels (shared across models)."""
+        search_paths = [
+            self.root_data_dir / "imagenet_standard_class_index.json",
+            self.root_data_dir / "imagenet_class_labels.json",
+            Path(__file__).parent.parent / "data" / "imagenet_standard_class_index.json",
+        ]
+
+        for label_path in search_paths:
+            if label_path.exists():
+                with open(label_path, "r", encoding="utf-8") as f:
+                    raw_labels = json.load(f)
+                    self.class_labels = {int(k): v[1] for k, v in raw_labels.items()}
+                print(f"Loaded {len(self.class_labels)} ImageNet class labels")
+                return
+
+        print("Warning: Class labels not found")
+        self.class_labels = {}
 
     def get_class_name(self, class_id: int) -> str:
         """Get human-readable class name for a class ID."""
@@ -230,93 +315,13 @@ class GradioVisualizer:
             return self.class_labels[class_id]
         return f"Unknown class {class_id}"
 
-    def load_data(self):
-        """Load embeddings and activations."""
-        if self.embeddings_path:
-            if not Path(self.embeddings_path).exists():
-                print(f"ERROR: Embeddings file not found: {self.embeddings_path}")
-                self.df = pd.DataFrame()
-                return
-            print(f"Loading embeddings from {self.embeddings_path}")
-            self.df = pd.read_csv(self.embeddings_path)
-
-            # Load UMAP params
-            param_path = Path(self.embeddings_path).with_suffix(".json")
-            if param_path.exists():
-                with open(param_path, "r", encoding="utf-8") as f:
-                    self.umap_params = json.load(f)
-            else:
-                self.umap_params = {}
-
-            # Load UMAP model for inverse_transform (optional)
-            model_path = Path(self.embeddings_path).with_suffix(".pkl")
-            if model_path.exists():
-                print(f"Loading UMAP model from {model_path}")
-                with open(model_path, "rb") as f:
-                    model_data = pickle.load(f)
-                    self.umap_reducer = model_data["reducer"]
-                    self.umap_scaler = model_data["scaler"]
-                print("UMAP model loaded")
-
-            # Filter by max_classes if specified
-            if self.max_classes is not None and "class_label" in self.df.columns:
-                unique_classes = self.df["class_label"].unique()
-                if len(unique_classes) > self.max_classes:
-                    classes_to_keep = unique_classes[: self.max_classes]
-                    original_count = len(self.df)
-                    self.df = self.df[self.df["class_label"].isin(classes_to_keep)].reset_index(
-                        drop=True
-                    )
-                    print(
-                        f"Filtered to {self.max_classes} classes: "
-                        f"{original_count} -> {len(self.df)} samples"
-                    )
-
-            # Load activations for generation
-            if self.activations is None:
-                self.activations, self.metadata_df = self.load_activations_for_model(
-                    "imagenet_real"
-                )
-
-            print(f"Loaded {len(self.df)} samples")
-        else:
-            print("No embeddings found.")
-            self.df = pd.DataFrame()
-
-    def load_activations_for_model(
-        self, model_type: str
-    ) -> Tuple[Optional[np.ndarray], Optional[pd.DataFrame]]:
-        """Load raw activations for generation."""
-        activation_dir = self.data_dir / "activations" / model_type
-        metadata_path = self.data_dir / "metadata" / model_type / "dataset_info.json"
-
-        if not activation_dir.exists():
-            print(f"Warning: Activation dir not found: {activation_dir}")
-            return None, None
-
-        if not metadata_path.exists():
-            print(f"Warning: No metadata found: {metadata_path}")
-            return None, None
-
-        activations, metadata_df = load_dataset_activations(activation_dir, metadata_path)
-        return activations, metadata_df
-
-    def fit_nearest_neighbors(self):
-        """Fit KNN model on UMAP coordinates."""
-        if self.df.empty or "umap_x" not in self.df.columns:
-            return
-
-        umap_coords = self.df[["umap_x", "umap_y"]].values
-        print(f"[KNN] Fitting on UMAP coordinates: {umap_coords.shape}")
-        self.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
-        self.nn_model.fit(umap_coords)
-
     def find_knn_neighbors(
-        self, idx: int, k: int = 5, exclude_selected: bool = True
+        self, model_name: str, idx: int, k: int = 5, exclude_selected: bool = True
     ) -> List[Tuple[int, float]]:
         """Find k nearest neighbors for a point.
 
         Args:
+            model_name: Name of the model to use
             idx: Index of the query point
             k: Number of neighbors to return
             exclude_selected: If True, exclude the query point from results
@@ -324,13 +329,16 @@ class GradioVisualizer:
         Returns:
             List of (neighbor_idx, distance) tuples sorted by distance
         """
-        if self.nn_model is None or idx >= len(self.df):
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.nn_model is None:
+            return []
+        if idx >= len(model_data.df):
             return []
 
         # Query k+1 since the point itself is included
         query_k = k + 1 if exclude_selected else k
-        query_point = self.df.iloc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
-        distances, indices = self.nn_model.kneighbors(query_point, n_neighbors=query_k)
+        query_point = model_data.df.iloc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
+        distances, indices = model_data.nn_model.kneighbors(query_point, n_neighbors=query_k)
 
         results = []
         for dist, neighbor_idx in zip(distances[0], indices[0]):
@@ -340,10 +348,18 @@ class GradioVisualizer:
 
         return results[:k]
 
-    def get_image(self, image_path: str) -> Optional[np.ndarray]:
-        """Load image as numpy array for gr.Image."""
+    def get_image(self, model_name: str, image_path: str) -> Optional[np.ndarray]:
+        """Load image as numpy array for gr.Image.
+
+        Args:
+            model_name: Name of the model (determines data directory)
+            image_path: Relative path to image within model's data directory
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return None
         try:
-            full_path = self.data_dir / image_path
+            full_path = model_data.data_dir / image_path
             return np.array(Image.open(full_path))
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
@@ -393,33 +409,46 @@ class GradioVisualizer:
 
         return np.array(main_pil)
 
-    def load_adapter(self):
-        """Lazily load the generation adapter."""
-        if self.adapter is not None:
-            return self.adapter
+    def load_adapter(self, model_name: str):
+        """Lazily load the generation adapter for a model.
 
-        if not self.checkpoint_path or not Path(self.checkpoint_path).exists():
-            print(f"Error: checkpoint not found at {self.checkpoint_path}")
+        Args:
+            model_name: Name of the model to load adapter for
+
+        Returns:
+            Loaded adapter or None if not found
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None:
             return None
 
-        print(f"Loading adapter: {self.adapter_name} from {self.checkpoint_path}")
-        AdapterClass = get_adapter(self.adapter_name)
-        self.adapter = AdapterClass.from_checkpoint(
-            self.checkpoint_path,
+        # Return cached adapter if already loaded
+        if model_data.adapter is not None:
+            return model_data.adapter
+
+        if not model_data.checkpoint_path or not Path(model_data.checkpoint_path).exists():
+            print(f"Error: checkpoint not found at {model_data.checkpoint_path}")
+            return None
+
+        print(f"Loading adapter: {model_data.adapter_name} from {model_data.checkpoint_path}")
+        AdapterClass = get_adapter(model_data.adapter_name)
+        model_data.adapter = AdapterClass.from_checkpoint(
+            model_data.checkpoint_path,
             device=self.device,
             label_dropout=self.label_dropout,
         )
         # Cache layer shapes
-        self.layer_shapes = self.adapter.get_layer_shapes()
-        print(f"Adapter loaded. Layers: {list(self.layer_shapes.keys())}")
-        return self.adapter
+        model_data.layer_shapes = model_data.adapter.get_layer_shapes()
+        print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
+        return model_data.adapter
 
     def prepare_activation_dict(
-        self, neighbor_indices: List[int]
+        self, model_name: str, neighbor_indices: List[int]
     ) -> Optional[Dict[str, "torch.Tensor"]]:
         """Prepare activation dict for masked generation.
 
         Args:
+            model_name: Name of the model to use
             neighbor_indices: List of indices to average activations from
 
         Returns:
@@ -427,29 +456,32 @@ class GradioVisualizer:
         """
         import torch
 
-        if self.activations is None or len(neighbor_indices) == 0:
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.activations is None:
+            return None
+        if len(neighbor_indices) == 0:
             return None
 
         # Get layers from UMAP params (must match order used during embedding)
-        layers = sorted(self.umap_params.get("layers", ["encoder_bottleneck", "midblock"]))
-        if not self.layer_shapes:
-            if self.adapter is None:
-                self.load_adapter()
-            if self.adapter is None:
+        layers = sorted(model_data.umap_params.get("layers", ["encoder_bottleneck", "midblock"]))
+        if not model_data.layer_shapes:
+            if model_data.adapter is None:
+                self.load_adapter(model_name)
+            if model_data.adapter is None:
                 return None
 
         # Average neighbor activations in high-D space
-        neighbor_acts = self.activations[neighbor_indices]  # (N, D)
+        neighbor_acts = model_data.activations[neighbor_indices]  # (N, D)
         center_activation = np.mean(neighbor_acts, axis=0, keepdims=True)  # (1, D)
 
         # Split into per-layer activations (MUST be sorted order!)
         activation_dict = {}
         offset = 0
         for layer_name in layers:
-            if layer_name not in self.layer_shapes:
+            if layer_name not in model_data.layer_shapes:
                 print(f"Warning: layer {layer_name} not in adapter shapes")
                 continue
-            shape = self.layer_shapes[layer_name]  # (C, H, W)
+            shape = model_data.layer_shapes[layer_name]  # (C, H, W)
             size = int(np.prod(shape))
             layer_act_flat = center_activation[0, offset : offset + size]
             layer_act = unflatten_activation(
@@ -462,19 +494,31 @@ class GradioVisualizer:
 
     def get_plot_dataframe(
         self,
+        model_name: str,
         selected_idx: Optional[int] = None,
         manual_neighbors: Optional[List[int]] = None,
         knn_neighbors: Optional[List[int]] = None,
         highlighted_class: Optional[int] = None,
     ) -> pd.DataFrame:
-        """Get DataFrame for ScatterPlot with highlight column."""
-        if self.df.empty:
+        """Get DataFrame for ScatterPlot with highlight column.
+
+        Args:
+            model_name: Name of the model to use
+            selected_idx: Index of selected point
+            manual_neighbors: List of manually selected neighbor indices
+            knn_neighbors: List of KNN neighbor indices
+            highlighted_class: Class ID to highlight
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
             return pd.DataFrame(columns=["umap_x", "umap_y", "highlight", "sample_id"])
 
+        df = model_data.df
+
         # Create copy with highlight column
-        plot_df = self.df[["umap_x", "umap_y", "sample_id"]].copy()
-        if "class_label" in self.df.columns:
-            plot_df["class_label"] = self.df["class_label"].astype(str)
+        plot_df = df[["umap_x", "umap_y", "sample_id"]].copy()
+        if "class_label" in df.columns:
+            plot_df["class_label"] = df["class_label"].astype(str)
 
         # Add highlight column for visual distinction
         plot_df["highlight"] = "normal"
@@ -483,8 +527,8 @@ class GradioVisualizer:
         knn_neighbors = knn_neighbors or []
 
         # Mark class highlights
-        if highlighted_class is not None and "class_label" in self.df.columns:
-            class_mask = self.df["class_label"] == highlighted_class
+        if highlighted_class is not None and "class_label" in df.columns:
+            class_mask = df["class_label"] == highlighted_class
             plot_df.loc[class_mask, "highlight"] = "class_highlight"
 
         # Mark neighbors
@@ -502,23 +546,37 @@ class GradioVisualizer:
 
         return plot_df
 
-    def get_class_options(self) -> List[Tuple[str, int]]:
-        """Get class options for dropdown."""
-        if self.df.empty or "class_label" not in self.df.columns:
+    def get_class_options(self, model_name: str) -> List[Tuple[str, int]]:
+        """Get class options for dropdown.
+
+        Args:
+            model_name: Name of the model to use
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
+            return []
+        if "class_label" not in model_data.df.columns:
             return []
 
-        unique_classes = self.df["class_label"].dropna().unique()
+        unique_classes = model_data.df["class_label"].dropna().unique()
         unique_classes = sorted([int(c) for c in unique_classes])
 
         return [(f"{c}: {self.get_class_name(c)}", c) for c in unique_classes]
 
-    def get_color_map(self) -> dict:
-        """Generate color map for class labels using plasma colormap."""
-        if self.df.empty or "class_label" not in self.df.columns:
+    def get_color_map(self, model_name: str) -> dict:
+        """Generate color map for class labels using plasma colormap.
+
+        Args:
+            model_name: Name of the model to use
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
+            return {}
+        if "class_label" not in model_data.df.columns:
             return {}
 
         import matplotlib.pyplot as plt
-        unique_classes = self.df["class_label"].dropna().unique()
+        unique_classes = model_data.df["class_label"].dropna().unique()
         unique_classes = sorted([int(c) for c in unique_classes])
 
         if not unique_classes:
@@ -536,6 +594,7 @@ class GradioVisualizer:
 
     def create_umap_figure(
         self,
+        model_name: str,
         selected_idx: Optional[int] = None,
         manual_neighbors: Optional[List[int]] = None,
         knn_neighbors: Optional[List[int]] = None,
@@ -545,6 +604,7 @@ class GradioVisualizer:
         """Create Plotly figure for UMAP scatter plot.
 
         Args:
+            model_name: Name of the model to use
             selected_idx: Index of currently selected point
             manual_neighbors: List of manually selected neighbor indices
             knn_neighbors: List of KNN neighbor indices
@@ -554,33 +614,35 @@ class GradioVisualizer:
         Returns:
             Plotly Figure object
         """
-        if self.df.empty:
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.df.empty:
             fig = go.Figure()
             fig.update_layout(title="No data loaded")
             return fig
 
+        df = model_data.df
         manual_neighbors = manual_neighbors or []
         knn_neighbors = knn_neighbors or []
 
         # Get color map for classes
-        color_map = self.get_color_map()
+        color_map = self.get_color_map(model_name)
 
         # Build customdata with df indices for click handling
-        customdata = list(range(len(self.df)))
+        customdata = list(range(len(df)))
 
         # Determine point colors based on class
-        if "class_label" in self.df.columns:
-            colors = [color_map.get(str(int(c)), "#888888") for c in self.df["class_label"]]
+        if "class_label" in df.columns:
+            colors = [color_map.get(str(int(c)), "#888888") for c in df["class_label"]]
         else:
-            colors = ["#1f77b4"] * len(self.df)
+            colors = ["#1f77b4"] * len(df)
 
         # Create main scatter trace
         fig = go.Figure()
 
         # Add main data points (use scattergl for better performance)
         fig.add_trace(go.Scattergl(
-            x=self.df["umap_x"].tolist(),
-            y=self.df["umap_y"].tolist(),
+            x=df["umap_x"].tolist(),
+            y=df["umap_y"].tolist(),
             mode="markers",
             marker=dict(
                 size=6,
@@ -593,13 +655,13 @@ class GradioVisualizer:
         ))
 
         # Highlight class if specified
-        if highlighted_class is not None and "class_label" in self.df.columns:
-            class_mask = self.df["class_label"] == highlighted_class
-            class_indices = self.df[class_mask].index.tolist()
+        if highlighted_class is not None and "class_label" in df.columns:
+            class_mask = df["class_label"] == highlighted_class
+            class_indices = df[class_mask].index.tolist()
             if class_indices:
                 fig.add_trace(go.Scattergl(
-                    x=self.df.loc[class_mask, "umap_x"].tolist(),
-                    y=self.df.loc[class_mask, "umap_y"].tolist(),
+                    x=df.loc[class_mask, "umap_x"].tolist(),
+                    y=df.loc[class_mask, "umap_y"].tolist(),
                     mode="markers",
                     marker=dict(size=10, color="yellow", line=dict(width=1, color="black")),
                     customdata=[int(i) for i in class_indices],
@@ -610,7 +672,7 @@ class GradioVisualizer:
 
         # Highlight KNN neighbors (green ring)
         if knn_neighbors:
-            knn_df = self.df.iloc[knn_neighbors]
+            knn_df = df.iloc[knn_neighbors]
             fig.add_trace(go.Scattergl(
                 x=knn_df["umap_x"].tolist(),
                 y=knn_df["umap_y"].tolist(),
@@ -624,7 +686,7 @@ class GradioVisualizer:
 
         # Highlight manual neighbors (blue ring)
         if manual_neighbors:
-            man_df = self.df.iloc[manual_neighbors]
+            man_df = df.iloc[manual_neighbors]
             fig.add_trace(go.Scattergl(
                 x=man_df["umap_x"].tolist(),
                 y=man_df["umap_y"].tolist(),
@@ -637,8 +699,8 @@ class GradioVisualizer:
             ))
 
         # Highlight selected point (red ring, highest priority)
-        if selected_idx is not None and selected_idx < len(self.df):
-            sel_row = self.df.iloc[selected_idx]
+        if selected_idx is not None and selected_idx < len(df):
+            sel_row = df.iloc[selected_idx]
             fig.add_trace(go.Scattergl(
                 x=[float(sel_row["umap_x"])],
                 y=[float(sel_row["umap_y"])],
@@ -726,7 +788,7 @@ class GradioVisualizer:
             showlegend=False,
             autosize=True,
             margin=dict(l=40, r=10, t=35, b=40),
-            uirevision=self.current_model,  # Preserve zoom/pan, reset on model switch
+            uirevision=model_name,  # Preserve zoom/pan, reset on model switch
         )
 
         return fig
@@ -1161,6 +1223,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     ) as app:
 
         # Per-session state
+        current_model = gr.State(value=visualizer.default_model)  # Model selection per session
         selected_idx = gr.State(value=None)
         manual_neighbors = gr.State(value=[])
         knn_neighbors = gr.State(value=[])
@@ -1170,6 +1233,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         intermediate_images = gr.State(value=[])  # [(img, sigma), ...] for trajectory hover/animation
         animation_frame = gr.State(value=-1)  # Current animation frame (-1 = showing final)
         generation_info = gr.State(value=None)  # {class_id, class_name, n_traj} for display
+
+        # Get initial model data for default values
+        default_model_data = visualizer.get_model(visualizer.default_model)
+        initial_sample_count = len(default_model_data.df) if default_model_data else 0
 
         gr.Markdown("# Diffusion Activation Visualizer")
 
@@ -1182,22 +1249,22 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     if len(visualizer.model_configs) > 1:
                         model_dropdown = gr.Dropdown(
                             choices=list(visualizer.model_configs.keys()),
-                            value=visualizer.current_model,
+                            value=visualizer.default_model,
                             show_label=False,
                             interactive=True,
                             elem_id="model-dropdown",
                         )
                     else:
                         model_dropdown = gr.Dropdown(
-                            choices=[visualizer.current_model] if visualizer.current_model else [],
-                            value=visualizer.current_model,
+                            choices=[visualizer.default_model] if visualizer.default_model else [],
+                            value=visualizer.default_model,
                             show_label=False,
                             visible=len(visualizer.model_configs) > 0,
                             elem_id="model-dropdown",
                         )
                 status_text = gr.Markdown(
-                    f"Showing {len(visualizer.df)} samples"
-                    + (f" ({visualizer.current_model})" if visualizer.current_model else ""),
+                    f"Showing {initial_sample_count} samples"
+                    + (f" ({visualizer.default_model})" if visualizer.default_model else ""),
                     elem_id="status-text"
                 )
                 model_status = gr.Markdown("", visible=False)
@@ -1216,7 +1283,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 with gr.Group():
                     gr.Markdown("### Class Filter")
                     class_dropdown = gr.Dropdown(
-                        choices=visualizer.get_class_options(),
+                        choices=visualizer.get_class_options(visualizer.default_model) if visualizer.default_model else [],
                         label="Select class",
                         interactive=True,
                     )
@@ -1249,7 +1316,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 )
                 # Use Plotly via gr.Plot for proper click handling
                 umap_plot = gr.Plot(
-                    value=visualizer.create_umap_figure(),
+                    value=visualizer.create_umap_figure(visualizer.default_model) if visualizer.default_model else None,
                     elem_id="umap-plot",
                     show_label=False,
                 )
@@ -1259,10 +1326,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 # Generation settings
                 with gr.Group(elem_id="gen-group"):
                     gr.Markdown("### Generation")
-                    # Parameters and buttons first
+                    # Parameters and buttons first (use model defaults)
+                    default_steps = default_model_data.default_steps if default_model_data else 5
+                    default_sigma_max = default_model_data.sigma_max if default_model_data else 80.0
+                    default_sigma_min = default_model_data.sigma_min if default_model_data else 0.5
                     with gr.Row(elem_id="gen-params-row"):
                         num_steps_slider = gr.Number(
-                            value=visualizer.num_steps, label="Steps",
+                            value=default_steps, label="Steps",
                             elem_id="num-steps", min_width=50, precision=0
                         )
                         mask_steps_slider = gr.Number(
@@ -1274,11 +1344,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             elem_id="guidance", min_width=50
                         )
                         sigma_max_input = gr.Number(
-                            value=visualizer.sigma_max, label="σ max",
+                            value=default_sigma_max, label="σ max",
                             elem_id="sigma-max", min_width=50
                         )
                         sigma_min_input = gr.Number(
-                            value=visualizer.sigma_min, label="σ min",
+                            value=default_sigma_min, label="σ min",
                             elem_id="sigma-min", min_width=50
                         )
                     generate_btn = gr.Button("Generate from Neighbors", variant="primary")
@@ -1328,13 +1398,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # --- Event Handlers ---
 
         def on_load():
-            """Initialize KNN model on load."""
-            if visualizer.nn_model is None and not visualizer.df.empty:
-                visualizer.fit_nearest_neighbors()
+            """No-op - KNN models are already fit during init."""
+            pass
 
-        def build_neighbor_gallery(sel_idx, man_n, knn_n, knn_dist):
+        def build_neighbor_gallery(model_name, sel_idx, man_n, knn_n, knn_dist):
             """Build neighbor gallery and info text."""
-            if sel_idx is None:
+            model_data = visualizer.get_model(model_name)
+            if sel_idx is None or model_data is None:
                 return [], "No neighbors selected"
 
             man_n = man_n or []
@@ -1353,9 +1423,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             images = []
             for idx in all_neighbors[:20]:
-                if idx < len(visualizer.df):
-                    sample = visualizer.df.iloc[idx]
-                    img = visualizer.get_image(sample["image_path"])
+                if idx < len(model_data.df):
+                    sample = model_data.df.iloc[idx]
+                    img = visualizer.get_image(model_name, sample["image_path"])
                     if img is not None:
                         if "class_label" in sample:
                             cls_id = int(sample["class_label"])
@@ -1380,7 +1450,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 info += ")"
             return images, info
 
-        def on_hover_data(hover_json, intermediates):
+        def on_hover_data(hover_json, intermediates, model_name):
             """Handle plot hover via JS bridge - update preview panel.
 
             Handles two types:
@@ -1417,16 +1487,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 return gr.update(), details
 
             # Sample hover - show dataset image
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
+                return gr.update(), gr.update()
+
             point_idx = hover_data.get("pointIndex")
             if point_idx is None:
                 return gr.update(), gr.update()
             point_idx = int(point_idx)
 
-            if point_idx < 0 or point_idx >= len(visualizer.df):
+            if point_idx < 0 or point_idx >= len(model_data.df):
                 return gr.update(), gr.update()
 
-            sample = visualizer.df.iloc[point_idx]
-            img = visualizer.get_image(sample["image_path"])
+            sample = model_data.df.iloc[point_idx]
+            img = visualizer.get_image(model_name, sample["image_path"])
 
             # Format details
             if "class_label" in sample:
@@ -1442,9 +1516,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             return img, details
 
-        def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class, traj):
+        def on_click_data(click_json, sel_idx, man_n, knn_n, knn_dist, high_class, traj, model_name):
             """Handle plot click via JS bridge - select point or toggle neighbor."""
             if not click_json:
+                return (gr.update(),) * 9
+
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
                 return (gr.update(),) * 9
 
             try:
@@ -1460,15 +1538,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             except (json.JSONDecodeError, TypeError, ValueError):
                 return (gr.update(),) * 9
 
-            if point_idx < 0 or point_idx >= len(visualizer.df):
+            if point_idx < 0 or point_idx >= len(model_data.df):
                 return (gr.update(),) * 9
 
             knn_dist = knn_dist or {}
 
             # First click: select this point
             if sel_idx is None:
-                sample = visualizer.df.iloc[point_idx]
-                img = visualizer.get_image(sample["image_path"])
+                sample = model_data.df.iloc[point_idx]
+                img = visualizer.get_image(model_name, sample["image_path"])
 
                 # Format details
                 if "class_label" in sample:
@@ -1484,6 +1562,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
                 # Build updated Plotly figure with selection (preserve trajectory)
                 fig = visualizer.create_umap_figure(
+                    model_name,
                     selected_idx=point_idx,
                     highlighted_class=high_class,
                     trajectory=traj if traj else None,
@@ -1524,6 +1603,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Rebuild Plotly figure with updated highlights (preserve trajectory)
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
@@ -1532,7 +1612,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
 
             # Build gallery for neighbors
-            gallery, info = build_neighbor_gallery(sel_idx, man_n, knn_n, knn_dist)
+            gallery, info = build_neighbor_gallery(model_name, sel_idx, man_n, knn_n, knn_dist)
 
             # Add limit notice if needed
             if at_limit:
@@ -1550,9 +1630,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 traj,          # trajectory_coords (preserved)
             )
 
-        def on_clear_selection(high_class, traj):
+        def on_clear_selection(high_class, traj, model_name):
             """Clear selection and neighbors (preserves trajectory, preview unchanged)."""
             fig = visualizer.create_umap_figure(
+                model_name,
                 highlighted_class=high_class,
                 trajectory=traj if traj else None,
             )
@@ -1568,9 +1649,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "No neighbors selected",   # neighbor_info
             )
 
-        def on_class_filter(class_value, sel_idx, man_n, knn_n, traj):
+        def on_class_filter(class_value, sel_idx, man_n, knn_n, traj, model_name):
             """Handle class filter selection (preserves trajectory)."""
+            model_data = visualizer.get_model(model_name)
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
@@ -1578,17 +1661,18 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 trajectory=traj if traj else None,
             )
 
-            if class_value is not None and "class_label" in visualizer.df.columns:
-                count = (visualizer.df["class_label"] == class_value).sum()
+            if class_value is not None and model_data and "class_label" in model_data.df.columns:
+                count = (model_data.df["class_label"] == class_value).sum()
                 status = f"{count} samples"
             else:
                 status = ""
 
             return fig, class_value, status
 
-        def on_clear_class(sel_idx, man_n, knn_n, traj):
+        def on_clear_class(sel_idx, man_n, knn_n, traj, model_name):
             """Clear class highlight (preserves trajectory)."""
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 manual_neighbors=man_n,
                 knn_neighbors=knn_n,
@@ -1596,22 +1680,27 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
             return fig, None, None, ""
 
-        def on_model_switch(model_name, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
-            """Handle model switching (resets all state including preview)."""
-            if model_name == visualizer.current_model:
-                return (gr.update(),) * 22
+        def on_model_switch(new_model_name, cur_model, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
+            """Handle model switching (resets all state including preview).
 
-            success = visualizer.switch_model(model_name)
-            if not success:
-                return (gr.update(),) * 22
+            Note: This now just updates the session's current_model state.
+            All model data is preloaded, so no shared state is modified.
+            """
+            if new_model_name == cur_model:
+                return (gr.update(),) * 23  # +1 for current_model state
 
-            fig = visualizer.create_umap_figure()
-            status = f"Showing {len(visualizer.df)} samples ({model_name})"
+            if not visualizer.is_valid_model(new_model_name):
+                return (gr.update(),) * 23
+
+            model_data = visualizer.get_model(new_model_name)
+            fig = visualizer.create_umap_figure(new_model_name)
+            status = f"Showing {len(model_data.df)} samples ({new_model_name})"
 
             return (
+                new_model_name,                    # current_model (session state)
                 fig,                               # umap_plot
                 status,                            # status_text
-                f"Switched to {model_name}",       # model_status
+                f"Switched to {new_model_name}",   # model_status
                 None,                              # selected_idx
                 [],                                # manual_neighbors
                 [],                                # knn_neighbors
@@ -1622,7 +1711,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "Hover over a point to preview",   # preview_details
                 None,                              # selected_image
                 "Click a point to select",         # selected_details
-                gr.update(choices=visualizer.get_class_options(), value=None),  # class_dropdown
+                gr.update(choices=visualizer.get_class_options(new_model_name), value=None),  # class_dropdown
                 None,                              # generated_image
                 gr.update(value=[], label="Denoising Steps"),  # intermediate_gallery
                 "Select neighbors, then generate", # gen_status
@@ -1640,7 +1729,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # Hover handling via JS bridge (updates preview panel)
         hover_data_box.input(
             on_hover_data,
-            inputs=[hover_data_box, intermediate_images],
+            inputs=[hover_data_box, intermediate_images, current_model],
             outputs=[preview_image, preview_details],
         )
 
@@ -1649,7 +1738,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             on_click_data,
             inputs=[
                 click_data_box, selected_idx, manual_neighbors,
-                knn_neighbors, knn_distances, highlighted_class, trajectory_coords
+                knn_neighbors, knn_distances, highlighted_class, trajectory_coords,
+                current_model
             ],
             outputs=[
                 selected_image,
@@ -1666,7 +1756,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         clear_selection_btn.click(
             on_clear_selection,
-            inputs=[highlighted_class, trajectory_coords],
+            inputs=[highlighted_class, trajectory_coords, current_model],
             outputs=[
                 selected_image,
                 selected_details,
@@ -1682,13 +1772,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         class_dropdown.change(
             on_class_filter,
-            inputs=[class_dropdown, selected_idx, manual_neighbors, knn_neighbors, trajectory_coords],
+            inputs=[class_dropdown, selected_idx, manual_neighbors, knn_neighbors, trajectory_coords, current_model],
             outputs=[umap_plot, highlighted_class, class_status],
         )
 
         clear_class_btn.click(
             on_clear_class,
-            inputs=[selected_idx, manual_neighbors, knn_neighbors, trajectory_coords],
+            inputs=[selected_idx, manual_neighbors, knn_neighbors, trajectory_coords, current_model],
             outputs=[umap_plot, highlighted_class, class_dropdown, class_status],
         )
 
@@ -1696,10 +1786,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             model_dropdown.change(
                 on_model_switch,
                 inputs=[
-                    model_dropdown, selected_idx, manual_neighbors,
+                    model_dropdown, current_model, selected_idx, manual_neighbors,
                     knn_neighbors, knn_distances, highlighted_class
                 ],
                 outputs=[
+                    current_model,
                     umap_plot,
                     status_text,
                     model_status,
@@ -1729,7 +1820,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # No need for state.change() listeners which can cause duplicate events
 
         # --- Suggest neighbors button ---
-        def on_suggest_neighbors(sel_idx, k_val, high_class, man_n, traj):
+        def on_suggest_neighbors(sel_idx, k_val, high_class, man_n, traj, model_name):
             """Auto-suggest K nearest neighbors (preserves trajectory)."""
             if sel_idx is None:
                 return gr.update(), [], {}, [], "Select a point first"
@@ -1740,7 +1831,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             k_val = min(k_val, 20)
 
             # Find KNN neighbors
-            neighbors = visualizer.find_knn_neighbors(sel_idx, k=k_val)
+            neighbors = visualizer.find_knn_neighbors(model_name, sel_idx, k=k_val)
             if not neighbors:
                 return gr.update(), [], {}, [], "No neighbors found"
 
@@ -1750,6 +1841,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Update plot (preserve trajectory)
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_idx,
@@ -1758,7 +1850,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             )
 
             # Build neighbor gallery
-            gallery, info = build_neighbor_gallery(sel_idx, man_n or [], knn_idx, knn_dist)
+            gallery, info = build_neighbor_gallery(model_name, sel_idx, man_n or [], knn_idx, knn_dist)
 
             # Add clamped notice if needed
             if clamped:
@@ -1768,14 +1860,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         suggest_btn.click(
             on_suggest_neighbors,
-            inputs=[selected_idx, knn_k_slider, highlighted_class, manual_neighbors, trajectory_coords],
+            inputs=[selected_idx, knn_k_slider, highlighted_class, manual_neighbors, trajectory_coords, current_model],
             outputs=[umap_plot, knn_neighbors, knn_distances, neighbor_gallery, neighbor_info],
         )
 
         # --- Clear neighbors button ---
-        def on_clear_neighbors(sel_idx, high_class, traj):
+        def on_clear_neighbors(sel_idx, high_class, traj, model_name):
             """Clear all neighbors (preserves trajectory)."""
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 highlighted_class=high_class,
                 trajectory=traj if traj else None,
@@ -1784,7 +1877,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         clear_neighbors_btn.click(
             on_clear_neighbors,
-            inputs=[selected_idx, highlighted_class, trajectory_coords],
+            inputs=[selected_idx, highlighted_class, trajectory_coords, current_model],
             outputs=[
                 umap_plot, manual_neighbors, knn_neighbors,
                 knn_distances, neighbor_gallery, neighbor_info
@@ -1793,10 +1886,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         # --- Generate button ---
         def on_generate(
-            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class, existing_traj
+            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class, existing_traj, model_name
         ):
             """Generate image from selected neighbors with trajectory visualization."""
             existing_traj = existing_traj or []
+
+            # Get model data
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
+                return None, gr.update(), "Model not loaded", gr.update(), existing_traj, [], None
 
             # Combine all neighbors
             all_neighbors = list(set((man_n or []) + (knn_n or [])))
@@ -1808,23 +1906,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Get class label from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
-            if "class_label" in visualizer.df.columns:
-                class_label = int(visualizer.df.iloc[ref_idx]["class_label"])
+            if "class_label" in model_data.df.columns:
+                class_label = int(model_data.df.iloc[ref_idx]["class_label"])
             else:
                 class_label = None
 
             # Get layers for trajectory extraction
-            extract_layers = sorted(visualizer.umap_params.get("layers", []))
-            can_project = visualizer.umap_reducer is not None and len(extract_layers) > 0
+            extract_layers = sorted(model_data.umap_params.get("layers", []))
+            can_project = model_data.umap_reducer is not None and len(extract_layers) > 0
 
             # Load adapter (lazy)
             with visualizer._generation_lock:
-                adapter = visualizer.load_adapter()
+                adapter = visualizer.load_adapter(model_name)
                 if adapter is None:
                     return None, gr.update(), "Checkpoint not found", gr.update(), [], [], None
 
                 # Prepare activation dict
-                activation_dict = visualizer.prepare_activation_dict(all_neighbors)
+                activation_dict = visualizer.prepare_activation_dict(model_name, all_neighbors)
                 if activation_dict is None:
                     return None, gr.update(), "Failed to prepare activations", gr.update(), [], [], None
 
@@ -1881,14 +1979,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Project trajectory through UMAP
             traj_coords = []
-            if trajectory_acts and visualizer.umap_reducer:
+            if trajectory_acts and model_data.umap_reducer:
                 for i, act in enumerate(trajectory_acts):
                     try:
                         # Scale if scaler exists
-                        if visualizer.umap_scaler is not None:
-                            act = visualizer.umap_scaler.transform(act)
+                        if model_data.umap_scaler is not None:
+                            act = model_data.umap_scaler.transform(act)
                         # Project to 2D
-                        coords = visualizer.umap_reducer.transform(act)
+                        coords = model_data.umap_reducer.transform(act)
                         sigma = sigmas[i] if i < len(sigmas) else 0.0
                         traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
                     except Exception as e:
@@ -1901,6 +1999,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Build updated plot with all trajectories
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_n or [],
@@ -1963,7 +2062,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             inputs=[
                 selected_idx, manual_neighbors, knn_neighbors,
                 num_steps_slider, mask_steps_slider, guidance_slider,
-                sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords,
+                sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords, current_model,
             ],
             outputs=[
                 generated_image, intermediate_gallery, gen_status,
@@ -1973,9 +2072,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         )
 
         # --- Clear generated button ---
-        def on_clear_generated(sel_idx, man_n, knn_n, high_class):
+        def on_clear_generated(sel_idx, man_n, knn_n, high_class, model_name):
             """Clear generated image, intermediates, and trajectory."""
             fig = visualizer.create_umap_figure(
+                model_name,
                 selected_idx=sel_idx,
                 manual_neighbors=man_n or [],
                 knn_neighbors=knn_n or [],
@@ -1986,7 +2086,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         clear_gen_btn.click(
             on_clear_generated,
-            inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class],
+            inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class, current_model],
             outputs=[
                 generated_image, intermediate_gallery, gen_status,
                 umap_plot, trajectory_coords, intermediate_images,

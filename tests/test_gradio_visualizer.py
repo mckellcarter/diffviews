@@ -5,7 +5,7 @@ Unit tests for diffviews.visualization.gradio_app
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -61,12 +61,12 @@ class TestGradioVisualizerInit:
             create_model_dir(root, "dmd2", "dmd2-imagenet-64")
             create_model_dir(root, "edm", "edm-imagenet-64")
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             assert 'dmd2' in viz.model_configs
             assert 'edm' in viz.model_configs
-            assert viz.current_model == 'dmd2'
+            assert viz.default_model == 'dmd2'
 
     def test_default_model_selection(self):
         """Test that dmd2 is selected as default when available."""
@@ -75,10 +75,10 @@ class TestGradioVisualizerInit:
             create_model_dir(root, "edm", "edm-imagenet-64")
             create_model_dir(root, "dmd2", "dmd2-imagenet-64")
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            assert viz.current_model == 'dmd2'
+            assert viz.default_model == 'dmd2'
 
     def test_initial_model_override(self):
         """Test that initial_model parameter works."""
@@ -87,10 +87,10 @@ class TestGradioVisualizerInit:
             create_model_dir(root, "dmd2", "dmd2-imagenet-64")
             create_model_dir(root, "edm", "edm-imagenet-64")
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root, initial_model="edm")
 
-            assert viz.current_model == 'edm'
+            assert viz.default_model == 'edm'
 
     def test_data_loading(self):
         """Test that embeddings are loaded correctly."""
@@ -98,69 +98,76 @@ class TestGradioVisualizerInit:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            assert len(viz.df) == 20
-            assert 'umap_x' in viz.df.columns
-            assert 'umap_y' in viz.df.columns
-            assert 'class_label' in viz.df.columns
+            model_data = viz.get_model(viz.default_model)
+            assert len(model_data.df) == 20
+            assert 'umap_x' in model_data.df.columns
+            assert 'umap_y' in model_data.df.columns
+            assert 'class_label' in model_data.df.columns
 
 
-class TestGradioVisualizerSwitchModel:
-    """Test model switching functionality."""
+class TestModelDataAccess:
+    """Test model data access patterns for thread safety."""
 
-    def test_switch_model_success(self):
-        """Test successful model switch."""
+    def test_get_model_valid(self):
+        """Test get_model returns model data for valid model."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
-            create_model_dir(root, "edm", "edm-imagenet-64", num_samples=15)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            assert viz.current_model == 'dmd2'
-            assert len(viz.df) == 10
+            model_data = viz.get_model("dmd2")
+            assert model_data is not None
+            assert model_data.name == "dmd2"
+            assert len(model_data.df) == 10
 
-            result = viz.switch_model('edm')
-
-            assert result is True
-            assert viz.current_model == 'edm'
-            assert len(viz.df) == 15
-
-    def test_switch_model_unknown_fails(self):
-        """Test that switching to unknown model fails."""
+    def test_get_model_invalid(self):
+        """Test get_model returns None for invalid model."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64")
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            result = viz.switch_model('unknown')
+            assert viz.get_model("unknown") is None
 
-            assert result is False
-            assert viz.current_model == 'dmd2'
-
-    def test_switch_model_resets_state(self):
-        """Test that model switch resets adapter state."""
+    def test_is_valid_model(self):
+        """Test is_valid_model checks correctly."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64")
             create_model_dir(root, "edm", "edm-imagenet-64")
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            # Set some state
-            viz.adapter = MagicMock()
-            viz.layer_shapes = {'test': (1, 2, 3)}
+            assert viz.is_valid_model("dmd2") is True
+            assert viz.is_valid_model("edm") is True
+            assert viz.is_valid_model("unknown") is False
 
-            viz.switch_model('edm')
+    def test_all_models_loaded_at_init(self):
+        """Test that all models are preloaded at init (thread-safe pattern)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+            create_model_dir(root, "edm", "edm-imagenet-64", num_samples=15)
 
-            assert viz.adapter is None
-            assert viz.layer_shapes == {}
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Both models should have their data loaded
+            dmd2_data = viz.get_model("dmd2")
+            edm_data = viz.get_model("edm")
+
+            assert dmd2_data is not None
+            assert edm_data is not None
+            assert len(dmd2_data.df) == 10
+            assert len(edm_data.df) == 15
 
 
 class TestGetPlotDataframe:
@@ -172,10 +179,10 @@ class TestGetPlotDataframe:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            plot_df = viz.get_plot_dataframe()
+            plot_df = viz.get_plot_dataframe("dmd2")
 
             assert len(plot_df) == 10
             assert 'umap_x' in plot_df.columns
@@ -189,10 +196,10 @@ class TestGetPlotDataframe:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            plot_df = viz.get_plot_dataframe(selected_idx=5)
+            plot_df = viz.get_plot_dataframe("dmd2", selected_idx=5)
 
             assert plot_df.loc[5, 'highlight'] == 'selected'
             assert sum(plot_df['highlight'] == 'selected') == 1
@@ -203,10 +210,11 @@ class TestGetPlotDataframe:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             plot_df = viz.get_plot_dataframe(
+                "dmd2",
                 selected_idx=0,
                 manual_neighbors=[1, 2],
                 knn_neighbors=[3, 4]
@@ -224,14 +232,15 @@ class TestGetPlotDataframe:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
+            model_data = viz.get_model("dmd2")
             # Get a class that exists in the data
-            target_class = viz.df['class_label'].iloc[0]
-            expected_count = (viz.df['class_label'] == target_class).sum()
+            target_class = model_data.df['class_label'].iloc[0]
+            expected_count = (model_data.df['class_label'] == target_class).sum()
 
-            plot_df = viz.get_plot_dataframe(highlighted_class=target_class)
+            plot_df = viz.get_plot_dataframe("dmd2", highlighted_class=target_class)
 
             highlighted_count = (plot_df['highlight'] == 'class_highlight').sum()
             assert highlighted_count == expected_count
@@ -246,10 +255,10 @@ class TestClassOptions:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            options = viz.get_class_options()
+            options = viz.get_class_options("dmd2")
 
             assert len(options) > 0
             # Options should be (label, value) tuples
@@ -261,10 +270,10 @@ class TestClassOptions:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=50)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            options = viz.get_class_options()
+            options = viz.get_class_options("dmd2")
             class_ids = [opt[1] for opt in options]
 
             assert class_ids == sorted(class_ids)
@@ -279,10 +288,10 @@ class TestGetImage:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            img = viz.get_image("images/imagenet_real/sample_000000.png")
+            img = viz.get_image("dmd2", "images/imagenet_real/sample_000000.png")
 
             assert img is not None
             assert isinstance(img, np.ndarray)
@@ -294,10 +303,10 @@ class TestGetImage:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            img = viz.get_image("images/nonexistent.png")
+            img = viz.get_image("dmd2", "images/nonexistent.png")
 
             assert img is None
 
@@ -311,7 +320,7 @@ class TestCreateGradioApp:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             app = create_gradio_app(viz)
@@ -328,7 +337,7 @@ class TestCreateGradioApp:
             create_model_dir(root, "dmd2", "dmd2-imagenet-64")
             create_model_dir(root, "edm", "edm-imagenet-64")
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             app = create_gradio_app(viz)
@@ -338,37 +347,20 @@ class TestCreateGradioApp:
 
 
 class TestNearestNeighbors:
-    """Test KNN fitting."""
+    """Test KNN functionality."""
 
-    def test_fit_nearest_neighbors(self):
-        """Test that KNN model is fitted."""
+    def test_knn_model_fitted_at_init(self):
+        """Test that KNN model is fitted during initialization."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=30)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            assert viz.nn_model is None
-
-            viz.fit_nearest_neighbors()
-
-            assert viz.nn_model is not None
-
-    def test_fit_nearest_neighbors_empty_df(self):
-        """Test that KNN fitting handles empty dataframe."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
-
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
-                viz = GradioVisualizer(data_dir=root)
-
-            viz.df = pd.DataFrame()
-            viz.fit_nearest_neighbors()
-
-            # Should not crash, nn_model stays None
-            assert viz.nn_model is None
+            model_data = viz.get_model("dmd2")
+            # KNN should be fitted automatically during init
+            assert model_data.nn_model is not None
 
     def test_find_knn_neighbors(self):
         """Test finding KNN neighbors returns distances."""
@@ -376,11 +368,10 @@ class TestNearestNeighbors:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=30)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.fit_nearest_neighbors()
-            neighbors = viz.find_knn_neighbors(0, k=5)
+            neighbors = viz.find_knn_neighbors("dmd2", 0, k=5)
 
             assert len(neighbors) == 5
             # Each neighbor is (idx, distance) tuple
@@ -396,26 +387,24 @@ class TestNearestNeighbors:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=30)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.fit_nearest_neighbors()
-            neighbors = viz.find_knn_neighbors(0, k=5)
+            neighbors = viz.find_knn_neighbors("dmd2", 0, k=5)
 
             distances = [dist for _, dist in neighbors]
             assert distances == sorted(distances)
 
-    def test_find_knn_neighbors_no_model(self):
-        """Test that find_knn_neighbors returns empty when no model fitted."""
+    def test_find_knn_neighbors_invalid_model(self):
+        """Test that find_knn_neighbors returns empty for invalid model."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            # Don't fit the model
-            neighbors = viz.find_knn_neighbors(0, k=5)
+            neighbors = viz.find_knn_neighbors("unknown", 0, k=5)
             assert neighbors == []
 
     def test_find_knn_neighbors_invalid_idx(self):
@@ -424,12 +413,11 @@ class TestNearestNeighbors:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.fit_nearest_neighbors()
             # Index out of range
-            neighbors = viz.find_knn_neighbors(999, k=5)
+            neighbors = viz.find_knn_neighbors("dmd2", 999, k=5)
             assert neighbors == []
 
 
@@ -442,10 +430,10 @@ class TestCreateUmapFigure:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            fig = viz.create_umap_figure()
+            fig = viz.create_umap_figure("dmd2")
 
             # Should be a Plotly Figure
             assert hasattr(fig, 'data')
@@ -461,10 +449,10 @@ class TestCreateUmapFigure:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            fig = viz.create_umap_figure(selected_idx=5)
+            fig = viz.create_umap_figure("dmd2", selected_idx=5)
 
             # Should have main trace + selection trace
             assert len(fig.data) >= 2
@@ -479,10 +467,11 @@ class TestCreateUmapFigure:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             fig = viz.create_umap_figure(
+                "dmd2",
                 selected_idx=0,
                 manual_neighbors=[1, 2],
                 knn_neighbors=[3, 4, 5]
@@ -494,17 +483,16 @@ class TestCreateUmapFigure:
             assert "manual_neighbors" in trace_names
             assert "knn_neighbors" in trace_names
 
-    def test_figure_empty_df(self):
-        """Test figure creation with empty dataframe."""
+    def test_figure_invalid_model(self):
+        """Test figure creation with invalid model returns empty figure."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.df = pd.DataFrame()
-            fig = viz.create_umap_figure()
+            fig = viz.create_umap_figure("unknown")
 
             # Should still return a figure, just with no data
             assert hasattr(fig, 'data')
@@ -516,10 +504,10 @@ class TestCreateUmapFigure:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            fig = viz.create_umap_figure()
+            fig = viz.create_umap_figure("dmd2")
 
             # Main trace should have customdata with indices
             main_trace = fig.data[0]
@@ -532,7 +520,7 @@ class TestCreateUmapFigure:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=20)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             # Sample trajectory with (x, y, sigma) tuples
@@ -544,6 +532,7 @@ class TestCreateUmapFigure:
             ]
 
             fig = viz.create_umap_figure(
+                "dmd2",
                 selected_idx=0,
                 trajectory=trajectory
             )
@@ -574,18 +563,67 @@ class TestCreateUmapFigure:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
             # Empty trajectory
-            fig = viz.create_umap_figure(trajectory=[])
+            fig = viz.create_umap_figure("dmd2", trajectory=[])
             trace_names = [t.name for t in fig.data]
             assert "trajectory_0" not in trace_names
 
             # Single point (needs at least 2 for a path)
-            fig = viz.create_umap_figure(trajectory=[(0.0, 0.0, 80.0)])
+            fig = viz.create_umap_figure("dmd2", trajectory=[(0.0, 0.0, 80.0)])
             trace_names = [t.name for t in fig.data]
             assert "trajectory_0" not in trace_names
+
+
+class TestMultiUserIsolation:
+    """Test multi-user thread safety patterns."""
+
+    def test_model_data_is_per_model(self):
+        """Test that each model has isolated data."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+            create_model_dir(root, "edm", "edm-imagenet-64", num_samples=15)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            dmd2_data = viz.get_model("dmd2")
+            edm_data = viz.get_model("edm")
+
+            # Each model should have its own dataframe
+            assert dmd2_data.df is not edm_data.df
+            assert len(dmd2_data.df) != len(edm_data.df)
+
+    def test_visualizer_has_no_current_model_attr(self):
+        """Test that visualizer doesn't have mutable current_model attribute."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Should not have current_model (that's session state now)
+            assert not hasattr(viz, 'current_model')
+            # Should have immutable default_model instead
+            assert hasattr(viz, 'default_model')
+
+    def test_methods_require_model_name(self):
+        """Test that key methods require model_name parameter."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # These methods should work with explicit model_name
+            assert viz.get_plot_dataframe("dmd2") is not None
+            assert viz.get_class_options("dmd2") is not None
+            assert viz.create_umap_figure("dmd2") is not None
 
 
 if __name__ == "__main__":

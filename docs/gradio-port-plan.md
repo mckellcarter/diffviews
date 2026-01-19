@@ -100,7 +100,7 @@ Key considerations:
 - Per-session state: Generated samples in `gr.State`, not shared DataFrame
 - UMAP reducer must be loaded (from .pkl file) for trajectory projection
 
-### Phase 4: Polish & Production (IN PROGRESS)
+### Phase 4: Polish & Production ✅ COMPLETE
 **Branch:** `feature/gradio-port-phase4-polish`
 
 Completed:
@@ -114,13 +114,22 @@ Completed:
 - [x] Hide download button on intermediate gallery (prevents caption overlap)
 - [x] Add `diffviews viz-gradio` CLI command (alongside existing `viz` for Dash)
 - [x] CSS styling (compact layouts, vh-based sizing, smooth image scaling)
+- [x] **Multi-user thread safety refactoring** (see below)
+- [x] Configure queue settings (`max_size=20`)
+- [x] Test multi-user scenarios (verified session isolation)
 
 TODO:
 - [ ] Add authentication option for deployment
-- [ ] Configure queue settings for concurrent users
-- [ ] Test multi-user scenarios
 - [ ] Add deployment documentation (HuggingFace Spaces, Modal)
 - [ ] Performance optimization for large datasets
+
+**Thread Safety Refactoring (completed):**
+- Added `ModelData` dataclass for per-model data isolation
+- All models preloaded at init into `model_data` dict (read-only after init)
+- Replaced mutable `current_model` with `gr.State` for per-session model selection
+- Updated all methods to accept `model_name` parameter
+- Updated all event handlers to pass `current_model` state
+- 33 tests including `TestMultiUserIsolation` class
 
 ## Architecture Decisions
 
@@ -153,10 +162,18 @@ plotDiv.on('plotly_unhover', () => clearTimeout(hoverTimeout));
 - Python handler updates `preview_image` and `preview_details` only
 - Keep click handler separate for selection
 
-### State Management
-- Per-session: `gr.State` for selected_idx, neighbors, highlighted_class
-- Shared: visualizer.df, visualizer.activations (read-only after init)
-- Thread-safe: `_generation_lock` for adapter access during generation
+### State Management (Thread-Safe Multi-User)
+- **Per-session** via `gr.State`:
+  - `current_model` - which model this session is using
+  - `selected_idx`, `manual_neighbors`, `knn_neighbors`, `knn_distances`
+  - `highlighted_class`, `trajectory_coords`
+  - `intermediate_images`, `animation_frame`, `generation_info`
+- **Shared read-only** (populated at init, never modified):
+  - `visualizer.model_data[model_name]` - ModelData instances with df, activations, nn_model, umap_reducer
+  - `visualizer.class_labels` - shared label mapping
+- **Thread-safe mutation**:
+  - `_generation_lock` protects lazy adapter loading
+  - Adapter stored per-model in `model_data[name].adapter`
 
 ### File Structure
 ```
