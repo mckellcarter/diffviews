@@ -79,19 +79,26 @@ def download_checkpoint(output_dir: Path, model: str) -> None:
 
 def ensure_data_ready(data_dir: Path, checkpoints: list) -> bool:
     """Ensure data and checkpoints are downloaded."""
-    # Check if data exists (look for config files)
-    has_data = any(
-        (data_dir / model / "config.json").exists()
-        for model in ["dmd2", "edm"]
-    )
+    print(f"Checking for existing data in {data_dir.absolute()}...")
 
-    if not has_data:
+    # Check which models have data (config + embeddings)
+    models_with_data = []
+    for model in ["dmd2", "edm"]:
+        config_path = data_dir / model / "config.json"
+        embeddings_dir = data_dir / model / "embeddings"
+        if config_path.exists() and embeddings_dir.exists():
+            csv_files = list(embeddings_dir.glob("*.csv"))
+            if csv_files:
+                models_with_data.append(model)
+                print(f"  Found {model}: {config_path}")
+
+    if not models_with_data:
         print("Data not found, downloading...")
         download_data(data_dir)
     else:
-        print(f"Data found in {data_dir}")
+        print(f"Data already present: {models_with_data}")
 
-    # Download checkpoints
+    # Download checkpoints only if not present
     for model in checkpoints:
         download_checkpoint(data_dir, model)
 
