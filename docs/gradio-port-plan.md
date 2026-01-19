@@ -118,10 +118,27 @@ Completed:
 - [x] Configure queue settings (`max_size=20`)
 - [x] Test multi-user scenarios (verified session isolation)
 
+### Phase 5: Public Demo (CURRENT)
+
+Focus: Minimal functional public deployment without auth
+
 TODO:
-- [ ] Add authentication option for deployment
-- [ ] Add deployment documentation (HuggingFace Spaces, Modal)
-- [ ] Performance optimization for large datasets
+- [ ] Add deployment documentation (HuggingFace Spaces)
+- [ ] Create `app.py` for HF Spaces (standard entry point)
+- [ ] Add `requirements.txt` for Spaces compatibility
+- [ ] Test on HF Spaces free tier
+- [ ] Performance optimization for large datasets (if needed)
+
+### Phase 6: Auth & Persistence (DEFERRED)
+
+**Plan:** See `docs/auth-plan.md` for comprehensive auth + persistence design
+
+Deferred items (implement when needed for private/enterprise deployments):
+- [ ] Basic auth CLI flags (`--auth`, `--auth-file`)
+- [ ] HuggingFace OAuth integration
+- [ ] User persistence layer (SQLite + file storage)
+- [ ] Generation history, saved workspaces
+- [ ] Usage logging/analytics
 
 **Thread Safety Refactoring (completed):**
 - Added `ModelData` dataclass for per-model data isolation
