@@ -479,7 +479,7 @@ class TestGradioVisualizerGeneration:
         """Test load_adapter returns None when checkpoint missing."""
         import tempfile
         import json
-        from diffviews.visualization.gradio_app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -505,7 +505,7 @@ class TestGradioVisualizerGeneration:
         """Test load_adapter returns None when checkpoint file doesn't exist."""
         import tempfile
         import json
-        from diffviews.visualization.gradio_app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -530,7 +530,7 @@ class TestGradioVisualizerGeneration:
         """Test prepare_activation_dict returns None when activations missing."""
         import tempfile
         import json
-        from diffviews.visualization.gradio_app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -556,7 +556,7 @@ class TestGradioVisualizerGeneration:
         import tempfile
         import json
         import numpy as np
-        from diffviews.visualization.gradio_app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -582,7 +582,7 @@ class TestGradioVisualizerGeneration:
         import tempfile
         import json
         import numpy as np
-        from diffviews.visualization.gradio_app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:

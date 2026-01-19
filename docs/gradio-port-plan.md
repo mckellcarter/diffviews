@@ -1,11 +1,13 @@
-# Gradio Port Implementation Plan
+# DiffViews Visualizer Implementation
 
 ## Overview
 
-Port the Dash visualization app (`diffviews/visualization/app.py`) to Gradio for:
-- Better multi-user support (built-in session state, queue)
-- Easier deployment (HuggingFace Spaces, Modal)
+Gradio-based diffusion activation visualizer with:
+- Multi-user support (built-in session state, queue)
+- Easy deployment (HuggingFace Spaces, Modal)
 - Future TransformerLens integration (Gradio has strong ML/interp community adoption)
+
+**Note:** Original Dash implementation archived at tag `dash-archive-2025-01`
 
 ## Branch Structure
 
@@ -26,7 +28,7 @@ main (production-ready Dash app)
 
 Completed:
 - [x] Add gradio dependency to pyproject.toml
-- [x] Create `gradio_app.py` with `GradioVisualizer` class
+- [x] Create `app.py` with `GradioVisualizer` class
 - [x] Port data loading and model discovery from Dash app
 - [x] Implement basic Blocks layout (3-column: sidebar, plot, controls)
 - [x] Add ScatterPlot with native click selection
@@ -37,7 +39,7 @@ Completed:
 - [x] Add comprehensive tests (19 tests in test_gradio_visualizer.py)
 
 Files created/modified:
-- `diffviews/visualization/gradio_app.py` (new, ~1400 lines)
+- `diffviews/visualization/app.py` (~2200 lines)
 - `tests/test_gradio_visualizer.py` (new, 30 tests)
 - `tests/test_generator.py` (24 tests including gradio generation)
 - `pyproject.toml` (added gradio optional dependency)

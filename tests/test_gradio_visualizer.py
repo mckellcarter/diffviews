@@ -1,5 +1,5 @@
 """
-Unit tests for diffviews.visualization.gradio_app
+Unit tests for diffviews.visualization.app
 """
 
 import json
@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diffviews.visualization.gradio_app import GradioVisualizer, create_gradio_app
+from diffviews.visualization.app import GradioVisualizer, create_gradio_app
 
 
 def create_model_dir(root: Path, model_name: str, adapter_name: str, num_samples: int = 10):

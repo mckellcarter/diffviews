@@ -4,8 +4,7 @@ CLI for diffviews package.
 Usage:
     diffviews download [--output-dir DIR] [--checkpoints all|dmd2|edm|none]
     diffviews convert <data_dir> [--model-type TYPE] [--keep-npz]
-    diffviews visualize [--data-dir DIR] [--port PORT] [--debug] [...]
-    diffviews viz-gradio [--data-dir DIR] [--port PORT] [--share] [...]
+    diffviews viz [--data-dir DIR] [--port PORT] [--share] [...]
 """
 
 import argparse
@@ -118,35 +117,9 @@ def convert_command(args):
 
 
 def visualize_command(args):
-    """Launch the Dash visualization app."""
-    from ..utils.device import get_device
-    from ..visualization.app import DMD2Visualizer
-
-    visualizer = DMD2Visualizer(
-        data_dir=args.data_dir,
-        embeddings_path=args.embeddings,
-        checkpoint_path=args.checkpoint_path,
-        device=get_device(args.device),
-        num_steps=args.num_steps,
-        mask_steps=args.mask_steps,
-        guidance_scale=args.guidance_scale,
-        sigma_max=args.sigma_max,
-        sigma_min=args.sigma_min,
-        label_dropout=args.label_dropout,
-        adapter_name=args.adapter,
-        umap_n_neighbors=args.umap_n_neighbors,
-        umap_min_dist=args.umap_min_dist,
-        max_classes=args.max_classes,
-        initial_model=args.model
-    )
-
-    visualizer.run(debug=args.debug, port=args.port)
-
-
-def visualize_gradio_command(args):
     """Launch the Gradio visualization app."""
     from ..utils.device import get_device
-    from ..visualization.gradio_app import GradioVisualizer, create_gradio_app
+    from ..visualization.app import GradioVisualizer, create_gradio_app
 
     visualizer = GradioVisualizer(
         data_dir=args.data_dir,
@@ -219,7 +192,7 @@ def main():
         help="Keep original .npz files after conversion"
     )
 
-    # Visualize subcommand
+    # Visualize subcommand (Gradio)
     viz_parser = subparsers.add_parser(
         "visualize",
         aliases=["viz"],
@@ -240,178 +213,70 @@ def main():
     viz_parser.add_argument(
         "--port",
         type=int,
-        default=8050,
-        help="Port to run server on"
-    )
-    viz_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Run in debug mode"
-    )
-    viz_parser.add_argument(
-        "--checkpoint-path",
-        type=str,
-        default=None,
-        help="Path to checkpoint for generation"
-    )
-    viz_parser.add_argument(
-        "--device",
-        type=str,
-        default=None,
-        choices=["cuda", "mps", "cpu"],
-        help="Device for generation (auto-detected if not specified)"
-    )
-    viz_parser.add_argument(
-        "--num-steps",
-        type=int,
-        default=5,
-        help="Number of denoising steps"
-    )
-    viz_parser.add_argument(
-        "--guidance-scale",
-        type=float,
-        default=1.0,
-        help="CFG scale"
-    )
-    viz_parser.add_argument(
-        "--sigma-max",
-        type=float,
-        default=80.0,
-        help="Maximum sigma for denoising"
-    )
-    viz_parser.add_argument(
-        "--sigma-min",
-        type=float,
-        default=0.5,
-        help="Minimum sigma for denoising"
-    )
-    viz_parser.add_argument(
-        "--label-dropout",
-        type=float,
-        default=0.0,
-        help="Label dropout for CFG models"
-    )
-    viz_parser.add_argument(
-        "--mask-steps",
-        type=int,
-        default=1,
-        help="Steps to apply activation mask"
-    )
-    viz_parser.add_argument(
-        "--adapter",
-        type=str,
-        default="dmd2-imagenet-64",
-        help="Adapter name for model loading"
-    )
-    viz_parser.add_argument(
-        "--umap-n-neighbors",
-        type=int,
-        default=15,
-        help="UMAP n_neighbors parameter"
-    )
-    viz_parser.add_argument(
-        "--umap-min-dist",
-        type=float,
-        default=0.1,
-        help="UMAP min_dist parameter"
-    )
-    viz_parser.add_argument(
-        "--max-classes", "-c",
-        type=int,
-        default=None,
-        help="Maximum classes to load"
-    )
-    viz_parser.add_argument(
-        "--model", "-m",
-        type=str,
-        default=None,
-        help="Initial model to load (e.g., dmd2, edm)"
-    )
-
-    # Gradio visualize subcommand
-    gradio_parser = subparsers.add_parser(
-        "viz-gradio",
-        help="Launch the Gradio visualization app"
-    )
-    gradio_parser.add_argument(
-        "--data-dir",
-        type=str,
-        default="data",
-        help="Root data directory"
-    )
-    gradio_parser.add_argument(
-        "--embeddings",
-        type=str,
-        default=None,
-        help="Path to precomputed embeddings CSV"
-    )
-    gradio_parser.add_argument(
-        "--port",
-        type=int,
         default=7860,
         help="Port to run server on (default: 7860)"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--share",
         action="store_true",
         help="Create public share link"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--checkpoint-path",
         type=str,
         default=None,
         help="Path to checkpoint for generation"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--device",
         type=str,
         default=None,
         choices=["cuda", "mps", "cpu"],
         help="Device for generation (auto-detected if not specified)"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--num-steps",
         type=int,
         default=5,
         help="Number of denoising steps"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--guidance-scale",
         type=float,
         default=1.0,
         help="CFG scale"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--sigma-max",
         type=float,
         default=80.0,
         help="Maximum sigma for denoising"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--sigma-min",
         type=float,
         default=0.5,
         help="Minimum sigma for denoising"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--mask-steps",
         type=int,
         default=1,
         help="Steps to apply activation mask"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--adapter",
         type=str,
         default="dmd2-imagenet-64",
         help="Adapter name for model loading"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--max-classes", "-c",
         type=int,
         default=None,
         help="Maximum classes to load"
     )
-    gradio_parser.add_argument(
+    viz_parser.add_argument(
         "--model", "-m",
         type=str,
         default=None,
@@ -430,8 +295,6 @@ def main():
         convert_command(args)
     elif args.command in ("visualize", "viz"):
         visualize_command(args)
-    elif args.command == "viz-gradio":
-        visualize_gradio_command(args)
 
 
 if __name__ == "__main__":
