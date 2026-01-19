@@ -1,4 +1,7 @@
 # DiffViews - HuggingFace Spaces Requirements
+# Install diffviews package from GitHub
+git+https://github.com/mckellcarter/diffviews.git
+
 # Core dependencies
 torch>=2.0.0
 numpy>=1.21.0
