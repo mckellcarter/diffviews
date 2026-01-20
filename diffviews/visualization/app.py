@@ -1132,12 +1132,22 @@ CUSTOM_CSS = """
     #center-column {
         display: flex !important;
         flex-direction: column !important;
+        flex: 1 !important;
     }
 
-    /* Plot container */
+    /* Plot container - expand to fill space */
     #umap-plot {
         min-height: 500px !important;
+        height: calc(100vh - 150px) !important;
         flex-grow: 1 !important;
+    }
+
+    /* Make Plotly fill its container */
+    #umap-plot > div,
+    #umap-plot .js-plotly-plot,
+    #umap-plot .plotly-graph-div {
+        height: 100% !important;
+        width: 100% !important;
     }
 
     /* Reduce group padding */

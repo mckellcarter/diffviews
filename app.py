@@ -81,6 +81,110 @@ def download_checkpoint(output_dir: Path, model: str) -> None:
         print("  Generation will be disabled without checkpoint")
 
 
+def regenerate_umap(data_dir: Path, model: str) -> bool:
+    """Regenerate UMAP pickle for a model to ensure numba compatibility.
+
+    This recomputes UMAP from activations and saves new pickle file.
+    Required when running on different environment than original pickle was created.
+    """
+    from diffviews.processing.umap import (
+        load_dataset_activations,
+        compute_umap,
+        save_embeddings,
+    )
+    import json
+
+    model_dir = data_dir / model
+    activation_dir = model_dir / "activations" / "imagenet_real"
+    metadata_path = model_dir / "metadata" / "imagenet_real" / "dataset_info.json"
+    embeddings_dir = model_dir / "embeddings"
+
+    # Check if activations exist
+    if not activation_dir.exists() or not metadata_path.exists():
+        print(f"  Skipping UMAP regeneration for {model}: missing activations")
+        return False
+
+    # Find existing embeddings CSV to get parameters
+    csv_files = list(embeddings_dir.glob("*.csv"))
+    if not csv_files:
+        print(f"  Skipping UMAP regeneration for {model}: no embeddings CSV")
+        return False
+
+    csv_path = csv_files[0]
+    json_path = csv_path.with_suffix(".json")
+    pkl_path = csv_path.with_suffix(".pkl")
+
+    # Load UMAP params from existing JSON
+    umap_params = {"n_neighbors": 15, "min_dist": 0.1, "layers": ["encoder_bottleneck", "midblock"]}
+    if json_path.exists():
+        with open(json_path, "r") as f:
+            umap_params = json.load(f)
+
+    print(f"  Regenerating UMAP for {model}...")
+    print(f"    Params: n_neighbors={umap_params.get('n_neighbors', 15)}, min_dist={umap_params.get('min_dist', 0.1)}")
+
+    try:
+        # Load activations
+        activations, metadata_df = load_dataset_activations(activation_dir, metadata_path)
+        print(f"    Loaded {activations.shape[0]} activations")
+
+        # Compute UMAP
+        embeddings, reducer, scaler = compute_umap(
+            activations,
+            n_neighbors=umap_params.get("n_neighbors", 15),
+            min_dist=umap_params.get("min_dist", 0.1),
+            normalize=True,
+        )
+
+        # Save (overwrites existing pickle with compatible version)
+        save_embeddings(embeddings, metadata_df, csv_path, umap_params, reducer, scaler)
+        print(f"    UMAP pickle regenerated: {pkl_path}")
+        return True
+
+    except Exception as e:
+        print(f"    Error regenerating UMAP: {e}")
+        return False
+
+
+def check_umap_compatibility(data_dir: Path, model: str) -> bool:
+    """Check if UMAP pickle is compatible with current numba environment."""
+    embeddings_dir = data_dir / model / "embeddings"
+    pkl_files = list(embeddings_dir.glob("*.pkl"))
+
+    if not pkl_files:
+        return True  # No pickle to check
+
+    pkl_path = pkl_files[0]
+
+    try:
+        import pickle
+        with open(pkl_path, "rb") as f:
+            umap_data = pickle.load(f)
+
+        reducer = umap_data.get("reducer")
+        if reducer is None:
+            return True
+
+        # Try a dummy transform to check numba compatibility
+        import numpy as np
+        dummy = np.random.randn(1, 100).astype(np.float32)
+
+        # This will fail if numba JIT is incompatible
+        scaler = umap_data.get("scaler")
+        if scaler:
+            dummy_scaled = scaler.transform(dummy)
+        else:
+            dummy_scaled = dummy
+
+        # The actual transform - this triggers numba JIT
+        _ = reducer.transform(dummy_scaled)
+        return True
+
+    except Exception as e:
+        print(f"  UMAP compatibility check failed for {model}: {e}")
+        return False
+
+
 def ensure_data_ready(data_dir: Path, checkpoints: list) -> bool:
     """Ensure data and checkpoints are downloaded."""
     print(f"Checking for existing data in {data_dir.absolute()}...")
@@ -113,6 +217,19 @@ def ensure_data_ready(data_dir: Path, checkpoints: list) -> bool:
     # Download checkpoints only if not present
     for model in checkpoints:
         download_checkpoint(data_dir, model)
+
+    # Check UMAP compatibility and regenerate if needed
+    print("\nChecking UMAP compatibility...")
+    for model in ["dmd2", "edm"]:
+        model_dir = data_dir / model
+        if not model_dir.exists():
+            continue
+
+        if not check_umap_compatibility(data_dir, model):
+            print(f"  {model}: UMAP incompatible, regenerating...")
+            regenerate_umap(data_dir, model)
+        else:
+            print(f"  {model}: UMAP compatible")
 
     return True
 
