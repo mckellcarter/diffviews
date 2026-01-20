@@ -15,19 +15,23 @@ from pathlib import Path
 
 # Monkey-patch gradio_client to handle additionalProperties: true
 # This fixes a bug where dict-typed State components cause schema errors
+# The bug is in _json_schema_to_python_type which recursively calls itself
+# with schema['additionalProperties'] which can be True (boolean)
 def _patch_gradio_client():
     try:
         import gradio_client.utils as client_utils
-        original_get_type = client_utils.get_type
 
-        def patched_get_type(schema):
+        # Get the original function
+        original_func = client_utils._json_schema_to_python_type
+
+        def patched_json_schema_to_python_type(schema, defs=None):
             # Handle case where schema is a boolean (additionalProperties: true)
             if isinstance(schema, bool):
                 return "Any"
-            return original_get_type(schema)
+            return original_func(schema, defs)
 
-        client_utils.get_type = patched_get_type
-        print("[Patch] Applied gradio_client schema fix")
+        client_utils._json_schema_to_python_type = patched_json_schema_to_python_type
+        print("[Patch] Applied gradio_client _json_schema_to_python_type fix")
     except Exception as e:
         print(f"[Patch] Could not patch gradio_client: {e}")
 
