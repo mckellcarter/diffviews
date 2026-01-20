@@ -784,7 +784,7 @@ class GradioVisualizer:
         x_pad = (x_max - x_min) * 0.05
         y_pad = (y_max - y_min) * 0.05
 
-        # Layout - explicit ranges prevent autorange on update
+        # Layout - explicit ranges and dragmode='pan' to prevent zoom jump issues
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
@@ -795,6 +795,7 @@ class GradioVisualizer:
             template="plotly_white",
             showlegend=False,
             autosize=True,
+            dragmode="pan",  # Pan instead of zoom to prevent jump on drag
             margin=dict(l=40, r=10, t=35, b=40),
             uirevision=model_name,  # Preserve zoom/pan, reset on model switch
         )
@@ -1128,16 +1129,42 @@ CUSTOM_CSS = """
         padding: 0.25rem !important;
     }
 
-    /* Center column stretches */
+    /* Center column stretches, prevents scroll jump */
     #center-column {
         display: flex !important;
         flex-direction: column !important;
+        flex: 1 !important;
+        scroll-behavior: auto !important;
     }
 
-    /* Plot container */
+    /* Plot container - expand to fill space, prevent scroll issues */
     #umap-plot {
         min-height: 500px !important;
+        height: calc(100vh - 150px) !important;
         flex-grow: 1 !important;
+        contain: layout style !important;
+    }
+
+    /* Make Plotly fill its container */
+    #umap-plot > div,
+    #umap-plot .js-plotly-plot,
+    #umap-plot .plotly-graph-div {
+        height: 100% !important;
+        width: 100% !important;
+    }
+
+    /* Hidden textboxes: prevent focus scroll */
+    #click-data-box,
+    #hover-data-box {
+        display: none !important;
+        position: absolute !important;
+        left: -9999px !important;
+        pointer-events: none !important;
+    }
+
+    #click-data-box *,
+    #hover-data-box * {
+        pointer-events: none !important;
     }
 
     /* Reduce group padding */
@@ -1171,11 +1198,6 @@ CUSTOM_CSS = """
     /* Gallery compact */
     .gr-gallery {
         margin: 0.25rem 0 !important;
-    }
-
-    /* Hide JS bridge elements */
-    #click-data-box, #hover-data-box {
-        display: none !important;
     }
 
     /* Reduce title size */
