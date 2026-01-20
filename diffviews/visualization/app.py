@@ -812,6 +812,46 @@ let hoverTimeout = null;
 let lastHoverKey = null;
 let initComplete = false;
 
+// Store axis ranges to restore after plot updates
+let savedAxisRanges = null;
+let pendingRangeRestore = false;
+
+function saveAxisRanges() {
+    const plotDiv = findPlotDiv();
+    if (!plotDiv || !plotDiv.layout) return;
+
+    const layout = plotDiv.layout;
+    if (layout.xaxis && layout.xaxis.range && layout.yaxis && layout.yaxis.range) {
+        savedAxisRanges = {
+            xaxis: [...layout.xaxis.range],
+            yaxis: [...layout.yaxis.range]
+        };
+        console.log('[Plotly] Saved axis ranges:', savedAxisRanges);
+    }
+}
+
+function restoreAxisRanges() {
+    if (!savedAxisRanges) return;
+
+    const plotDiv = findPlotDiv();
+    if (!plotDiv || !isPlotlyReady(plotDiv)) {
+        // Retry shortly
+        setTimeout(restoreAxisRanges, 100);
+        return;
+    }
+
+    console.log('[Plotly] Restoring axis ranges:', savedAxisRanges);
+    try {
+        Plotly.relayout(plotDiv, {
+            'xaxis.range': savedAxisRanges.xaxis,
+            'yaxis.range': savedAxisRanges.yaxis
+        });
+    } catch(e) {
+        console.log('[Plotly] Error restoring ranges:', e);
+    }
+    pendingRangeRestore = false;
+}
+
 function debugDOM() {
     console.log('[Plotly Debug] Looking for elements...');
     // Find all plotly-related elements
@@ -880,6 +920,11 @@ function sendHoverData(data) {
 
 function handlePlotlyClick(data) {
     if (!data || !data.points || data.points.length === 0) return;
+
+    // Save current axis ranges before triggering update
+    saveAxisRanges();
+    pendingRangeRestore = true;
+
     const point = data.points[0];
     const clickData = {
         pointIndex: point.customdata,
@@ -1069,6 +1114,11 @@ function setupObserver() {
                 // New nodes added - reset retry counter and check
                 attachRetries = 0;
                 setTimeout(attachPlotlyHandlers, 100);
+
+                // Restore axis ranges if we saved them before an update
+                if (pendingRangeRestore) {
+                    setTimeout(restoreAxisRanges, 200);
+                }
                 break;
             }
         }
@@ -1129,52 +1179,32 @@ CUSTOM_CSS = """
         padding: 0.25rem !important;
     }
 
-    /* Center column stretches, prevents scroll jump */
+    /* Center column stretches */
     #center-column {
         display: flex !important;
         flex-direction: column !important;
         flex: 1 !important;
-        scroll-behavior: auto !important;
     }
 
-    /* Plot container - expand to fill space, isolate from scroll issues */
+    /* Plot container - expand to fill space */
     #umap-plot {
         min-height: 500px !important;
         height: calc(100vh - 150px) !important;
         flex-grow: 1 !important;
-        contain: layout style !important;
-        isolation: isolate !important;
-        transform: translateZ(0) !important;
-        overscroll-behavior: contain !important;
     }
 
-    /* Make Plotly fill its container, create stacking context */
+    /* Make Plotly fill its container */
     #umap-plot > div,
     #umap-plot .js-plotly-plot,
     #umap-plot .plotly-graph-div {
         height: 100% !important;
         width: 100% !important;
-        transform: translateZ(0) !important;
-        backface-visibility: hidden !important;
     }
 
-    /* Modebar: prevent layout shifts on interaction */
-    #umap-plot .modebar-container {
-        transform: translateZ(0) !important;
-    }
-
-    /* Hidden textboxes: prevent focus scroll */
+    /* Hidden textboxes for JS bridge */
     #click-data-box,
     #hover-data-box {
         display: none !important;
-        position: absolute !important;
-        left: -9999px !important;
-        pointer-events: none !important;
-    }
-
-    #click-data-box *,
-    #hover-data-box * {
-        pointer-events: none !important;
     }
 
     /* Reduce group padding */
