@@ -964,15 +964,15 @@ CUSTOM_CSS = """
 
     /* Main row - fixed height to prevent iframe expansion issues */
     #main-row {
-        height: 800px !important;
-        max-height: 800px !important;
+        height: 1200px !important;
+        max-height: 1200px !important;
         align-items: stretch !important;
         flex-wrap: nowrap !important;
     }
 
     /* Sidebars: scrollable with fixed max height */
     #left-sidebar, #right-sidebar {
-        max-height: 800px !important;
+        max-height: 1200px !important;
         overflow-y: auto !important;
         padding: 0.25rem !important;
     }
@@ -982,13 +982,13 @@ CUSTOM_CSS = """
         display: flex !important;
         flex-direction: column !important;
         flex: 1 !important;
-        max-height: 800px !important;
+        max-height: 1200px !important;
     }
 
     /* Plot container - fixed height, no vh units (iframe-safe) */
     #umap-plot {
-        height: 700px !important;
-        max-height: 700px !important;
+        height: 1100px !important;
+        max-height: 1100px !important;
         min-height: 400px !important;
     }
 
@@ -997,7 +997,7 @@ CUSTOM_CSS = """
     #umap-plot .js-plotly-plot,
     #umap-plot .plotly-graph-div {
         height: 100% !important;
-        max-height: 700px !important;
+        max-height: 1100px !important;
         width: 100% !important;
     }
 
