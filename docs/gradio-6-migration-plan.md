@@ -29,7 +29,8 @@ Gradio 4 on HF Spaces had multiple issues:
 
 - [x] Test locally with Python 3.10+ environment
 - [x] Verify click/hover handlers work with Gradio 6
-- [ ] Verify generation works (requires torch_utils dependency)
+- [x] Verify generation works (vendored torch_utils, see below)
+- [x] Regenerate UMAP pickles with current numba
 - [ ] Test on HF Spaces
 
 ## Breaking Changes Applied
@@ -106,6 +107,26 @@ Gradio 6 recreates plots on state updates without cleaning up WebGL contexts, ca
 - Performance equivalent for <10k points
 - Consider Scattergl if scaling to 10k+ points (would need manual `Plotly.purge()` cleanup)
 
+### 8. Vendored NVIDIA Modules for Checkpoint Loading
+
+EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib` from NVIDIA's EDM repo.
+
+**Solution:** Vendor minimal required modules in `diffviews/vendor/`:
+```
+diffviews/vendor/
+├── README.md          # Attribution
+├── LICENSE            # CC BY-NC-SA 4.0
+├── torch_utils/
+│   ├── __init__.py
+│   ├── persistence.py # Pickle reconstruction logic
+│   └── misc.py        # Utilities (constant, assert_shape, etc.)
+└── dnnlib/
+    ├── __init__.py
+    └── util.py        # EasyDict class
+```
+
+Adapters import `ensure_nvidia_modules()` from `diffviews/adapters/nvidia_compat.py` before pickle loading.
+
 ## Files Modified
 
 | File | Changes |
@@ -115,6 +136,11 @@ Gradio 6 recreates plots on state updates without cleaning up WebGL contexts, ca
 | `SPACES_README.md` | `sdk_version: 6.3.0` |
 | `app.py` (root) | Removed monkey-patch, import CUSTOM_CSS/PLOTLY_HANDLER_JS, pass to launch() |
 | `diffviews/visualization/app.py` | Move CUSTOM_CSS to module level, remove params from Blocks(), Scattergl→Scatter, handler persistence fix, visible textboxes with CSS hiding, Gallery buttons=[] |
+| `diffviews/adapters/nvidia_compat.py` | NEW: ensures vendored modules importable |
+| `diffviews/adapters/edm_imagenet.py` | Added ensure_nvidia_modules() call |
+| `diffviews/adapters/dmd2_imagenet.py` | Added ensure_nvidia_modules() call |
+| `diffviews/vendor/` | NEW: vendored torch_utils + dnnlib |
+| `data/*/embeddings/*.pkl` | Regenerated with current numba |
 
 ## Testing
 

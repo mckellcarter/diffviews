@@ -157,11 +157,29 @@ Completed:
 - [x] Fix Plotly handler persistence (MutationObserver + polling)
 - [x] Fix WebGL context leak (`go.Scatter` instead of `go.Scattergl`)
 - [x] Test locally with Python 3.10 - click/hover working
+- [x] **Vendor NVIDIA torch_utils/dnnlib** for checkpoint loading (see below)
+- [x] **Regenerate UMAP pickles** with current numba (fixes trajectory projection)
+- [x] Verify generation works - DMD2 and EDM both working
 
 In Progress:
-- [ ] Verify generation works (requires torch_utils dependency)
 - [ ] Test on HF Spaces free tier (CPU)
 - [ ] Test on HF Spaces paid tier (GPU)
+
+**Vendored NVIDIA Modules:**
+EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib`.
+These are now vendored in `diffviews/vendor/` under CC BY-NC-SA 4.0 license:
+```
+diffviews/vendor/
+├── README.md, LICENSE
+├── torch_utils/
+│   ├── __init__.py
+│   ├── persistence.py  # Pickle reconstruction
+│   └── misc.py         # Utilities
+└── dnnlib/
+    ├── __init__.py
+    └── util.py         # EasyDict
+```
+Adapters call `ensure_nvidia_modules()` before pickle loading.
 
 **Gradio 6 Breaking Changes Applied:**
 | Change | Location | Status |
@@ -184,17 +202,23 @@ python_version: "3.10"
 **Files Modified:**
 - `app.py` - Removed monkey-patch, updated launch params
 - `diffviews/visualization/app.py` - Relocated Blocks params, Scattergl→Scatter, handler persistence, visible textboxes
+- `diffviews/adapters/nvidia_compat.py` - NEW: ensures vendored modules importable
+- `diffviews/adapters/edm_imagenet.py` - Added ensure_nvidia_modules() call
+- `diffviews/adapters/dmd2_imagenet.py` - Added ensure_nvidia_modules() call
+- `diffviews/vendor/` - NEW: vendored torch_utils + dnnlib (CC BY-NC-SA 4.0)
+- `data/*/embeddings/*.pkl` - Regenerated with current numba
 - `requirements.txt` - Updated to Gradio 6
 - `pyproject.toml` - Python 3.10+, Gradio 6
 - `SPACES_README.md` - sdk_version 6.3.0
 
-**Phase 5c: UMAP Serialization (FUTURE)**
-The `numba==0.58.1` pin exists because UMAP pickles contain numba JIT-compiled code.
-Options to remove this pin:
-1. Re-generate UMAP pickles with latest numba
+**Phase 5c: UMAP Serialization (COMPLETE)**
+UMAP pickles were regenerated with current numba version. Trajectory projection now works.
+The `numba==0.58.1` pin may no longer be strictly required but kept for stability.
+
+If UMAP compatibility issues recur, options include:
+1. Re-generate UMAP pickles with current numba ✅ (done)
 2. Use parametric UMAP (neural network, saves as PyTorch weights)
-3. Train regression model to approximate UMAP projection
-See `docs/gradio-6-migration-plan.md` for details.
+3. Train regression model to approximate projection
 
 ### Phase 6: Auth & Persistence (DEFERRED)
 

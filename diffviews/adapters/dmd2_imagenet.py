@@ -162,6 +162,10 @@ class DMD2ImageNetAdapter(HookMixin, GeneratorAdapter):
         """
         import pickle
 
+        # Ensure vendored NVIDIA modules are importable for pickle
+        from .nvidia_compat import ensure_nvidia_modules
+        ensure_nvidia_modules()
+
         print(f"Loading DMD2 from {checkpoint_path}...")
         with open(checkpoint_path, 'rb') as f:
             data = pickle.load(f)

@@ -4,6 +4,10 @@ HuggingFace Spaces entry point for diffviews.
 This file is the main entry point for HF Spaces deployment.
 It downloads required data and checkpoints on startup, then launches the Gradio app.
 
+Requirements:
+    Python 3.10+
+    Gradio 6.0+
+
 Environment variables:
     DIFFVIEWS_DATA_DIR: Override data directory (default: data)
     DIFFVIEWS_CHECKPOINT: Which checkpoint to download (dmd2, edm, all, none; default: dmd2)

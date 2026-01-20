@@ -1,5 +1,5 @@
 # DiffViews - HuggingFace Spaces Requirements
-# Install diffviews package from GitHub
+# Requires Python 3.10+
 git+https://github.com/mckellcarter/diffviews.git
 
 # Core dependencies
@@ -20,7 +20,7 @@ plotly>=5.18.0
 matplotlib>=3.5.0
 
 # HuggingFace Hub
-huggingface_hub>=0.19.0
+huggingface_hub>=0.25.0
 
 # Optional but useful
 scipy>=1.7.0

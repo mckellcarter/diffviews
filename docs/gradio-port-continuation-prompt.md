@@ -5,7 +5,8 @@
 Repo: diffviews
 Branch: feature/gradio-6-migration
 
-**Phase 5b: Gradio 6 Migration - Local Testing Complete**
+**Phase 5b: Gradio 6 Migration - Complete (Local Testing)**
+**Next: Deploy to HF Spaces**
 
 Start by reading @diffviews/visualization/app.py
 
@@ -21,8 +22,8 @@ Start by reading @diffviews/visualization/app.py
 - KNN suggestions with distance display (lime ring)
 - Neighbor gallery with class labels and distances
 - Class filtering, model switching, clear buttons
-- **Generation from neighbors** (lazy adapter loading, activation masking) - needs torch_utils
-- **Trajectory visualization** (denoising path on UMAP with sigma labels)
+- **Generation from neighbors** (lazy adapter loading, activation masking) ✅
+- **Trajectory visualization** (denoising path on UMAP with sigma labels) ✅
 - **Hover preview** (debounced JS hover → preview panel)
 - **Intermediate image gallery** (denoising steps with σ labels)
 - **Frame navigation** (◀/▶ buttons + gallery click to view intermediate steps)
@@ -111,7 +112,7 @@ Start by reading @diffviews/visualization/app.py
 
 ## Remaining Items
 
-### Phase 5b: Gradio 6 Migration (LOCAL TESTING COMPLETE)
+### Phase 5b: Gradio 6 Migration (COMPLETE)
 
 **Why Gradio 6:**
 - Gradio 4 had multiple compatibility issues on HF Spaces (schema bugs, HfFolder import)
@@ -131,10 +132,20 @@ Start by reading @diffviews/visualization/app.py
 - [x] Fix WebGL context leak (`go.Scatter` instead of `go.Scattergl`)
 - [x] Test locally with Python 3.10 - click/hover working
 
+**Completed (continued):**
+- [x] Verify generation works (vendored torch_utils/dnnlib for checkpoint loading)
+- [x] Regenerate UMAP pickles with current numba (fixes trajectory projection)
+
 **In Progress:**
-- [ ] Verify generation works (requires torch_utils dependency from DMD2)
 - [ ] Test on HF Spaces free tier (CPU)
 - [ ] Test on HF Spaces paid tier (GPU)
+
+**Vendored NVIDIA Modules:**
+EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib`.
+Now vendored in `diffviews/vendor/` under CC BY-NC-SA 4.0:
+- `diffviews/vendor/torch_utils/` - persistence.py, misc.py
+- `diffviews/vendor/dnnlib/` - util.py (EasyDict)
+- `diffviews/adapters/nvidia_compat.py` - ensure_nvidia_modules() helper
 
 **Gradio 6 Breaking Changes Applied:**
 
@@ -156,10 +167,11 @@ huggingface_hub>=0.19.0
 python_version: "3.10"  # in Space README
 ```
 
-**UMAP Pickle Issue (numba pin):**
-The `numba==0.58.1` pin exists because UMAP pickles contain numba JIT-compiled code.
-This is independent of Gradio version. Future options:
-1. Re-generate UMAP pickles with latest numba
+**UMAP Pickle Issue (RESOLVED):**
+UMAP pickles were regenerated with current numba version. Trajectory projection now works.
+The `numba==0.58.1` pin may no longer be strictly required but kept for stability.
+If issues recur, options include:
+1. Re-generate UMAP pickles with current numba ✅ (done)
 2. Use parametric UMAP (saves as PyTorch weights)
 3. Train regression model to approximate projection
 
@@ -219,13 +231,15 @@ click_data_box.change(handler, inputs=[click_data_box, ...], outputs=[...])
 ## Current State
 
 - `app.py` (~2200 lines) with Plotly + generation + hover + intermediates + thread safety
-- 33 Gradio tests + 24 generator tests (57 total)
-- Phase 4 complete, ready for deployment
+- 41 tests passing (visualizer + generator)
+- Phase 5b complete (local testing), ready for HF Spaces deployment
 
 **Key files:**
 - `diffviews/visualization/app.py` - main Gradio app
 - `diffviews/scripts/cli.py` - CLI with `viz` command
 - `diffviews/core/generator.py` - generation functions
+- `diffviews/adapters/nvidia_compat.py` - vendored module loader
+- `diffviews/vendor/` - vendored torch_utils + dnnlib
 - `tests/test_gradio_visualizer.py` - visualizer tests
 - `tests/test_generator.py` - generator tests
 
