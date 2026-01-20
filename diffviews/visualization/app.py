@@ -962,17 +962,17 @@ CUSTOM_CSS = """
         overflow: auto !important;
     }
 
-    /* Main row uses available height */
+    /* Main row - fixed height to prevent iframe expansion issues */
     #main-row {
-        min-height: calc(100vh - 80px) !important;
-        min-height: 500px !important;
+        height: 800px !important;
+        max-height: 800px !important;
         align-items: stretch !important;
         flex-wrap: nowrap !important;
     }
 
-    /* Sidebars: scrollable with max height */
+    /* Sidebars: scrollable with fixed max height */
     #left-sidebar, #right-sidebar {
-        max-height: calc(100vh - 80px) !important;
+        max-height: 800px !important;
         overflow-y: auto !important;
         padding: 0.25rem !important;
     }
@@ -982,20 +982,22 @@ CUSTOM_CSS = """
         display: flex !important;
         flex-direction: column !important;
         flex: 1 !important;
+        max-height: 800px !important;
     }
 
-    /* Plot container - expand to fill space */
+    /* Plot container - fixed height, no vh units (iframe-safe) */
     #umap-plot {
-        min-height: 500px !important;
-        height: calc(100vh - 150px) !important;
-        flex-grow: 1 !important;
+        height: 700px !important;
+        max-height: 700px !important;
+        min-height: 400px !important;
     }
 
-    /* Make Plotly fill its container */
+    /* Make Plotly fill its container with constrained height */
     #umap-plot > div,
     #umap-plot .js-plotly-plot,
     #umap-plot .plotly-graph-div {
         height: 100% !important;
+        max-height: 700px !important;
         width: 100% !important;
     }
 
