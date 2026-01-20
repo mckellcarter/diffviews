@@ -172,6 +172,7 @@ def main():
         server_name="0.0.0.0",
         server_port=7860,
         share=False,  # Spaces handles public URL
+        show_api=False,  # Disable API docs to avoid schema generation bug
     )
 
 
