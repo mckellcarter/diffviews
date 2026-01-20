@@ -778,11 +778,19 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-        # Layout - autosize lets CSS control dimensions
+        # Calculate axis ranges with padding to prevent autorange issues
+        x_min, x_max = df["umap_x"].min(), df["umap_x"].max()
+        y_min, y_max = df["umap_y"].min(), df["umap_y"].max()
+        x_pad = (x_max - x_min) * 0.05
+        y_pad = (y_max - y_min) * 0.05
+
+        # Layout - explicit ranges prevent zoom corruption on update
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
             yaxis_title="UMAP 2",
+            xaxis=dict(range=[x_min - x_pad, x_max + x_pad]),
+            yaxis=dict(range=[y_min - y_pad, y_max + y_pad]),
             hovermode="closest",
             template="plotly_white",
             showlegend=False,
