@@ -479,7 +479,7 @@ class TestGradioVisualizerGeneration:
         """Test load_adapter returns None when checkpoint missing."""
         import tempfile
         import json
-        from diffviews.visualization.app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer, ModelData
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -494,18 +494,28 @@ class TestGradioVisualizerGeneration:
             df = pd.DataFrame({"umap_x": [0], "umap_y": [0], "sample_id": ["s0"]})
             df.to_csv(model_dir / "embeddings" / "test.csv", index=False)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            # Mock _load_model_data to return ModelData with no checkpoint
+            mock_model_data = ModelData(
+                name="dmd2",
+                data_dir=model_dir,
+                adapter_name="dmd2-imagenet-64",
+                checkpoint_path=None,  # No checkpoint
+                sigma_max=80.0,
+                sigma_min=0.5,
+                default_steps=5,
+                df=df,
+            )
+            with patch.object(GradioVisualizer, '_load_model_data', return_value=mock_model_data):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.checkpoint_path = None
-            result = viz.load_adapter()
+            result = viz.load_adapter("dmd2")
             assert result is None
 
     def test_load_adapter_missing_file(self):
         """Test load_adapter returns None when checkpoint file doesn't exist."""
         import tempfile
         import json
-        from diffviews.visualization.app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer, ModelData
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -519,18 +529,28 @@ class TestGradioVisualizerGeneration:
             df = pd.DataFrame({"umap_x": [0], "umap_y": [0], "sample_id": ["s0"]})
             df.to_csv(model_dir / "embeddings" / "test.csv", index=False)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            # Mock _load_model_data with nonexistent checkpoint path
+            mock_model_data = ModelData(
+                name="dmd2",
+                data_dir=model_dir,
+                adapter_name="dmd2-imagenet-64",
+                checkpoint_path=Path("/nonexistent/path/checkpoint.pt"),
+                sigma_max=80.0,
+                sigma_min=0.5,
+                default_steps=5,
+                df=df,
+            )
+            with patch.object(GradioVisualizer, '_load_model_data', return_value=mock_model_data):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.checkpoint_path = Path("/nonexistent/path/checkpoint.pt")
-            result = viz.load_adapter()
+            result = viz.load_adapter("dmd2")
             assert result is None
 
     def test_prepare_activation_dict_no_activations(self):
         """Test prepare_activation_dict returns None when activations missing."""
         import tempfile
         import json
-        from diffviews.visualization.app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer, ModelData
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -544,11 +564,22 @@ class TestGradioVisualizerGeneration:
             df = pd.DataFrame({"umap_x": [0], "umap_y": [0], "sample_id": ["s0"]})
             df.to_csv(model_dir / "embeddings" / "test.csv", index=False)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            # Mock _load_model_data with no activations
+            mock_model_data = ModelData(
+                name="dmd2",
+                data_dir=model_dir,
+                adapter_name="dmd2-imagenet-64",
+                checkpoint_path=None,
+                sigma_max=80.0,
+                sigma_min=0.5,
+                default_steps=5,
+                df=df,
+                activations=None,  # No activations
+            )
+            with patch.object(GradioVisualizer, '_load_model_data', return_value=mock_model_data):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.activations = None
-            result = viz.prepare_activation_dict([0, 1, 2])
+            result = viz.prepare_activation_dict("dmd2", [0, 1, 2])
             assert result is None
 
     def test_prepare_activation_dict_empty_neighbors(self):
@@ -556,7 +587,7 @@ class TestGradioVisualizerGeneration:
         import tempfile
         import json
         import numpy as np
-        from diffviews.visualization.app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer, ModelData
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -570,11 +601,22 @@ class TestGradioVisualizerGeneration:
             df = pd.DataFrame({"umap_x": [0], "umap_y": [0], "sample_id": ["s0"]})
             df.to_csv(model_dir / "embeddings" / "test.csv", index=False)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            # Mock _load_model_data with activations
+            mock_model_data = ModelData(
+                name="dmd2",
+                data_dir=model_dir,
+                adapter_name="dmd2-imagenet-64",
+                checkpoint_path=None,
+                sigma_max=80.0,
+                sigma_min=0.5,
+                default_steps=5,
+                df=df,
+                activations=np.random.randn(100, 512).astype(np.float32),
+            )
+            with patch.object(GradioVisualizer, '_load_model_data', return_value=mock_model_data):
                 viz = GradioVisualizer(data_dir=root)
 
-            viz.activations = np.random.randn(100, 512)
-            result = viz.prepare_activation_dict([])
+            result = viz.prepare_activation_dict("dmd2", [])  # Empty neighbors
             assert result is None
 
     def test_prepare_activation_dict_splits_correctly(self):
@@ -582,7 +624,7 @@ class TestGradioVisualizerGeneration:
         import tempfile
         import json
         import numpy as np
-        from diffviews.visualization.app import GradioVisualizer
+        from diffviews.visualization.app import GradioVisualizer, ModelData
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -599,15 +641,28 @@ class TestGradioVisualizerGeneration:
             df = pd.DataFrame({"umap_x": range(10), "umap_y": range(10), "sample_id": [f"s{i}" for i in range(10)]})
             df.to_csv(model_dir / "embeddings" / "test.csv", index=False)
 
-            with patch.object(GradioVisualizer, 'load_activations_for_model', return_value=(None, None)):
+            # layer shapes: encoder_bottleneck (512,4,4)=8192, midblock (512,4,4)=8192
+            layer_shapes = {"encoder_bottleneck": (512, 4, 4), "midblock": (512, 4, 4)}
+            total_dim = 512 * 4 * 4 * 2
+
+            # Mock _load_model_data with activations and layer shapes
+            mock_model_data = ModelData(
+                name="dmd2",
+                data_dir=model_dir,
+                adapter_name="dmd2-imagenet-64",
+                checkpoint_path=None,
+                sigma_max=80.0,
+                sigma_min=0.5,
+                default_steps=5,
+                df=df,
+                activations=np.random.randn(10, total_dim).astype(np.float32),
+                umap_params={"layers": ["encoder_bottleneck", "midblock"]},
+                layer_shapes=layer_shapes,
+            )
+            with patch.object(GradioVisualizer, '_load_model_data', return_value=mock_model_data):
                 viz = GradioVisualizer(data_dir=root)
 
-            # Mock layer shapes: encoder_bottleneck (512,4,4)=8192, midblock (512,4,4)=8192
-            viz.layer_shapes = {"encoder_bottleneck": (512, 4, 4), "midblock": (512, 4, 4)}
-            total_dim = 512 * 4 * 4 * 2
-            viz.activations = np.random.randn(10, total_dim).astype(np.float32)
-
-            result = viz.prepare_activation_dict([0, 1, 2])
+            result = viz.prepare_activation_dict("dmd2", [0, 1, 2])
 
             assert result is not None
             assert "encoder_bottleneck" in result
