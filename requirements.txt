@@ -14,8 +14,9 @@ tqdm>=4.60.0
 # Numba pinned for UMAP pickle compatibility
 numba==0.58.1
 
-# Visualization - pinned to stable version
+# Visualization - pinned to stable versions
 gradio==4.25.0
+gradio_client==0.15.0
 plotly>=5.18.0
 matplotlib>=3.5.0
 
