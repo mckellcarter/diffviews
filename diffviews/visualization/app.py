@@ -784,17 +784,18 @@ class GradioVisualizer:
         x_pad = (x_max - x_min) * 0.05
         y_pad = (y_max - y_min) * 0.05
 
-        # Layout - explicit ranges prevent zoom corruption on update
+        # Layout - fixed height, fluid width; explicit ranges prevent scroll jumps
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
             yaxis_title="UMAP 2",
-            xaxis=dict(range=[x_min - x_pad, x_max + x_pad]),
-            yaxis=dict(range=[y_min - y_pad, y_max + y_pad]),
+            xaxis=dict(range=[x_min - x_pad, x_max + x_pad], constrain="domain"),
+            yaxis=dict(range=[y_min - y_pad, y_max + y_pad], constrain="domain", scaleanchor="x"),
             hovermode="closest",
             template="plotly_white",
             showlegend=False,
             autosize=True,
+            height=600,
             margin=dict(l=40, r=10, t=35, b=40),
             uirevision=model_name,  # Preserve zoom/pan, reset on model switch
         )
@@ -1128,32 +1129,36 @@ CUSTOM_CSS = """
         padding: 0.25rem !important;
     }
 
-    /* Center column stretches */
+    /* Center column: contains plot, prevents escape */
     #center-column {
         display: flex !important;
         flex-direction: column !important;
+        position: relative !important;
+        overflow: hidden !important;
+        min-width: 400px !important;
     }
 
-    /* Plot uses viewport height - target all nested elements */
+    /* Plot: fixed height, fluid width within container */
     #umap-plot {
-        min-height: 50vh !important;
-        height: calc(100vh - 120px) !important;
-        flex-grow: 1 !important;
-    }
-
-    #umap-plot > div {
-        height: 100% !important;
-    }
-
-    #umap-plot .js-plotly-plot,
-    #umap-plot .plotly,
-    #umap-plot .plotly-graph-div {
-        height: 100% !important;
+        position: relative !important;
+        min-height: 600px !important;
+        height: 600px !important;
+        max-height: 600px !important;
         width: 100% !important;
+        flex-grow: 0 !important;
+        flex-shrink: 0 !important;
+        overflow: hidden !important;
     }
 
-    #umap-plot .main-svg {
+    /* Keep Plotly elements within bounds */
+    #umap-plot > div,
+    #umap-plot .plotly-graph-div,
+    #umap-plot .js-plotly-plot {
+        position: relative !important;
+        width: 100% !important;
+        max-width: 100% !important;
         height: 100% !important;
+        max-height: 100% !important;
     }
 
     /* Reduce group padding */
