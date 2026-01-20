@@ -396,8 +396,55 @@ RuntimeError: Event loop is closed
 
 **Status:** Not addressed (low priority).
 
+## Phase 5c: JS/CSS Cleanup (IN PROGRESS)
+
+After extensive debugging, accumulated cruft needs cleanup. Fresh analysis identified:
+
+### What to Keep (Matches Clean Pattern)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| JS bridge pattern (hidden textboxes) | ✅ Keep | Core pattern is correct |
+| MutationObserver + polling | ✅ Keep | Needed for Gradio DOM replacement |
+| Debounced hover with deduplication | ✅ Keep | Prevents flooding |
+| `curveNumber === 0` check | ✅ Keep | Ignore overlay traces |
+| `visible=True` + CSS hiding | ✅ Keep | Gradio 6 requirement |
+| `.change()` not `.input()` | ✅ Keep | Gradio 6 requirement |
+| `go.Scatter` not `go.Scattergl` | ✅ Keep | Avoids WebGL leak |
+| `uirevision=model_name` | ✅ Keep | View state preservation |
+
+### What to Remove (Accumulated Cruft)
+
+| Component | Lines | Reason |
+|-----------|-------|--------|
+| `debugDOM()` function | 808-830 | Debug-only, adds noise |
+| Extensive retry logging | throughout | Simplify, reduce console spam |
+| `attachRetries` + MAX_RETRIES | 942-1006 | Over-engineered, just retry indefinitely |
+| `observerSetupRetries` | 1041-1050 | Redundant retry logic |
+| Failed CSS isolation attempts | CUSTOM_CSS | `transform: translateZ(0)`, `isolation: isolate`, etc. |
+
+### Cleanup Plan
+
+1. **JS Cleanup** - Remove debug functions, simplify retry logic to infinite retry
+2. **CSS Audit** - Remove failed isolation attempts, keep only essential styling
+3. **Test on HF** - Verify click/hover still works after cleanup
+4. **Investigate Plotly.react()** - Potential fix for view shift (updates in-place vs full replacement)
+
+### Alternative Approach: Plotly.react()
+
+Current: Gradio replaces entire figure on each update.
+Alternative: Use `Plotly.react()` to update in-place, may preserve view state better.
+
+```javascript
+// Instead of Gradio replacing the plot:
+Plotly.react(plotDiv, newData, newLayout, {responsive: true});
+```
+
+This would require intercepting Gradio's update mechanism.
+
 ## References
 
 - [Gradio 6 Migration Guide](https://www.gradio.app/main/guides/gradio-6-migration-guide)
 - [Gradio Changelog](https://www.gradio.app/changelog)
 - [UMAP Pickle Issues](https://github.com/lmcinnes/umap/issues/759)
+- [Plotly.react() docs](https://plotly.com/javascript/plotlyjs-function-reference/#plotlyreact)

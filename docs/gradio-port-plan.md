@@ -164,6 +164,7 @@ Completed:
 In Progress:
 - [ ] Test on HF Spaces free tier (CPU)
 - [ ] Test on HF Spaces paid tier (GPU)
+- [ ] **Phase 5c: JS/CSS Cleanup** (see below)
 
 **Vendored NVIDIA Modules:**
 EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib`.
@@ -211,7 +212,33 @@ python_version: "3.10"
 - `pyproject.toml` - Python 3.10+, Gradio 6
 - `SPACES_README.md` - sdk_version 6.3.0
 
-**Phase 5c: UMAP Serialization (COMPLETE)**
+**Phase 5c: JS/CSS Cleanup (IN PROGRESS)**
+
+After extensive HF Spaces debugging, accumulated cruft needs cleanup.
+
+**Keep (core pattern is correct):**
+- JS bridge pattern with hidden textboxes
+- MutationObserver + polling for handler persistence
+- Debounced hover with deduplication
+- `curveNumber === 0` check to ignore overlay traces
+- `visible=True` + CSS hiding for textboxes
+- `.change()` events (not `.input()`)
+- `go.Scatter` (not `go.Scattergl`)
+- `uirevision=model_name` for view state
+
+**Remove (accumulated debug/failed attempts):**
+- `debugDOM()` function (lines 808-830)
+- Excessive retry logging throughout JS
+- `attachRetries` + MAX_RETRIES complexity
+- `observerSetupRetries` redundant logic
+- Failed CSS isolation attempts (`transform: translateZ(0)`, `isolation: isolate`, etc.)
+
+**Investigate:**
+- `Plotly.react()` for in-place updates (may fix view shift)
+
+See `docs/gradio-6-migration-plan.md` for full details.
+
+**Phase 5d: UMAP Serialization (COMPLETE)**
 UMAP pickles were regenerated with current numba version. Trajectory projection now works.
 The `numba==0.58.1` pin may no longer be strictly required but kept for stability.
 
