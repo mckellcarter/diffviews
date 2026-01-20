@@ -10,7 +10,7 @@ Requirements:
 
 Environment variables:
     DIFFVIEWS_DATA_DIR: Override data directory (default: data)
-    DIFFVIEWS_CHECKPOINT: Which checkpoint to download (dmd2, edm, all, none; default: dmd2)
+    DIFFVIEWS_CHECKPOINT: Which checkpoint to download (dmd2, edm, all, none; default: all)
     DIFFVIEWS_DEVICE: Override device (cuda, mps, cpu; auto-detected if not set)
 """
 
@@ -253,7 +253,7 @@ def main():
     """Main entry point for HF Spaces."""
     # Configuration from environment
     data_dir = Path(os.environ.get("DIFFVIEWS_DATA_DIR", "data"))
-    checkpoint_config = os.environ.get("DIFFVIEWS_CHECKPOINT", "dmd2")
+    checkpoint_config = os.environ.get("DIFFVIEWS_CHECKPOINT", "all")  # Download all by default
     device = get_device()
 
     # Parse checkpoint config
