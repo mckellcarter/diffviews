@@ -797,301 +797,155 @@ class GradioVisualizer:
 
 
 # JavaScript for Plotly click and hover handling
+# Cleaned up version: removed debug functions, simplified retry logic
 PLOTLY_HANDLER_JS = r"""
-// Store references to textboxes (don't change on plot update)
+// State
 let clickBox = null;
 let hoverBox = null;
 let hoverTimeout = null;
 let lastHoverKey = null;
+let currentPlotDiv = null;
 let initComplete = false;
 
-function debugDOM() {
-    console.log('[Plotly Debug] Looking for elements...');
-    // Find all plotly-related elements
-    const plotlyDivs = document.querySelectorAll('[class*="plotly"]');
-    console.log('[Plotly Debug] Elements with plotly in class:', plotlyDivs.length);
-    plotlyDivs.forEach((el, i) => {
-        console.log('  ' + i + ':', el.tagName, el.className, el.id || '(no id)');
-    });
-    // Find umap-plot container
-    const umapPlot = document.querySelector('#umap-plot');
-    console.log('[Plotly Debug] #umap-plot:', umapPlot ? 'found' : 'NOT FOUND');
-    if (umapPlot) {
-        console.log('[Plotly Debug] #umap-plot children:', umapPlot.children.length);
-    }
-    // Find textbox containers
-    const clickContainer = document.querySelector('#click-data-box');
-    const hoverContainer = document.querySelector('#hover-data-box');
-    console.log('[Plotly Debug] #click-data-box:', clickContainer ? 'found' : 'NOT FOUND');
-    console.log('[Plotly Debug] #hover-data-box:', hoverContainer ? 'found' : 'NOT FOUND');
-    if (clickContainer) {
-        console.log('[Plotly Debug] click-data-box innerHTML:', clickContainer.innerHTML.substring(0, 200));
-    }
-}
-
+// Find textbox inputs (Gradio 6 nesting)
 function findTextboxes() {
-    // Try multiple selectors for Gradio 6
     if (!clickBox) {
-        clickBox = document.querySelector('#click-data-box textarea');
-        if (!clickBox) clickBox = document.querySelector('#click-data-box input[type="text"]');
-        if (!clickBox) clickBox = document.querySelector('#click-data-box input');
-        if (!clickBox) {
-            // Gradio 6 might wrap in additional divs
-            const container = document.querySelector('#click-data-box');
-            if (container) {
-                clickBox = container.querySelector('textarea') || container.querySelector('input');
-            }
-        }
+        const c = document.querySelector('#click-data-box');
+        if (c) clickBox = c.querySelector('textarea') || c.querySelector('input');
     }
     if (!hoverBox) {
-        hoverBox = document.querySelector('#hover-data-box textarea');
-        if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input[type="text"]');
-        if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input');
-        if (!hoverBox) {
-            const container = document.querySelector('#hover-data-box');
-            if (container) {
-                hoverBox = container.querySelector('textarea') || container.querySelector('input');
-            }
-        }
+        const h = document.querySelector('#hover-data-box');
+        if (h) hoverBox = h.querySelector('textarea') || h.querySelector('input');
     }
     return clickBox && hoverBox;
 }
 
-function sendClickData(data) {
-    if (!clickBox) return;
-    clickBox.value = JSON.stringify(data);
-    clickBox.dispatchEvent(new Event('input', { bubbles: true }));
-    clickBox.dispatchEvent(new Event('change', { bubbles: true }));
+// Send data to Python via textbox
+function sendData(box, data) {
+    if (!box) return;
+    box.value = JSON.stringify(data);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-function sendHoverData(data) {
-    if (!hoverBox) return;
-    hoverBox.value = JSON.stringify(data);
-    hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
-    hoverBox.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
+// Click handler - immediate
 function handlePlotlyClick(data) {
-    if (!data || !data.points || data.points.length === 0) return;
-
+    if (!data?.points?.length) return;
     const point = data.points[0];
-    const clickData = {
+    sendData(clickBox, {
         pointIndex: point.customdata,
         x: point.x,
         y: point.y,
         curveNumber: point.curveNumber
-    };
-    console.log('[Plotly] Click sending:', clickData);
-    sendClickData(clickData);
+    });
 }
 
+// Hover handler - debounced
 function handlePlotlyHover(data) {
-    if (!data || !data.points || data.points.length === 0) return;
-
+    if (!data?.points?.length) return;
     const point = data.points[0];
     const traceName = point.data.name || '';
 
-    // Check if this is a trajectory point (named "trajectory_N")
+    // Trajectory point hover
     const trajMatch = traceName.match(/^trajectory_(\d+)$/);
     if (trajMatch) {
         const trajIdx = parseInt(trajMatch[1]);
         const stepIdx = point.customdata;
         const hoverKey = `traj_${trajIdx}_${stepIdx}`;
         if (hoverKey === lastHoverKey) return;
-
         clearTimeout(hoverTimeout);
         hoverTimeout = setTimeout(() => {
             lastHoverKey = hoverKey;
-            const hoverData = {
+            sendData(hoverBox, {
                 type: 'trajectory',
                 trajIdx: trajIdx,
                 stepIdx: stepIdx,
                 x: point.x,
                 y: point.y,
                 sigma: point.text
-            };
-            console.log('[Plotly] Trajectory hover:', hoverData);
-            sendHoverData(hoverData);
+            });
         }, 100);
         return;
     }
 
-    // Only handle main data trace (curve 0) for sample hover
+    // Only main data trace (curve 0)
     if (point.curveNumber !== 0) return;
-
     const idx = point.customdata;
     const hoverKey = `sample_${idx}`;
     if (hoverKey === lastHoverKey) return;
-
     clearTimeout(hoverTimeout);
     hoverTimeout = setTimeout(() => {
         lastHoverKey = hoverKey;
-        const hoverData = {
+        sendData(hoverBox, {
             type: 'sample',
             pointIndex: idx,
             x: point.x,
             y: point.y
-        };
-        console.log('[Plotly] Hover sending:', hoverData);
-        sendHoverData(hoverData);
+        });
     }, 100);
 }
 
-// Track current plot to detect when it's replaced
-let currentPlotDiv = null;
-let attachRetries = 0;
-const MAX_RETRIES = 20;
-
-function isPlotlyReady(plotDiv) {
-    // Plotly adds these when initialized
-    return plotDiv &&
-           typeof plotDiv.on === 'function' &&
-           plotDiv.data &&
-           plotDiv.layout;
+// Check if Plotly is ready
+function isPlotlyReady(div) {
+    return div && typeof div.on === 'function' && div.data && div.layout;
 }
 
+// Find Plotly div
 function findPlotDiv() {
-    // Try multiple selectors for Gradio 6
-    let plotDiv = document.querySelector('#umap-plot .plotly-graph-div');
-    if (!plotDiv) plotDiv = document.querySelector('#umap-plot .js-plotly-plot');
-    if (!plotDiv) plotDiv = document.querySelector('.plotly-graph-div');
-    if (!plotDiv) plotDiv = document.querySelector('.js-plotly-plot');
-    // Gradio 6 might nest differently
-    if (!plotDiv) {
-        const container = document.querySelector('#umap-plot');
-        if (container) {
-            plotDiv = container.querySelector('[class*="plotly"]');
-        }
-    }
-    return plotDiv;
+    return document.querySelector('#umap-plot .plotly-graph-div') ||
+           document.querySelector('#umap-plot .js-plotly-plot') ||
+           document.querySelector('.plotly-graph-div');
 }
 
+// Attach handlers (retries indefinitely until success)
 function attachPlotlyHandlers() {
-    attachRetries++;
-
-    // Find Plotly plot
-    let plotDiv = findPlotDiv();
-
-    if (!plotDiv) {
-        if (attachRetries <= MAX_RETRIES) {
-            setTimeout(attachPlotlyHandlers, 300);
-        } else if (attachRetries === MAX_RETRIES + 1) {
-            console.log('[Plotly] Plot element not found after max retries, running debug...');
-            debugDOM();
-        }
+    const plotDiv = findPlotDiv();
+    if (!plotDiv || !isPlotlyReady(plotDiv) || !findTextboxes()) {
+        setTimeout(attachPlotlyHandlers, 300);
         return;
     }
 
-    // Check if Plotly has fully initialized
-    if (!isPlotlyReady(plotDiv)) {
-        if (attachRetries <= MAX_RETRIES) {
-            setTimeout(attachPlotlyHandlers, 300);
-        } else if (attachRetries === MAX_RETRIES + 1) {
-            console.log('[Plotly] Plotly not ready after max retries');
-            console.log('[Plotly] plotDiv.on:', typeof plotDiv.on);
-            console.log('[Plotly] plotDiv.data:', plotDiv.data);
-            console.log('[Plotly] plotDiv.layout:', plotDiv.layout);
-        }
-        return;
-    }
+    // Skip if already attached to this element
+    if (plotDiv === currentPlotDiv && plotDiv._handlersAttached) return;
 
-    if (!findTextboxes()) {
-        if (attachRetries <= MAX_RETRIES) {
-            setTimeout(attachPlotlyHandlers, 300);
-        } else if (attachRetries === MAX_RETRIES + 1) {
-            console.log('[Plotly] Textboxes not found after max retries');
-            debugDOM();
-        }
-        return;
-    }
-
-    // Reset retry counter on success
-    attachRetries = 0;
-
-    // Check if this is a new plot element or same one already handled
-    if (plotDiv === currentPlotDiv && plotDiv._gradioHandlersAttached) {
-        return;  // Already attached, no logging spam
-    }
-
-    // New plot element - track it
-    if (plotDiv !== currentPlotDiv) {
-        console.log('[Plotly] New plot element detected');
-        currentPlotDiv = plotDiv;
-    }
-
-    // Clear any existing handlers
+    // Clear existing handlers
     try {
         plotDiv.removeAllListeners('plotly_click');
         plotDiv.removeAllListeners('plotly_hover');
     } catch(e) {}
 
-    // Mark as attached
-    plotDiv._gradioHandlersAttached = true;
+    // Attach
+    currentPlotDiv = plotDiv;
+    plotDiv._handlersAttached = true;
     initComplete = true;
-
-    // Attach handlers
     plotDiv.on('plotly_click', handlePlotlyClick);
     plotDiv.on('plotly_hover', handlePlotlyHover);
-
-    console.log('[Plotly] Handlers attached successfully!');
 }
 
-// Also use MutationObserver as backup for Gradio 6 DOM changes
-let plotObserver = null;
-let observerSetupRetries = 0;
-
+// MutationObserver for Gradio DOM replacement
 function setupObserver() {
     const container = document.querySelector('#umap-plot');
     if (!container) {
-        observerSetupRetries++;
-        if (observerSetupRetries <= 10) {
-            setTimeout(setupObserver, 500);
-        }
+        setTimeout(setupObserver, 500);
         return;
     }
-
-    if (plotObserver) {
-        plotObserver.disconnect();
-    }
-
-    plotObserver = new MutationObserver(function(mutations) {
-        // Only trigger if we had previously attached successfully
-        if (!initComplete) return;
-
-        for (const mutation of mutations) {
-            if (mutation.addedNodes.length > 0) {
-                // New nodes added - reset retry counter and check
-                attachRetries = 0;
-                setTimeout(attachPlotlyHandlers, 100);
-                break;
-            }
-        }
-    });
-
-    plotObserver.observe(container, { childList: true, subtree: true });
-    console.log('[Plotly] MutationObserver attached');
+    new MutationObserver(() => {
+        if (initComplete) setTimeout(attachPlotlyHandlers, 100);
+    }).observe(container, { childList: true, subtree: true });
 }
 
-// Initial setup
-setTimeout(function() {
-    console.log('[Plotly] Starting initialization...');
-    debugDOM();  // Log DOM state for debugging
-    findTextboxes();
+// Initialize
+setTimeout(() => {
     attachPlotlyHandlers();
     setupObserver();
 }, 1500);
 
-// Polling backup - only after successful init, check every second
-setInterval(function() {
-    if (!initComplete) return;  // Don't poll until first successful attach
-
+// Polling backup (1s interval after init)
+setInterval(() => {
+    if (!initComplete) return;
     const plotDiv = findPlotDiv();
-    if (plotDiv && isPlotlyReady(plotDiv)) {
-        if (plotDiv !== currentPlotDiv || !plotDiv._gradioHandlersAttached) {
-            console.log('[Plotly] Poll: plot changed, re-attaching');
-            attachRetries = 0;
-            attachPlotlyHandlers();
-        }
+    if (plotDiv && isPlotlyReady(plotDiv) && (plotDiv !== currentPlotDiv || !plotDiv._handlersAttached)) {
+        attachPlotlyHandlers();
     }
 }, 1000);
 """
