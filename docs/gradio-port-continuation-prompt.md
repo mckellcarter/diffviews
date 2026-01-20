@@ -110,13 +110,53 @@ Start by reading @diffviews/visualization/app.py
 
 ## Remaining Items
 
-### Phase 5: HF Spaces Deployment (CURRENT)
-- [ ] Create HF Spaces `app.py` entry point in repo root
-- [ ] Add `requirements.txt` for Spaces compatibility
-- [ ] Create Space on HuggingFace Hub
-- [ ] Configure data/checkpoint loading for Spaces
-- [ ] Test on HF Spaces free tier (CPU) and paid (GPU)
+### Phase 5: HF Spaces Deployment (IN PROGRESS)
+
+**Completed:**
+- [x] Create HF Spaces `app.py` entry point in repo root
+- [x] Add `requirements.txt` for Spaces compatibility
+- [x] Create Space on HuggingFace Hub (mckell/diffviews)
+- [x] Configure data/checkpoint auto-download on startup
+- [x] Add data existence checks (config + embeddings + images)
+
+**In Progress:**
+- [ ] Fix gradio_client schema generation bug
+- [ ] Test on HF Spaces free tier (CPU)
+- [ ] Test on HF Spaces paid tier (GPU)
 - [ ] Add deployment documentation
+
+**Key Issues & Solutions:**
+
+1. **Python 3.13 pickle/numba incompatibility**
+   - Error: `TypeError: code() argument 13 must be str, not int`
+   - Solution: Pin `python_version: "3.10"` in Space README YAML header
+
+2. **numba version mismatch with UMAP pickle**
+   - Error: `Dispatcher._rebuild() got unexpected keyword argument 'impl_kind'`
+   - Solution: Pin `numba==0.58.1` in requirements.txt
+
+3. **Gradio 6 HfFolder import error**
+   - Error: `ImportError: cannot import name 'HfFolder' from 'huggingface_hub'`
+   - Solution: Pin `huggingface_hub>=0.19.0,<0.28.0`
+
+4. **gradio_client additionalProperties bug**
+   - Error: `TypeError: argument of type 'bool' is not iterable`
+   - Cause: `knn_distances = gr.State(value={})` creates dict schema with `additionalProperties: true`
+   - Solution: Monkey-patch `get_type()` in app.py to return "Any" for boolean schemas
+
+**Requirements Pins (critical):**
+```
+numba==0.58.1
+gradio==4.25.0
+gradio_client==0.15.0
+huggingface_hub>=0.19.0,<0.28.0
+python_version: "3.10"  # in Space README
+```
+
+**Files for Manual Upload to Space:**
+- `app.py` - Entry point with auto-download + monkey-patch
+- `requirements.txt` - Pinned dependencies
+- `README.md` (from SPACES_README.md) - Space metadata
 
 ### Phase 6: Auth & Persistence (DEFERRED)
 See `docs/auth-plan.md` for comprehensive plan covering:

@@ -120,21 +120,43 @@ Completed:
 - [x] Configure queue settings (`max_size=20`)
 - [x] Test multi-user scenarios (verified session isolation)
 
-### Phase 5: HF Spaces Deployment (CURRENT)
+### Phase 5: HF Spaces Deployment (IN PROGRESS)
 **Branch:** `feature/phase5-hf-spaces-deployment`
 
 Focus: Deploy to HuggingFace Spaces for public demo
 
-TODO:
-- [ ] Create `app.py` in repo root (HF Spaces entry point)
-- [ ] Add `requirements.txt` for Spaces
-- [ ] Create Space on HuggingFace Hub (mckell/diffviews)
-- [ ] Configure data loading (HF datasets or bundled)
-- [ ] Configure checkpoint loading (HF model hub or bundled)
+Completed:
+- [x] Create `app.py` in repo root (HF Spaces entry point)
+- [x] Add `requirements.txt` for Spaces
+- [x] Create Space on HuggingFace Hub (mckell/diffviews)
+- [x] Configure data loading (auto-download from HF dataset on startup)
+- [x] Configure checkpoint loading (auto-download from HF model hub)
+- [x] Add data existence checks (skip download if present)
+
+In Progress:
+- [ ] Fix gradio_client schema generation bug (monkey-patch applied)
 - [ ] Test CPU-only mode (free tier)
-- [ ] Test GPU mode (paid tier, if needed for generation)
+- [ ] Test GPU mode (paid tier)
 - [ ] Add deployment documentation to README
-- [ ] Performance optimization for large datasets (if needed)
+
+**Key Issues Resolved:**
+1. **Python 3.13 pickle/numba incompatibility** → Pin `python_version: "3.10"` in Space README
+2. **numba version mismatch** → Pin `numba==0.58.1` for UMAP pickle compat
+3. **Gradio 6 HfFolder import error** → Pin `huggingface_hub>=0.19.0,<0.28.0`
+4. **gradio_client additionalProperties bug** → Monkey-patch `get_type()` in app.py
+
+**Requirements Pins (critical for Spaces):**
+```
+numba==0.58.1
+gradio==4.25.0
+gradio_client==0.15.0
+huggingface_hub>=0.19.0,<0.28.0
+```
+
+**Files Created:**
+- `app.py` - HF Spaces entry point with auto-download and monkey-patch
+- `requirements.txt` - Pinned deps for Spaces compatibility
+- `SPACES_README.md` - Space metadata (python_version, sdk, etc.)
 
 ### Phase 6: Auth & Persistence (DEFERRED)
 
