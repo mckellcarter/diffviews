@@ -121,11 +121,11 @@ Completed:
 - [x] Test multi-user scenarios (verified session isolation)
 
 ### Phase 5: HF Spaces Deployment (IN PROGRESS)
-**Branch:** `feature/phase5-hf-spaces-deployment`
+**Branch:** `feature/phase5-hf-spaces-deployment` → `feature/gradio-6-migration`
 
 Focus: Deploy to HuggingFace Spaces for public demo
 
-Completed:
+**Phase 5a: Initial Deployment Attempt (Gradio 4)**
 - [x] Create `app.py` in repo root (HF Spaces entry point)
 - [x] Add `requirements.txt` for Spaces
 - [x] Create Space on HuggingFace Hub (mckell/diffviews)
@@ -133,30 +133,92 @@ Completed:
 - [x] Configure checkpoint loading (auto-download from HF model hub)
 - [x] Add data existence checks (skip download if present)
 
+**Issues with Gradio 4 on HF Spaces:**
+1. Python 3.13 pickle/numba incompatibility
+2. numba version mismatch with UMAP pickle
+3. Gradio 4 HfFolder import error
+4. gradio_client additionalProperties schema bug (required monkey-patch)
+
+**Phase 5b: Gradio 6 Migration (LOCAL TESTING COMPLETE)**
+**Branch:** `feature/gradio-6-migration`
+
+Completed:
+- [x] Update `requirements.txt`: `gradio>=6.0.0`, remove gradio_client (bundled)
+- [x] Update `pyproject.toml`: `gradio>=6.0.0`, `requires-python>=3.10`
+- [x] Update `SPACES_README.md`: `sdk_version: 6.3.0`
+- [x] Remove monkey-patch from root `app.py`
+- [x] Migrate `diffviews/visualization/app.py`:
+  - Move `CUSTOM_CSS` to module level
+  - Remove `theme`, `css`, `head` from `gr.Blocks()`
+  - Pass `theme`, `css`, `js` to `launch()` instead
+- [x] Update Python classifiers to 3.10-3.12
+- [x] Fix hidden textboxes (`visible=True` + CSS hiding)
+- [x] Fix Gallery buttons (`buttons=[]` replaces `show_download_button`)
+- [x] Fix Plotly handler persistence (MutationObserver + polling)
+- [x] Fix WebGL context leak (`go.Scatter` instead of `go.Scattergl`)
+- [x] Test locally with Python 3.10 - click/hover working
+- [x] **Vendor NVIDIA torch_utils/dnnlib** for checkpoint loading (see below)
+- [x] **Regenerate UMAP pickles** with current numba (fixes trajectory projection)
+- [x] Verify generation works - DMD2 and EDM both working
+
 In Progress:
-- [ ] Fix gradio_client schema generation bug (monkey-patch applied)
-- [ ] Test CPU-only mode (free tier)
-- [ ] Test GPU mode (paid tier)
-- [ ] Add deployment documentation to README
+- [ ] Test on HF Spaces free tier (CPU)
+- [ ] Test on HF Spaces paid tier (GPU)
 
-**Key Issues Resolved:**
-1. **Python 3.13 pickle/numba incompatibility** → Pin `python_version: "3.10"` in Space README
-2. **numba version mismatch** → Pin `numba==0.58.1` for UMAP pickle compat
-3. **Gradio 6 HfFolder import error** → Pin `huggingface_hub>=0.19.0,<0.28.0`
-4. **gradio_client additionalProperties bug** → Monkey-patch `get_type()` in app.py
-
-**Requirements Pins (critical for Spaces):**
+**Vendored NVIDIA Modules:**
+EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib`.
+These are now vendored in `diffviews/vendor/` under CC BY-NC-SA 4.0 license:
 ```
-numba==0.58.1
-gradio==4.25.0
-gradio_client==0.15.0
-huggingface_hub>=0.19.0,<0.28.0
+diffviews/vendor/
+├── README.md, LICENSE
+├── torch_utils/
+│   ├── __init__.py
+│   ├── persistence.py  # Pickle reconstruction
+│   └── misc.py         # Utilities
+└── dnnlib/
+    ├── __init__.py
+    └── util.py         # EasyDict
+```
+Adapters call `ensure_nvidia_modules()` before pickle loading.
+
+**Gradio 6 Breaking Changes Applied:**
+| Change | Location | Status |
+|--------|----------|--------|
+| `theme/css/head` moved to `launch()` | `app.py`, `visualization/app.py` | ✅ |
+| `visible=False` doesn't render in DOM | textboxes use CSS hiding | ✅ |
+| `show_download_button` removed | Gallery uses `buttons=[]` | ✅ |
+| `.input()` → `.change()` for textbox events | JS bridge handlers | ✅ |
+| Plot elements replaced on state update | MutationObserver + polling | ✅ |
+| Python 3.10+ required | `pyproject.toml` | ✅ |
+
+**Current Requirements:**
+```
+gradio>=6.0.0
+numba==0.58.1  # UMAP pickle compatibility (see Phase 5c)
+huggingface_hub>=0.19.0
+python_version: "3.10"
 ```
 
-**Files Created:**
-- `app.py` - HF Spaces entry point with auto-download and monkey-patch
-- `requirements.txt` - Pinned deps for Spaces compatibility
-- `SPACES_README.md` - Space metadata (python_version, sdk, etc.)
+**Files Modified:**
+- `app.py` - Removed monkey-patch, updated launch params
+- `diffviews/visualization/app.py` - Relocated Blocks params, Scattergl→Scatter, handler persistence, visible textboxes
+- `diffviews/adapters/nvidia_compat.py` - NEW: ensures vendored modules importable
+- `diffviews/adapters/edm_imagenet.py` - Added ensure_nvidia_modules() call
+- `diffviews/adapters/dmd2_imagenet.py` - Added ensure_nvidia_modules() call
+- `diffviews/vendor/` - NEW: vendored torch_utils + dnnlib (CC BY-NC-SA 4.0)
+- `data/*/embeddings/*.pkl` - Regenerated with current numba
+- `requirements.txt` - Updated to Gradio 6
+- `pyproject.toml` - Python 3.10+, Gradio 6
+- `SPACES_README.md` - sdk_version 6.3.0
+
+**Phase 5c: UMAP Serialization (COMPLETE)**
+UMAP pickles were regenerated with current numba version. Trajectory projection now works.
+The `numba==0.58.1` pin may no longer be strictly required but kept for stability.
+
+If UMAP compatibility issues recur, options include:
+1. Re-generate UMAP pickles with current numba ✅ (done)
+2. Use parametric UMAP (neural network, saves as PyTorch weights)
+3. Train regression model to approximate projection
 
 ### Phase 6: Auth & Persistence (DEFERRED)
 

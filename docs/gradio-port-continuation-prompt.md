@@ -3,31 +3,33 @@
 ---
 
 Repo: diffviews
-Branch: feature/phase5-hf-spaces-deployment
+Branch: feature/gradio-6-migration
 
-**Phase 5: HuggingFace Spaces Deployment**
+**Phase 5b: Gradio 6 Migration - Complete (Local Testing)**
+**Next: Deploy to HF Spaces**
 
 Start by reading @diffviews/visualization/app.py
 
 ---
 
-## What's Working
+## What's Working (Gradio 6)
 
-- Plotly scatter plot via `gr.Plot` with `go.Scattergl`
-- Click handling via JS bridge pattern (hidden textbox)
+- Plotly scatter plot via `gr.Plot` with `go.Scatter` (SVG, not WebGL)
+- Click handling via JS bridge pattern (visible textbox hidden via CSS)
+- Hover handling with MutationObserver + polling for handler persistence
 - Point selection (red ring highlight)
 - Manual neighbor toggling (cyan ring)
 - KNN suggestions with distance display (lime ring)
 - Neighbor gallery with class labels and distances
 - Class filtering, model switching, clear buttons
-- **Generation from neighbors** (lazy adapter loading, activation masking)
-- **Trajectory visualization** (denoising path on UMAP with sigma labels)
+- **Generation from neighbors** (lazy adapter loading, activation masking) ✅
+- **Trajectory visualization** (denoising path on UMAP with sigma labels) ✅
 - **Hover preview** (debounced JS hover → preview panel)
 - **Intermediate image gallery** (denoising steps with σ labels)
 - **Frame navigation** (◀/▶ buttons + gallery click to view intermediate steps)
 - **Gallery captions** show full generation info (class ID, class name, step, sigma)
 - **Composite images** with noised input inset in upper-left corner
-- **Download button** on generated image (Gradio built-in, hidden on intermediate gallery)
+- **Download button** on generated image (Gradio built-in, hidden via `buttons=[]`)
 - **CLI command** `diffviews viz` (Gradio-only)
 - **CSS styling** compact layouts, vh-based sizing, smooth image scaling
 - **Multi-user thread safety** (see Thread Safety section below)
@@ -110,53 +112,70 @@ Start by reading @diffviews/visualization/app.py
 
 ## Remaining Items
 
-### Phase 5: HF Spaces Deployment (IN PROGRESS)
+### Phase 5b: Gradio 6 Migration (COMPLETE)
+
+**Why Gradio 6:**
+- Gradio 4 had multiple compatibility issues on HF Spaces (schema bugs, HfFolder import)
+- Required monkey-patches that were fragile
+- Gradio 6 is the only maintained version
 
 **Completed:**
-- [x] Create HF Spaces `app.py` entry point in repo root
-- [x] Add `requirements.txt` for Spaces compatibility
-- [x] Create Space on HuggingFace Hub (mckell/diffviews)
-- [x] Configure data/checkpoint auto-download on startup
-- [x] Add data existence checks (config + embeddings + images)
+- [x] Update `requirements.txt`: `gradio>=6.0.0`
+- [x] Update `pyproject.toml`: `requires-python>=3.10`, `gradio>=6.0.0`
+- [x] Update `SPACES_README.md`: `sdk_version: 6.3.0`
+- [x] Remove monkey-patch from root `app.py`
+- [x] Migrate `visualization/app.py`: move `theme/css/js` from `gr.Blocks()` to `launch()`
+- [x] Move `CUSTOM_CSS` to module level constant
+- [x] Fix hidden textboxes (`visible=True` + CSS hiding)
+- [x] Fix Gallery buttons (`buttons=[]` replaces `show_download_button`)
+- [x] Fix Plotly handler persistence (MutationObserver + polling)
+- [x] Fix WebGL context leak (`go.Scatter` instead of `go.Scattergl`)
+- [x] Test locally with Python 3.10 - click/hover working
+
+**Completed (continued):**
+- [x] Verify generation works (vendored torch_utils/dnnlib for checkpoint loading)
+- [x] Regenerate UMAP pickles with current numba (fixes trajectory projection)
 
 **In Progress:**
-- [ ] Fix gradio_client schema generation bug
 - [ ] Test on HF Spaces free tier (CPU)
 - [ ] Test on HF Spaces paid tier (GPU)
-- [ ] Add deployment documentation
 
-**Key Issues & Solutions:**
+**Vendored NVIDIA Modules:**
+EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib`.
+Now vendored in `diffviews/vendor/` under CC BY-NC-SA 4.0:
+- `diffviews/vendor/torch_utils/` - persistence.py, misc.py
+- `diffviews/vendor/dnnlib/` - util.py (EasyDict)
+- `diffviews/adapters/nvidia_compat.py` - ensure_nvidia_modules() helper
 
-1. **Python 3.13 pickle/numba incompatibility**
-   - Error: `TypeError: code() argument 13 must be str, not int`
-   - Solution: Pin `python_version: "3.10"` in Space README YAML header
+**Gradio 6 Breaking Changes Applied:**
 
-2. **numba version mismatch with UMAP pickle**
-   - Error: `Dispatcher._rebuild() got unexpected keyword argument 'impl_kind'`
-   - Solution: Pin `numba==0.58.1` in requirements.txt
+| Change | Before (Gradio 4) | After (Gradio 6) |
+|--------|-------------------|------------------|
+| Blocks params | `gr.Blocks(theme=, css=, head=)` | `gr.Blocks(title=)` then `launch(theme=, css=, js=)` |
+| CSS location | Inline in function | Module-level `CUSTOM_CSS` constant |
+| Hidden components | `visible=False` | `visible=True` + CSS `display:none` |
+| Gallery download | `show_download_button=False` | `buttons=[]` |
+| Textbox events | `.input()` | `.change()` |
+| Plot updates | Handlers persist | Need MutationObserver + polling |
+| Python version | >=3.8 | >=3.10 |
 
-3. **Gradio 6 HfFolder import error**
-   - Error: `ImportError: cannot import name 'HfFolder' from 'huggingface_hub'`
-   - Solution: Pin `huggingface_hub>=0.19.0,<0.28.0`
-
-4. **gradio_client additionalProperties bug**
-   - Error: `TypeError: argument of type 'bool' is not iterable`
-   - Cause: `knn_distances = gr.State(value={})` creates dict schema with `additionalProperties: true`
-   - Solution: Monkey-patch `get_type()` in app.py to return "Any" for boolean schemas
-
-**Requirements Pins (critical):**
+**Current Requirements:**
 ```
-numba==0.58.1
-gradio==4.25.0
-gradio_client==0.15.0
-huggingface_hub>=0.19.0,<0.28.0
+gradio>=6.0.0
+numba==0.58.1  # UMAP pickle compatibility
+huggingface_hub>=0.19.0
 python_version: "3.10"  # in Space README
 ```
 
-**Files for Manual Upload to Space:**
-- `app.py` - Entry point with auto-download + monkey-patch
-- `requirements.txt` - Pinned dependencies
-- `README.md` (from SPACES_README.md) - Space metadata
+**UMAP Pickle Issue (RESOLVED):**
+UMAP pickles were regenerated with current numba version. Trajectory projection now works.
+The `numba==0.58.1` pin may no longer be strictly required but kept for stability.
+If issues recur, options include:
+1. Re-generate UMAP pickles with current numba ✅ (done)
+2. Use parametric UMAP (saves as PyTorch weights)
+3. Train regression model to approximate projection
+
+See `docs/gradio-6-migration-plan.md` for full migration details.
 
 ### Phase 6: Auth & Persistence (DEFERRED)
 See `docs/auth-plan.md` for comprehensive plan covering:
@@ -169,31 +188,42 @@ See `docs/auth-plan.md` for comprehensive plan covering:
 
 ## JS Bridge Pattern (for reference)
 
-**Key learnings:**
-1. Inject JS via `head=` param in `gr.Blocks()` (not `js=` on events, not `gr.HTML`)
-2. Use `.input()` event on textbox (not `.change()`)
-3. Include textbox in inputs list explicitly - Gradio doesn't auto-pass
-4. Use `go.Scattergl` with `.tolist()` for Gradio compatibility
-5. Benign "too many arguments" warning can be ignored
+**Key learnings (Gradio 6):**
+1. Inject JS via `js=` param in `launch()` (not `head=`)
+2. Use `.change()` event on textbox (not `.input()`)
+3. Textboxes must be `visible=True` with CSS hiding (visible=False not in DOM)
+4. Use `go.Scatter` (SVG) to avoid WebGL context leak
+5. Need MutationObserver + polling to re-attach handlers after plot updates
 
-**Pattern:**
+**Pattern (Gradio 6):**
 ```python
-# In gr.Blocks:
-head=f"<script>{CLICK_HANDLER_JS}</script>"
+# Module-level constants:
+PLOTLY_HANDLER_JS = """..."""
+CUSTOM_CSS = """#click-data-box, #hover-data-box { display: none; }..."""
 
-# Hidden textbox:
-click_data_box = gr.Textbox(value="", elem_id="click-data-box", visible=False)
+# In gr.Blocks (minimal params):
+with gr.Blocks(title="...") as app:
+    # visible=True but hidden via CSS - Gradio 6 doesn't render visible=False
+    click_data_box = gr.Textbox(value="", elem_id="click-data-box", visible=True)
+    # ... rest of UI
 
-# JS attaches plotly_click handler, writes JSON to textbox:
-CLICK_HANDLER_JS = """
+# In launch() (theme/css/js):
+app.launch(
+    theme=gr.themes.Soft(),
+    css=CUSTOM_CSS,
+    js=PLOTLY_HANDLER_JS,  # Note: js= not head=
+)
+
+# JS attaches plotly_click handler with MutationObserver for persistence:
+# (in PLOTLY_HANDLER_JS)
 plotDiv.on('plotly_click', function(data) {
     clickBox.value = JSON.stringify({pointIndex: point.customdata, ...});
-    clickBox.dispatchEvent(new Event('input', { bubbles: true }));
+    clickBox.dispatchEvent(new Event('change', { bubbles: true }));
 });
-"""
+// MutationObserver re-attaches when Gradio replaces plot element
 
-# Python handler wired to .input():
-click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
+# Python handler wired to .change():
+click_data_box.change(handler, inputs=[click_data_box, ...], outputs=[...])
 ```
 
 ---
@@ -201,13 +231,15 @@ click_data_box.input(handler, inputs=[click_data_box, ...], outputs=[...])
 ## Current State
 
 - `app.py` (~2200 lines) with Plotly + generation + hover + intermediates + thread safety
-- 33 Gradio tests + 24 generator tests (57 total)
-- Phase 4 complete, ready for deployment
+- 41 tests passing (visualizer + generator)
+- Phase 5b complete (local testing), ready for HF Spaces deployment
 
 **Key files:**
 - `diffviews/visualization/app.py` - main Gradio app
 - `diffviews/scripts/cli.py` - CLI with `viz` command
 - `diffviews/core/generator.py` - generation functions
+- `diffviews/adapters/nvidia_compat.py` - vendored module loader
+- `diffviews/vendor/` - vendored torch_utils + dnnlib
 - `tests/test_gradio_visualizer.py` - visualizer tests
 - `tests/test_generator.py` - generator tests
 

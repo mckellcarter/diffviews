@@ -275,6 +275,10 @@ class EDMImageNetAdapter(HookMixin, GeneratorAdapter):
         This is the standard format for EDM checkpoints like
         `edm-imagenet-64x64-cond-adm.pkl`.
         """
+        # Ensure vendored NVIDIA modules are importable for pickle
+        from .nvidia_compat import ensure_nvidia_modules
+        ensure_nvidia_modules()
+
         print(f"Loading EDM from {checkpoint_path}...")
         with open(checkpoint_path, 'rb') as f:
             data = pickle.load(f)
