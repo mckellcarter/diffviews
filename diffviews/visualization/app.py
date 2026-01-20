@@ -987,8 +987,8 @@ CUSTOM_CSS = """
 
     /* Plot container - fixed height, no vh units (iframe-safe) */
     #umap-plot {
-        height: 1100px !important;
-        max-height: 1100px !important;
+        height: 1000px !important;
+        max-height: 1000px !important;
         min-height: 400px !important;
     }
 
@@ -997,7 +997,7 @@ CUSTOM_CSS = """
     #umap-plot .js-plotly-plot,
     #umap-plot .plotly-graph-div {
         height: 100% !important;
-        max-height: 1100px !important;
+        max-height: 1000px !important;
         width: 100% !important;
     }
 
