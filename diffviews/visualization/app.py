@@ -1137,20 +1137,30 @@ CUSTOM_CSS = """
         scroll-behavior: auto !important;
     }
 
-    /* Plot container - expand to fill space, prevent scroll issues */
+    /* Plot container - expand to fill space, isolate from scroll issues */
     #umap-plot {
         min-height: 500px !important;
         height: calc(100vh - 150px) !important;
         flex-grow: 1 !important;
         contain: layout style !important;
+        isolation: isolate !important;
+        transform: translateZ(0) !important;
+        overscroll-behavior: contain !important;
     }
 
-    /* Make Plotly fill its container */
+    /* Make Plotly fill its container, create stacking context */
     #umap-plot > div,
     #umap-plot .js-plotly-plot,
     #umap-plot .plotly-graph-div {
         height: 100% !important;
         width: 100% !important;
+        transform: translateZ(0) !important;
+        backface-visibility: hidden !important;
+    }
+
+    /* Modebar: prevent layout shifts on interaction */
+    #umap-plot .modebar-container {
+        transform: translateZ(0) !important;
     }
 
     /* Hidden textboxes: prevent focus scroll */
