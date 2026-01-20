@@ -784,17 +784,19 @@ class GradioVisualizer:
         x_pad = (x_max - x_min) * 0.05
         y_pad = (y_max - y_min) * 0.05
 
-        # Layout - explicit ranges prevent zoom corruption on update
+        # Layout - fixed size prevents resize/scroll issues in HF Spaces iframe
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
             yaxis_title="UMAP 2",
-            xaxis=dict(range=[x_min - x_pad, x_max + x_pad]),
-            yaxis=dict(range=[y_min - y_pad, y_max + y_pad]),
+            xaxis=dict(range=[x_min - x_pad, x_max + x_pad], fixedrange=False),
+            yaxis=dict(range=[y_min - y_pad, y_max + y_pad], fixedrange=False),
             hovermode="closest",
             template="plotly_white",
             showlegend=False,
-            autosize=True,
+            autosize=False,
+            width=800,
+            height=600,
             margin=dict(l=40, r=10, t=35, b=40),
             uirevision=model_name,  # Preserve zoom/pan, reset on model switch
         )
@@ -1134,26 +1136,13 @@ CUSTOM_CSS = """
         flex-direction: column !important;
     }
 
-    /* Plot uses viewport height - target all nested elements */
+    /* Plot: fixed size to prevent iframe resize issues */
     #umap-plot {
-        min-height: 50vh !important;
-        height: calc(100vh - 120px) !important;
-        flex-grow: 1 !important;
-    }
-
-    #umap-plot > div {
-        height: 100% !important;
-    }
-
-    #umap-plot .js-plotly-plot,
-    #umap-plot .plotly,
-    #umap-plot .plotly-graph-div {
-        height: 100% !important;
-        width: 100% !important;
-    }
-
-    #umap-plot .main-svg {
-        height: 100% !important;
+        min-height: 600px !important;
+        height: 600px !important;
+        width: 800px !important;
+        flex-grow: 0 !important;
+        overflow: hidden !important;
     }
 
     /* Reduce group padding */
