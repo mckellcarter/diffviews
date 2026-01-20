@@ -640,7 +640,7 @@ class GradioVisualizer:
         fig = go.Figure()
 
         # Add main data points (use scattergl for better performance)
-        fig.add_trace(go.Scattergl(
+        fig.add_trace(go.Scatter(
             x=df["umap_x"].tolist(),
             y=df["umap_y"].tolist(),
             mode="markers",
@@ -659,7 +659,7 @@ class GradioVisualizer:
             class_mask = df["class_label"] == highlighted_class
             class_indices = df[class_mask].index.tolist()
             if class_indices:
-                fig.add_trace(go.Scattergl(
+                fig.add_trace(go.Scatter(
                     x=df.loc[class_mask, "umap_x"].tolist(),
                     y=df.loc[class_mask, "umap_y"].tolist(),
                     mode="markers",
@@ -673,7 +673,7 @@ class GradioVisualizer:
         # Highlight KNN neighbors (green ring)
         if knn_neighbors:
             knn_df = df.iloc[knn_neighbors]
-            fig.add_trace(go.Scattergl(
+            fig.add_trace(go.Scatter(
                 x=knn_df["umap_x"].tolist(),
                 y=knn_df["umap_y"].tolist(),
                 mode="markers",
@@ -687,7 +687,7 @@ class GradioVisualizer:
         # Highlight manual neighbors (blue ring)
         if manual_neighbors:
             man_df = df.iloc[manual_neighbors]
-            fig.add_trace(go.Scattergl(
+            fig.add_trace(go.Scatter(
                 x=man_df["umap_x"].tolist(),
                 y=man_df["umap_y"].tolist(),
                 mode="markers",
@@ -701,7 +701,7 @@ class GradioVisualizer:
         # Highlight selected point (red ring, highest priority)
         if selected_idx is not None and selected_idx < len(df):
             sel_row = df.iloc[selected_idx]
-            fig.add_trace(go.Scattergl(
+            fig.add_trace(go.Scatter(
                 x=[float(sel_row["umap_x"])],
                 y=[float(sel_row["umap_y"])],
                 mode="markers",
@@ -796,126 +796,306 @@ class GradioVisualizer:
 
 # JavaScript for Plotly click and hover handling
 PLOTLY_HANDLER_JS = r"""
-function attachPlotlyHandlers() {
-    console.log('[Plotly] Attempting to attach handlers...');
+// Store references to textboxes (don't change on plot update)
+let clickBox = null;
+let hoverBox = null;
+let hoverTimeout = null;
+let lastHoverKey = null;
+let initComplete = false;
 
-    // Find Plotly plot - try multiple selectors
-    let plotDiv = document.querySelector('#umap-plot .plotly-graph-div');
-    if (!plotDiv) plotDiv = document.querySelector('#umap-plot .js-plotly-plot');
-    if (!plotDiv) plotDiv = document.querySelector('#umap-plot [class*="plotly"]');
-
-    // Find textboxes - Gradio may use input or textarea
-    let clickBox = document.querySelector('#click-data-box textarea');
-    if (!clickBox) clickBox = document.querySelector('#click-data-box input');
-    let hoverBox = document.querySelector('#hover-data-box textarea');
-    if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input');
-
-    console.log('[Plotly] plotDiv:', plotDiv);
-    console.log('[Plotly] clickBox:', clickBox);
-    console.log('[Plotly] hoverBox:', hoverBox);
-
-    if (!plotDiv || !clickBox || !hoverBox) {
-        console.log('[Plotly] Elements not found, retrying in 200ms...');
-        setTimeout(attachPlotlyHandlers, 200);
-        return;
-    }
-
-    // Avoid duplicate handlers
-    if (plotDiv._gradioHandlersAttached) {
-        console.log('[Plotly] Handlers already attached');
-        return;
-    }
-    plotDiv._gradioHandlersAttached = true;
-
-    // Click handler
-    plotDiv.on('plotly_click', function(data) {
-        console.log('[Plotly] Click detected:', data);
-        if (!data || !data.points || data.points.length === 0) return;
-
-        const point = data.points[0];
-        const clickData = {
-            pointIndex: point.customdata,
-            x: point.x,
-            y: point.y,
-            curveNumber: point.curveNumber
-        };
-
-        console.log('[Plotly] Click sending:', clickData);
-        clickBox.value = JSON.stringify(clickData);
-        clickBox.dispatchEvent(new Event('input', { bubbles: true }));
+function debugDOM() {
+    console.log('[Plotly Debug] Looking for elements...');
+    // Find all plotly-related elements
+    const plotlyDivs = document.querySelectorAll('[class*="plotly"]');
+    console.log('[Plotly Debug] Elements with plotly in class:', plotlyDivs.length);
+    plotlyDivs.forEach((el, i) => {
+        console.log('  ' + i + ':', el.tagName, el.className, el.id || '(no id)');
     });
+    // Find umap-plot container
+    const umapPlot = document.querySelector('#umap-plot');
+    console.log('[Plotly Debug] #umap-plot:', umapPlot ? 'found' : 'NOT FOUND');
+    if (umapPlot) {
+        console.log('[Plotly Debug] #umap-plot children:', umapPlot.children.length);
+    }
+    // Find textbox containers
+    const clickContainer = document.querySelector('#click-data-box');
+    const hoverContainer = document.querySelector('#hover-data-box');
+    console.log('[Plotly Debug] #click-data-box:', clickContainer ? 'found' : 'NOT FOUND');
+    console.log('[Plotly Debug] #hover-data-box:', hoverContainer ? 'found' : 'NOT FOUND');
+    if (clickContainer) {
+        console.log('[Plotly Debug] click-data-box innerHTML:', clickContainer.innerHTML.substring(0, 200));
+    }
+}
 
-    // Hover handler with debounce
-    let hoverTimeout = null;
-    let lastHoverKey = null;
-    plotDiv.on('plotly_hover', function(data) {
-        if (!data || !data.points || data.points.length === 0) return;
-
-        const point = data.points[0];
-        const traceName = point.data.name || '';
-
-        // Check if this is a trajectory point (named "trajectory_N")
-        const trajMatch = traceName.match(/^trajectory_(\d+)$/);
-        if (trajMatch) {
-            const trajIdx = parseInt(trajMatch[1]);
-            const stepIdx = point.customdata;  // Step index stored in customdata
-            const hoverKey = `traj_${trajIdx}_${stepIdx}`;
-
-            if (hoverKey === lastHoverKey) return;
-
-            clearTimeout(hoverTimeout);
-            hoverTimeout = setTimeout(() => {
-                lastHoverKey = hoverKey;
-                const hoverData = {
-                    type: 'trajectory',
-                    trajIdx: trajIdx,
-                    stepIdx: stepIdx,
-                    x: point.x,
-                    y: point.y,
-                    sigma: point.text  // Sigma stored in text
-                };
-                console.log('[Plotly] Trajectory hover:', hoverData);
-                hoverBox.value = JSON.stringify(hoverData);
-                hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
-            }, 100);  // Faster for trajectory
-            return;
+function findTextboxes() {
+    // Try multiple selectors for Gradio 6
+    if (!clickBox) {
+        clickBox = document.querySelector('#click-data-box textarea');
+        if (!clickBox) clickBox = document.querySelector('#click-data-box input[type="text"]');
+        if (!clickBox) clickBox = document.querySelector('#click-data-box input');
+        if (!clickBox) {
+            // Gradio 6 might wrap in additional divs
+            const container = document.querySelector('#click-data-box');
+            if (container) {
+                clickBox = container.querySelector('textarea') || container.querySelector('input');
+            }
         }
+    }
+    if (!hoverBox) {
+        hoverBox = document.querySelector('#hover-data-box textarea');
+        if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input[type="text"]');
+        if (!hoverBox) hoverBox = document.querySelector('#hover-data-box input');
+        if (!hoverBox) {
+            const container = document.querySelector('#hover-data-box');
+            if (container) {
+                hoverBox = container.querySelector('textarea') || container.querySelector('input');
+            }
+        }
+    }
+    return clickBox && hoverBox;
+}
 
-        // Only handle main data trace (curve 0) for sample hover
-        if (point.curveNumber !== 0) return;
+function sendClickData(data) {
+    if (!clickBox) return;
+    clickBox.value = JSON.stringify(data);
+    clickBox.dispatchEvent(new Event('input', { bubbles: true }));
+    clickBox.dispatchEvent(new Event('change', { bubbles: true }));
+}
 
-        const idx = point.customdata;
-        const hoverKey = `sample_${idx}`;
+function sendHoverData(data) {
+    if (!hoverBox) return;
+    hoverBox.value = JSON.stringify(data);
+    hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
+    hoverBox.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function handlePlotlyClick(data) {
+    if (!data || !data.points || data.points.length === 0) return;
+    const point = data.points[0];
+    const clickData = {
+        pointIndex: point.customdata,
+        x: point.x,
+        y: point.y,
+        curveNumber: point.curveNumber
+    };
+    console.log('[Plotly] Click sending:', clickData);
+    sendClickData(clickData);
+}
+
+function handlePlotlyHover(data) {
+    if (!data || !data.points || data.points.length === 0) return;
+
+    const point = data.points[0];
+    const traceName = point.data.name || '';
+
+    // Check if this is a trajectory point (named "trajectory_N")
+    const trajMatch = traceName.match(/^trajectory_(\d+)$/);
+    if (trajMatch) {
+        const trajIdx = parseInt(trajMatch[1]);
+        const stepIdx = point.customdata;
+        const hoverKey = `traj_${trajIdx}_${stepIdx}`;
         if (hoverKey === lastHoverKey) return;
 
         clearTimeout(hoverTimeout);
         hoverTimeout = setTimeout(() => {
             lastHoverKey = hoverKey;
             const hoverData = {
-                type: 'sample',
-                pointIndex: idx,
+                type: 'trajectory',
+                trajIdx: trajIdx,
+                stepIdx: stepIdx,
                 x: point.x,
-                y: point.y
+                y: point.y,
+                sigma: point.text
             };
-            console.log('[Plotly] Hover sending:', hoverData);
-            hoverBox.value = JSON.stringify(hoverData);
-            hoverBox.dispatchEvent(new Event('input', { bubbles: true }));
-        }, 100);  // 100ms debounce
-    });
+            console.log('[Plotly] Trajectory hover:', hoverData);
+            sendHoverData(hoverData);
+        }, 100);
+        return;
+    }
+
+    // Only handle main data trace (curve 0) for sample hover
+    if (point.curveNumber !== 0) return;
+
+    const idx = point.customdata;
+    const hoverKey = `sample_${idx}`;
+    if (hoverKey === lastHoverKey) return;
+
+    clearTimeout(hoverTimeout);
+    hoverTimeout = setTimeout(() => {
+        lastHoverKey = hoverKey;
+        const hoverData = {
+            type: 'sample',
+            pointIndex: idx,
+            x: point.x,
+            y: point.y
+        };
+        console.log('[Plotly] Hover sending:', hoverData);
+        sendHoverData(hoverData);
+    }, 100);
+}
+
+// Track current plot to detect when it's replaced
+let currentPlotDiv = null;
+let attachRetries = 0;
+const MAX_RETRIES = 20;
+
+function isPlotlyReady(plotDiv) {
+    // Plotly adds these when initialized
+    return plotDiv &&
+           typeof plotDiv.on === 'function' &&
+           plotDiv.data &&
+           plotDiv.layout;
+}
+
+function findPlotDiv() {
+    // Try multiple selectors for Gradio 6
+    let plotDiv = document.querySelector('#umap-plot .plotly-graph-div');
+    if (!plotDiv) plotDiv = document.querySelector('#umap-plot .js-plotly-plot');
+    if (!plotDiv) plotDiv = document.querySelector('.plotly-graph-div');
+    if (!plotDiv) plotDiv = document.querySelector('.js-plotly-plot');
+    // Gradio 6 might nest differently
+    if (!plotDiv) {
+        const container = document.querySelector('#umap-plot');
+        if (container) {
+            plotDiv = container.querySelector('[class*="plotly"]');
+        }
+    }
+    return plotDiv;
+}
+
+function attachPlotlyHandlers() {
+    attachRetries++;
+
+    // Find Plotly plot
+    let plotDiv = findPlotDiv();
+
+    if (!plotDiv) {
+        if (attachRetries <= MAX_RETRIES) {
+            setTimeout(attachPlotlyHandlers, 300);
+        } else if (attachRetries === MAX_RETRIES + 1) {
+            console.log('[Plotly] Plot element not found after max retries, running debug...');
+            debugDOM();
+        }
+        return;
+    }
+
+    // Check if Plotly has fully initialized
+    if (!isPlotlyReady(plotDiv)) {
+        if (attachRetries <= MAX_RETRIES) {
+            setTimeout(attachPlotlyHandlers, 300);
+        } else if (attachRetries === MAX_RETRIES + 1) {
+            console.log('[Plotly] Plotly not ready after max retries');
+            console.log('[Plotly] plotDiv.on:', typeof plotDiv.on);
+            console.log('[Plotly] plotDiv.data:', plotDiv.data);
+            console.log('[Plotly] plotDiv.layout:', plotDiv.layout);
+        }
+        return;
+    }
+
+    if (!findTextboxes()) {
+        if (attachRetries <= MAX_RETRIES) {
+            setTimeout(attachPlotlyHandlers, 300);
+        } else if (attachRetries === MAX_RETRIES + 1) {
+            console.log('[Plotly] Textboxes not found after max retries');
+            debugDOM();
+        }
+        return;
+    }
+
+    // Reset retry counter on success
+    attachRetries = 0;
+
+    // Check if this is a new plot element or same one already handled
+    if (plotDiv === currentPlotDiv && plotDiv._gradioHandlersAttached) {
+        return;  // Already attached, no logging spam
+    }
+
+    // New plot element - track it
+    if (plotDiv !== currentPlotDiv) {
+        console.log('[Plotly] New plot element detected');
+        currentPlotDiv = plotDiv;
+    }
+
+    // Clear any existing handlers
+    try {
+        plotDiv.removeAllListeners('plotly_click');
+        plotDiv.removeAllListeners('plotly_hover');
+    } catch(e) {}
+
+    // Mark as attached
+    plotDiv._gradioHandlersAttached = true;
+    initComplete = true;
+
+    // Attach handlers
+    plotDiv.on('plotly_click', handlePlotlyClick);
+    plotDiv.on('plotly_hover', handlePlotlyHover);
 
     console.log('[Plotly] Handlers attached successfully!');
 }
 
-// Attach handlers after plot renders
-setTimeout(attachPlotlyHandlers, 500);
+// Also use MutationObserver as backup for Gradio 6 DOM changes
+let plotObserver = null;
+let observerSetupRetries = 0;
+
+function setupObserver() {
+    const container = document.querySelector('#umap-plot');
+    if (!container) {
+        observerSetupRetries++;
+        if (observerSetupRetries <= 10) {
+            setTimeout(setupObserver, 500);
+        }
+        return;
+    }
+
+    if (plotObserver) {
+        plotObserver.disconnect();
+    }
+
+    plotObserver = new MutationObserver(function(mutations) {
+        // Only trigger if we had previously attached successfully
+        if (!initComplete) return;
+
+        for (const mutation of mutations) {
+            if (mutation.addedNodes.length > 0) {
+                // New nodes added - reset retry counter and check
+                attachRetries = 0;
+                setTimeout(attachPlotlyHandlers, 100);
+                break;
+            }
+        }
+    });
+
+    plotObserver.observe(container, { childList: true, subtree: true });
+    console.log('[Plotly] MutationObserver attached');
+}
+
+// Initial setup
+setTimeout(function() {
+    console.log('[Plotly] Starting initialization...');
+    debugDOM();  // Log DOM state for debugging
+    findTextboxes();
+    attachPlotlyHandlers();
+    setupObserver();
+}, 1500);
+
+// Polling backup - only after successful init, check every second
+setInterval(function() {
+    if (!initComplete) return;  // Don't poll until first successful attach
+
+    const plotDiv = findPlotDiv();
+    if (plotDiv && isPlotlyReady(plotDiv)) {
+        if (plotDiv !== currentPlotDiv || !plotDiv._gradioHandlersAttached) {
+            console.log('[Plotly] Poll: plot changed, re-attaching');
+            attachRetries = 0;
+            attachPlotlyHandlers();
+        }
+    }
+}, 1000);
 """
 
-
-def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
-    """Create Gradio Blocks app."""
-
-    # CSS for layout, plot sizing, and reduced chrome
-    custom_css = """
+# CSS for layout, plot sizing, and reduced chrome
+# Module-level for Gradio 6 compatibility (passed to launch() not Blocks())
+CUSTOM_CSS = """
     /* Main container fills viewport with min dimensions */
     .gradio-container {
         max-width: 100% !important;
@@ -1140,23 +1320,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         overflow: hidden !important;
     }
 
-    /* Preview image: fixed size, scale image to fill */
+    /* Preview image: force 300px height, preserve aspect ratio */
     #preview-image {
         width: 100% !important;
-        min-height: 180px !important;
-    }
-
-    #preview-image > div,
-    #preview-image > div > div {
-        width: 100% !important;
-        height: 100% !important;
+        min-height: 300px !important;
     }
 
     #preview-image img {
-        width: 100% !important;
-        height: auto !important;
-        min-height: 300px !important;
-        max-width: none !important;
+        height: 300px !important;
+        width: auto !important;
         object-fit: contain !important;
     }
 
@@ -1213,13 +1385,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     #neighbor-gallery .preview {
         max-height: 280px !important;
     }
-    """
+"""
 
+
+def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
+    """Create Gradio Blocks app.
+
+    Note: In Gradio 6, theme/css/head are passed to launch() not Blocks().
+    Use CUSTOM_CSS and PLOTLY_HANDLER_JS module constants when calling launch().
+    """
     with gr.Blocks(
         title="Diffusion Activation Visualizer",
-        theme=gr.themes.Soft(),
-        css=custom_css,
-        head=f"<script>{PLOTLY_HANDLER_JS}</script>",
     ) as app:
 
         # Per-session state
@@ -1304,15 +1480,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Center column (main plot)
             with gr.Column(scale=3, min_width=500, elem_id="center-column"):
                 # Hidden textboxes for JS bridge (receives data from Plotly)
+                # Note: visible=True but hidden via CSS - Gradio 6 doesn't render visible=False
                 click_data_box = gr.Textbox(
                     value="",
                     elem_id="click-data-box",
-                    visible=False,
+                    visible=True,  # Hidden via CSS, must be in DOM for JS bridge
                 )
                 hover_data_box = gr.Textbox(
                     value="",
                     elem_id="hover-data-box",
-                    visible=False,
+                    visible=True,  # Hidden via CSS, must be in DOM for JS bridge
                 )
                 # Use Plotly via gr.Plot for proper click handling
                 umap_plot = gr.Plot(
@@ -1365,7 +1542,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         rows=1,
                         height=70,
                         object_fit="contain",
-                        show_download_button=False,
+                        buttons=[],  # Hide download/share buttons
                         elem_id="intermediate-gallery",
                     )
                     with gr.Row():
@@ -1727,14 +1904,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         app.load(on_load, outputs=[])
 
         # Hover handling via JS bridge (updates preview panel)
-        hover_data_box.input(
+        # Gradio 6: use .change() instead of .input()
+        hover_data_box.change(
             on_hover_data,
             inputs=[hover_data_box, intermediate_images, current_model],
             outputs=[preview_image, preview_details],
         )
 
         # Click handling via JS bridge (click_data_box receives JSON from Plotly click)
-        click_data_box.input(
+        # Gradio 6: use .change() instead of .input()
+        click_data_box.change(
             on_click_data,
             inputs=[
                 click_data_box, selected_idx, manual_neighbors,
@@ -2209,6 +2388,9 @@ def main():
         server_name="0.0.0.0",
         server_port=args.port,
         share=args.share,
+        theme=gr.themes.Soft(),
+        css=CUSTOM_CSS,
+        js=PLOTLY_HANDLER_JS,
     )
 
 

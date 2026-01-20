@@ -13,30 +13,6 @@ Environment variables:
 import os
 from pathlib import Path
 
-# Monkey-patch gradio_client to handle additionalProperties: true
-# This fixes a bug where dict-typed State components cause schema errors
-# The bug is in _json_schema_to_python_type which recursively calls itself
-# with schema['additionalProperties'] which can be True (boolean)
-def _patch_gradio_client():
-    try:
-        import gradio_client.utils as client_utils
-
-        # Get the original function
-        original_func = client_utils._json_schema_to_python_type
-
-        def patched_json_schema_to_python_type(schema, defs=None):
-            # Handle case where schema is a boolean (additionalProperties: true)
-            if isinstance(schema, bool):
-                return "Any"
-            return original_func(schema, defs)
-
-        client_utils._json_schema_to_python_type = patched_json_schema_to_python_type
-        print("[Patch] Applied gradio_client _json_schema_to_python_type fix")
-    except Exception as e:
-        print(f"[Patch] Could not patch gradio_client: {e}")
-
-_patch_gradio_client()
-
 # Data source configuration
 DATA_REPO_ID = "mckell/diffviews_demo_data"
 CHECKPOINT_URLS = {
@@ -179,7 +155,13 @@ def main():
     ensure_data_ready(data_dir, checkpoints)
 
     # Import and launch visualizer
-    from diffviews.visualization.app import GradioVisualizer, create_gradio_app
+    import gradio as gr
+    from diffviews.visualization.app import (
+        GradioVisualizer,
+        create_gradio_app,
+        CUSTOM_CSS,
+        PLOTLY_HANDLER_JS,
+    )
 
     print("\nInitializing visualizer...")
     visualizer = GradioVisualizer(
@@ -196,7 +178,9 @@ def main():
         server_name="0.0.0.0",
         server_port=7860,
         share=False,  # Spaces handles public URL
-        show_api=False,  # Disable API docs to avoid schema generation bug
+        theme=gr.themes.Soft(),
+        css=CUSTOM_CSS,
+        js=PLOTLY_HANDLER_JS,
     )
 
 
