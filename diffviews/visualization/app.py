@@ -784,18 +784,17 @@ class GradioVisualizer:
         x_pad = (x_max - x_min) * 0.05
         y_pad = (y_max - y_min) * 0.05
 
-        # Layout - fixed size prevents resize/scroll issues in HF Spaces iframe
+        # Layout - fixed height, fluid width; explicit ranges prevent scroll jumps
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
             yaxis_title="UMAP 2",
-            xaxis=dict(range=[x_min - x_pad, x_max + x_pad], fixedrange=False),
-            yaxis=dict(range=[y_min - y_pad, y_max + y_pad], fixedrange=False),
+            xaxis=dict(range=[x_min - x_pad, x_max + x_pad], constrain="domain"),
+            yaxis=dict(range=[y_min - y_pad, y_max + y_pad], constrain="domain", scaleanchor="x"),
             hovermode="closest",
             template="plotly_white",
             showlegend=False,
-            autosize=False,
-            width=800,
+            autosize=True,
             height=600,
             margin=dict(l=40, r=10, t=35, b=40),
             uirevision=model_name,  # Preserve zoom/pan, reset on model switch
@@ -1130,19 +1129,36 @@ CUSTOM_CSS = """
         padding: 0.25rem !important;
     }
 
-    /* Center column stretches */
+    /* Center column: contains plot, prevents escape */
     #center-column {
         display: flex !important;
         flex-direction: column !important;
+        position: relative !important;
+        overflow: hidden !important;
+        min-width: 400px !important;
     }
 
-    /* Plot: fixed size to prevent iframe resize issues */
+    /* Plot: fixed height, fluid width within container */
     #umap-plot {
+        position: relative !important;
         min-height: 600px !important;
         height: 600px !important;
-        width: 800px !important;
+        max-height: 600px !important;
+        width: 100% !important;
         flex-grow: 0 !important;
+        flex-shrink: 0 !important;
         overflow: hidden !important;
+    }
+
+    /* Keep Plotly elements within bounds */
+    #umap-plot > div,
+    #umap-plot .plotly-graph-div,
+    #umap-plot .js-plotly-plot {
+        position: relative !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        height: 100% !important;
+        max-height: 100% !important;
     }
 
     /* Reduce group padding */
