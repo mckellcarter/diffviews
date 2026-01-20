@@ -218,18 +218,22 @@ def ensure_data_ready(data_dir: Path, checkpoints: list) -> bool:
     for model in checkpoints:
         download_checkpoint(data_dir, model)
 
-    # Check UMAP compatibility and regenerate if needed
-    print("\nChecking UMAP compatibility...")
+    # Regenerate UMAP for all models to ensure numba compatibility
+    # This is fast enough to do on every startup and avoids compatibility issues
+    print("\nRegenerating UMAP pickles for numba compatibility...")
     for model in ["dmd2", "edm"]:
         model_dir = data_dir / model
         if not model_dir.exists():
+            print(f"  {model}: model dir not found, skipping")
             continue
 
-        if not check_umap_compatibility(data_dir, model):
-            print(f"  {model}: UMAP incompatible, regenerating...")
-            regenerate_umap(data_dir, model)
-        else:
-            print(f"  {model}: UMAP compatible")
+        embeddings_dir = model_dir / "embeddings"
+        if not embeddings_dir.exists() or not list(embeddings_dir.glob("*.csv")):
+            print(f"  {model}: no embeddings found, skipping")
+            continue
+
+        print(f"  {model}: regenerating UMAP...")
+        regenerate_umap(data_dir, model)
 
     return True
 
