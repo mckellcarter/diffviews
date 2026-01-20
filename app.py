@@ -13,6 +13,26 @@ Environment variables:
 import os
 from pathlib import Path
 
+# Monkey-patch gradio_client to handle additionalProperties: true
+# This fixes a bug where dict-typed State components cause schema errors
+def _patch_gradio_client():
+    try:
+        import gradio_client.utils as client_utils
+        original_get_type = client_utils.get_type
+
+        def patched_get_type(schema):
+            # Handle case where schema is a boolean (additionalProperties: true)
+            if isinstance(schema, bool):
+                return "Any"
+            return original_get_type(schema)
+
+        client_utils.get_type = patched_get_type
+        print("[Patch] Applied gradio_client schema fix")
+    except Exception as e:
+        print(f"[Patch] Could not patch gradio_client: {e}")
+
+_patch_gradio_client()
+
 # Data source configuration
 DATA_REPO_ID = "mckell/diffviews_demo_data"
 CHECKPOINT_URLS = {
