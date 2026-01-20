@@ -1179,52 +1179,32 @@ CUSTOM_CSS = """
         padding: 0.25rem !important;
     }
 
-    /* Center column stretches, prevents scroll jump */
+    /* Center column stretches */
     #center-column {
         display: flex !important;
         flex-direction: column !important;
         flex: 1 !important;
-        scroll-behavior: auto !important;
     }
 
-    /* Plot container - expand to fill space, isolate from scroll issues */
+    /* Plot container - expand to fill space */
     #umap-plot {
         min-height: 500px !important;
         height: calc(100vh - 150px) !important;
         flex-grow: 1 !important;
-        contain: layout style !important;
-        isolation: isolate !important;
-        transform: translateZ(0) !important;
-        overscroll-behavior: contain !important;
     }
 
-    /* Make Plotly fill its container, create stacking context */
+    /* Make Plotly fill its container */
     #umap-plot > div,
     #umap-plot .js-plotly-plot,
     #umap-plot .plotly-graph-div {
         height: 100% !important;
         width: 100% !important;
-        transform: translateZ(0) !important;
-        backface-visibility: hidden !important;
     }
 
-    /* Modebar: prevent layout shifts on interaction */
-    #umap-plot .modebar-container {
-        transform: translateZ(0) !important;
-    }
-
-    /* Hidden textboxes: prevent focus scroll */
+    /* Hidden textboxes for JS bridge */
     #click-data-box,
     #hover-data-box {
         display: none !important;
-        position: absolute !important;
-        left: -9999px !important;
-        pointer-events: none !important;
-    }
-
-    #click-data-box *,
-    #hover-data-box * {
-        pointer-events: none !important;
     }
 
     /* Reduce group padding */
