@@ -220,6 +220,182 @@ Keep `numba==0.58.1` for now. Consider parametric UMAP or regression model if:
 - Numba updates break pickle compatibility again
 - Need cross-platform deployment (UMAP pickles can be OS-specific)
 
+## HuggingFace Spaces Deployment Issues
+
+This section documents issues encountered specifically when deploying to HF Spaces (iframe environment) that didn't appear in local testing.
+
+### Issue 1: Plot Axis Corruption on Click
+
+**When discovered:** First issue on initial HF Spaces test of Gradio 6 port. App loaded successfully, hover worked, first click worked - then subsequent clicks broke the plot.
+
+**Symptom:** First click worked, subsequent clicks caused plot to zoom erratically or "destroy" the view.
+
+**Root Cause:** Plotly's autorange recalculated axis bounds when figure updated with new traces (selection rings, neighbors).
+
+**Attempts:**
+1. Added explicit axis ranges with 5% padding in Python:
+   ```python
+   x_min, x_max = df["umap_x"].min(), df["umap_x"].max()
+   x_pad = (x_max - x_min) * 0.05
+   fig.update_layout(
+       xaxis=dict(range=[x_min - x_pad, x_max + x_pad]),
+       yaxis=dict(range=[y_min - y_pad, y_max + y_pad]),
+   )
+   ```
+   **Result:** Partially helped but caused other issues.
+
+2. Set `dragmode="pan"` to prevent zoom on drag.
+   **Result:** Minor improvement.
+
+3. Added `uirevision=model_name` to preserve zoom/pan state across updates.
+   **Result:** Should work but was overridden by explicit ranges.
+
+**Current Solution:** Rely on `uirevision` alone without explicit axis ranges.
+
+### Issue 2: Plot Container Escape
+
+**Symptom:** Plot element moved outside its container, appearing under the right panel columns.
+
+**Root Cause:** Fixed width CSS (800px) conflicted with HF Spaces iframe layout.
+
+**Attempts:**
+1. Various `overflow: hidden` and `position: relative` combinations.
+   **Result:** Plot became invisible.
+
+2. CSS isolation techniques (`transform: translateZ(0)`, `isolation: isolate`, `contain: layout`).
+   **Result:** No effect on container escape.
+
+**Solution:** Use fluid width (100%) with min-height constraints:
+```css
+#umap-plot {
+    min-height: 500px !important;
+    height: calc(100vh - 150px) !important;
+    flex-grow: 1 !important;
+}
+```
+
+### Issue 3: Plot Too Small
+
+**Symptom:** Plot occupied only 1/3 of available space.
+
+**Solution:** CSS to expand plot container and ensure Plotly fills it:
+```css
+#umap-plot > div,
+#umap-plot .js-plotly-plot,
+#umap-plot .plotly-graph-div {
+    height: 100% !important;
+    width: 100% !important;
+}
+```
+
+### Issue 4: Trajectory Not Rendering
+
+**Symptom:** Trajectory generation completed but no trajectory visible on plot. Console showed:
+```
+[Trajectory] Failed to project step 0: 'Failed in nopython mode pipeline...
+```
+
+**Root Cause:** UMAP pickle files contain numba JIT-compiled code that's version-specific. Pre-generated pickles (numba 0.58.1) failed on HF Spaces (different numba version despite pin).
+
+**Why numba pin didn't work:** `requirements.txt` installed diffviews via git first, which pulled its own dependencies before the explicit `numba==0.58.1` line was processed.
+
+**Solution (two-part):**
+
+1. Pin numba in `pyproject.toml` (processed during git install):
+   ```toml
+   dependencies = [
+       ...
+       "numba==0.58.1",  # Pin for UMAP pickle compatibility
+   ]
+   ```
+
+2. Regenerate UMAP on startup if pickle incompatible. Added to `app.py`:
+   ```python
+   def check_umap_compatibility(data_dir: Path, model: str) -> bool:
+       """Check if UMAP pickle is compatible with current numba."""
+       # Load pickle, try dummy transform, catch numba errors
+       ...
+
+   def regenerate_umap(data_dir: Path, model: str) -> bool:
+       """Recompute UMAP from activations, save new pickle."""
+       from diffviews.processing.umap import (
+           load_dataset_activations,
+           compute_umap,
+           save_embeddings,
+       )
+       ...
+   ```
+
+   Called during `ensure_data_ready()` after data download.
+
+### Issue 5: Plot View Shift on Interaction (IN PROGRESS)
+
+**Symptom:** Each click on a point or toolbar button causes the plot canvas to shift/pan slightly upward. Accumulates over multiple interactions.
+
+**Root Cause:** Under investigation. Likely related to Gradio 6's DOM replacement behavior in iframe environment.
+
+**Attempts:**
+
+1. **Explicit Python axis ranges** - Set fixed ranges on each figure update.
+   **Result:** Didn't prevent shift, may have contributed to it.
+
+2. **CSS isolation** - Various combinations of:
+   ```css
+   transform: translateZ(0);
+   isolation: isolate;
+   contain: layout;
+   overscroll-behavior: contain;
+   ```
+   **Result:** No effect.
+
+3. **JavaScript range save/restore** - Save axis ranges before click, restore via `Plotly.relayout()` after DOM mutation:
+   ```javascript
+   let savedAxisRanges = null;
+
+   function saveAxisRanges() {
+       const layout = plotDiv.layout;
+       savedAxisRanges = {
+           xaxis: [...layout.xaxis.range],
+           yaxis: [...layout.yaxis.range]
+       };
+   }
+
+   function restoreAxisRanges() {
+       Plotly.relayout(plotDiv, {
+           'xaxis.range': savedAxisRanges.xaxis,
+           'yaxis.range': savedAxisRanges.yaxis
+       });
+   }
+   ```
+   Called via MutationObserver after Gradio replaces plot DOM.
+   **Result:** Didn't prevent shift, possibly fought with uirevision.
+
+4. **Remove explicit ranges, rely on uirevision alone**:
+   - Removed Python `xaxis=dict(range=[...])` and `yaxis=dict(range=[...])`
+   - Removed JS range save/restore functions
+   - Let Plotly's `uirevision=model_name` handle state preservation
+   **Result:** Same view shift behavior persists.
+
+**Hypotheses for further investigation:**
+- Gradio 6 iframe scrolling behavior
+- Plotly modebar interaction triggering container resize
+- Hidden element height changes affecting layout
+- Need to intercept Gradio's plot update mechanism
+
+### Issue 6: asyncio Cleanup Errors
+
+**Symptom:** Console warnings on shutdown:
+```
+Exception ignored in: <function BaseEventLoop.__del__...
+RuntimeError: Event loop is closed
+```
+
+**Root Cause:** Gradio 6 async cleanup in HF Spaces environment.
+
+**Impact:** Cosmetic only, doesn't affect functionality.
+
+**Status:** Not addressed (low priority).
+
 ## References
 
 - [Gradio 6 Migration Guide](https://www.gradio.app/main/guides/gradio-6-migration-guide)
