@@ -778,26 +778,19 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-        # Calculate axis ranges with padding to prevent autorange issues
-        x_min, x_max = df["umap_x"].min(), df["umap_x"].max()
-        y_min, y_max = df["umap_y"].min(), df["umap_y"].max()
-        x_pad = (x_max - x_min) * 0.05
-        y_pad = (y_max - y_min) * 0.05
-
-        # Layout - explicit ranges and dragmode='pan' to prevent zoom jump issues
+        # Layout - let uirevision preserve user's zoom/pan state
+        # No explicit axis ranges - they would override uirevision on each update
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
             yaxis_title="UMAP 2",
-            xaxis=dict(range=[x_min - x_pad, x_max + x_pad]),
-            yaxis=dict(range=[y_min - y_pad, y_max + y_pad]),
             hovermode="closest",
             template="plotly_white",
             showlegend=False,
             autosize=True,
-            dragmode="pan",  # Pan instead of zoom to prevent jump on drag
+            dragmode="pan",
             margin=dict(l=40, r=10, t=35, b=40),
-            uirevision=model_name,  # Preserve zoom/pan, reset on model switch
+            uirevision=model_name,  # Preserve zoom/pan state across updates
         )
 
         return fig
@@ -811,46 +804,6 @@ let hoverBox = null;
 let hoverTimeout = null;
 let lastHoverKey = null;
 let initComplete = false;
-
-// Store axis ranges to restore after plot updates
-let savedAxisRanges = null;
-let pendingRangeRestore = false;
-
-function saveAxisRanges() {
-    const plotDiv = findPlotDiv();
-    if (!plotDiv || !plotDiv.layout) return;
-
-    const layout = plotDiv.layout;
-    if (layout.xaxis && layout.xaxis.range && layout.yaxis && layout.yaxis.range) {
-        savedAxisRanges = {
-            xaxis: [...layout.xaxis.range],
-            yaxis: [...layout.yaxis.range]
-        };
-        console.log('[Plotly] Saved axis ranges:', savedAxisRanges);
-    }
-}
-
-function restoreAxisRanges() {
-    if (!savedAxisRanges) return;
-
-    const plotDiv = findPlotDiv();
-    if (!plotDiv || !isPlotlyReady(plotDiv)) {
-        // Retry shortly
-        setTimeout(restoreAxisRanges, 100);
-        return;
-    }
-
-    console.log('[Plotly] Restoring axis ranges:', savedAxisRanges);
-    try {
-        Plotly.relayout(plotDiv, {
-            'xaxis.range': savedAxisRanges.xaxis,
-            'yaxis.range': savedAxisRanges.yaxis
-        });
-    } catch(e) {
-        console.log('[Plotly] Error restoring ranges:', e);
-    }
-    pendingRangeRestore = false;
-}
 
 function debugDOM() {
     console.log('[Plotly Debug] Looking for elements...');
@@ -920,10 +873,6 @@ function sendHoverData(data) {
 
 function handlePlotlyClick(data) {
     if (!data || !data.points || data.points.length === 0) return;
-
-    // Save current axis ranges before triggering update
-    saveAxisRanges();
-    pendingRangeRestore = true;
 
     const point = data.points[0];
     const clickData = {
@@ -1114,11 +1063,6 @@ function setupObserver() {
                 // New nodes added - reset retry counter and check
                 attachRetries = 0;
                 setTimeout(attachPlotlyHandlers, 100);
-
-                // Restore axis ranges if we saved them before an update
-                if (pendingRangeRestore) {
-                    setTimeout(restoreAxisRanges, 200);
-                }
                 break;
             }
         }
