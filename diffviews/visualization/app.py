@@ -636,6 +636,21 @@ class GradioVisualizer:
         else:
             colors = ["#1f77b4"] * len(df)
 
+        # Calculate opacity based on sigma (high sigma = low alpha, log scale)
+        if "conditioning_sigma" in df.columns:
+            sigmas = df["conditioning_sigma"].values
+            log_sigmas = np.log(sigmas + 1e-6)  # Avoid log(0)
+            log_min, log_max = log_sigmas.min(), log_sigmas.max()
+            if log_max > log_min:
+                # Normalize: high sigma (high log) -> low alpha, low sigma -> high alpha
+                normalized = (log_max - log_sigmas) / (log_max - log_min)
+                opacities = 0.4 + 0.6 * normalized  # Range [0.4, 1.0]
+            else:
+                opacities = [0.7] * len(df)
+            opacities = opacities.tolist()
+        else:
+            opacities = 0.7
+
         # Create main scatter trace
         fig = go.Figure()
 
@@ -647,23 +662,29 @@ class GradioVisualizer:
             marker=dict(
                 size=6,
                 color=colors,
-                opacity=0.7,
+                opacity=opacities,
             ),
             customdata=customdata,
             hovertemplate="<b>%{customdata}</b><br>x: %{x:.2f}<br>y: %{y:.2f}<extra></extra>",
             name="samples",
         ))
 
-        # Highlight class if specified
+        # Highlight class if specified (class color with black outline, sigma-based opacity)
         if highlighted_class is not None and "class_label" in df.columns:
             class_mask = df["class_label"] == highlighted_class
             class_indices = df[class_mask].index.tolist()
             if class_indices:
+                class_color = color_map.get(str(int(highlighted_class)), "#888888")
+                # Get opacities for highlighted class points
+                if isinstance(opacities, list):
+                    class_opacities = [opacities[i] for i in class_indices]
+                else:
+                    class_opacities = opacities
                 fig.add_trace(go.Scatter(
                     x=df.loc[class_mask, "umap_x"].tolist(),
                     y=df.loc[class_mask, "umap_y"].tolist(),
                     mode="markers",
-                    marker=dict(size=10, color="yellow", line=dict(width=1, color="black")),
+                    marker=dict(size=10, color=class_color, opacity=class_opacities, line=dict(width=1, color="black")),
                     customdata=[int(i) for i in class_indices],
                     hoverinfo="skip",
                     name="class_highlight",
@@ -778,8 +799,6 @@ class GradioVisualizer:
                 showlegend=False,
             ))
 
-        # Layout - let uirevision preserve user's zoom/pan state
-        # No explicit axis ranges - they would override uirevision on each update
         fig.update_layout(
             title="Activation UMAP",
             xaxis_title="UMAP 1",
@@ -788,9 +807,7 @@ class GradioVisualizer:
             template="plotly_white",
             showlegend=False,
             autosize=True,
-            dragmode="pan",
             margin=dict(l=40, r=10, t=35, b=40),
-            uirevision=model_name,  # Preserve zoom/pan state across updates
         )
 
         return fig
@@ -966,22 +983,24 @@ CUSTOM_CSS = """
     #main-row {
         height: 1200px !important;
         max-height: 1200px !important;
-        align-items: stretch !important;
+        align-items: flex-start !important;
         flex-wrap: nowrap !important;
     }
 
-    /* Sidebars: scrollable with fixed max height */
+    /* Sidebars: fixed width, scrollable */
     #left-sidebar, #right-sidebar {
+        flex: 0 0 220px !important;
         max-height: 1200px !important;
         overflow-y: auto !important;
         padding: 0.25rem !important;
     }
 
-    /* Center column stretches */
+    /* Center column stretches to fill remaining space */
     #center-column {
         display: flex !important;
         flex-direction: column !important;
-        flex: 1 !important;
+        flex: 1 1 auto !important;
+        min-width: 600px !important;
         max-height: 1200px !important;
     }
 
@@ -1003,8 +1022,22 @@ CUSTOM_CSS = """
 
     /* Hidden textboxes for JS bridge */
     #click-data-box,
-    #hover-data-box {
+    div:has(> #click-data-box) {
+        visibility: hidden !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
+    #hover-data-box,
+    div:has(> #hover-data-box) {
         display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
     }
 
     /* Reduce group padding */
@@ -1333,7 +1366,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Center column (main plot)
             with gr.Column(scale=3, min_width=500, elem_id="center-column"):
-                # Hidden textboxes for JS bridge (receives data from Plotly)
+                # Use Plotly via gr.Plot for proper click handling
+                umap_plot = gr.Plot(
+                    value=visualizer.create_umap_figure(visualizer.default_model) if visualizer.default_model else None,
+                    elem_id="umap-plot",
+                    show_label=False,
+                )
+                # Hidden textboxes for JS bridge (after plot to not affect top alignment)
                 # Note: visible=True but hidden via CSS - Gradio 6 doesn't render visible=False
                 click_data_box = gr.Textbox(
                     value="",
@@ -1344,12 +1383,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     value="",
                     elem_id="hover-data-box",
                     visible=True,  # Hidden via CSS, must be in DOM for JS bridge
-                )
-                # Use Plotly via gr.Plot for proper click handling
-                umap_plot = gr.Plot(
-                    value=visualizer.create_umap_figure(visualizer.default_model) if visualizer.default_model else None,
-                    elem_id="umap-plot",
-                    show_label=False,
                 )
 
             # Right column (generation & neighbors)
