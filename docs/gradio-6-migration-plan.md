@@ -328,61 +328,60 @@ This section documents issues encountered specifically when deploying to HF Spac
 
    Called during `ensure_data_ready()` after data download.
 
-### Issue 5: Plot View Shift on Interaction (IN PROGRESS)
+### Issue 5: Plot Height Explosion in Iframe (RESOLVED)
 
-**Symptom:** Each click on a point or toolbar button causes the plot canvas to shift/pan slightly upward. Accumulates over multiple interactions.
+**Symptom:** Plot expanded to ~6000px vertical height when using class filter or other interactions.
 
-**Root Cause:** Under investigation. Likely related to Gradio 6's DOM replacement behavior in iframe environment.
+**Root Cause:** `calc(100vh - X)` CSS resolves incorrectly in HF Spaces iframe environment.
 
-**Attempts:**
+**Solution:** Use fixed pixel heights instead of vh units:
+```css
+#main-row {
+    height: 1200px !important;
+    max-height: 1200px !important;
+}
+#umap-plot {
+    height: 1000px !important;
+    max-height: 1000px !important;
+}
+```
 
-1. **Explicit Python axis ranges** - Set fixed ranges on each figure update.
-   **Result:** Didn't prevent shift, may have contributed to it.
+### Issue 6: EDM Checkpoint Not Found (RESOLVED)
 
-2. **CSS isolation** - Various combinations of:
-   ```css
-   transform: translateZ(0);
-   isolation: isolate;
-   contain: layout;
-   overscroll-behavior: contain;
-   ```
-   **Result:** No effect.
+**Symptom:** EDM model loads for visualization but generation fails with "checkpoint not found".
 
-3. **JavaScript range save/restore** - Save axis ranges before click, restore via `Plotly.relayout()` after DOM mutation:
-   ```javascript
-   let savedAxisRanges = null;
+**Root Cause:** `DIFFVIEWS_CHECKPOINT` defaulted to "dmd2" only.
 
-   function saveAxisRanges() {
-       const layout = plotDiv.layout;
-       savedAxisRanges = {
-           xaxis: [...layout.xaxis.range],
-           yaxis: [...layout.yaxis.range]
-       };
-   }
+**Solution:** Changed default to "all" in `app.py`:
+```python
+checkpoint_config = os.environ.get("DIFFVIEWS_CHECKPOINT", "all")
+```
 
-   function restoreAxisRanges() {
-       Plotly.relayout(plotDiv, {
-           'xaxis.range': savedAxisRanges.xaxis,
-           'yaxis.range': savedAxisRanges.yaxis
-       });
-   }
-   ```
-   Called via MutationObserver after Gradio replaces plot DOM.
-   **Result:** Didn't prevent shift, possibly fought with uirevision.
+### Issue 7: EDM UMAP Not Regenerating (RESOLVED)
 
-4. **Remove explicit ranges, rely on uirevision alone**:
-   - Removed Python `xaxis=dict(range=[...])` and `yaxis=dict(range=[...])`
-   - Removed JS range save/restore functions
-   - Let Plotly's `uirevision=model_name` handle state preservation
-   **Result:** Same view shift behavior persists.
+**Symptom:** UMAP compatibility check passed but trajectory projection failed for EDM.
 
-**Hypotheses for further investigation:**
+**Root Cause:** Compatibility check used hardcoded dimension (100) that didn't match actual data.
+
+**Solution:** Force regenerate UMAP for all models on startup (fast enough, ensures compatibility):
+```python
+for model in ["dmd2", "edm"]:
+    print(f"  {model}: regenerating UMAP...")
+    regenerate_umap(data_dir, model)
+```
+
+### Issue 8: View Shift on Interaction (LOW PRIORITY)
+
+**Symptom:** Minor view shift on some interactions in iframe environment.
+
+**Status:** Deferred. Functional demo working, this is a polish item.
+
+**Hypotheses for future investigation:**
 - Gradio 6 iframe scrolling behavior
 - Plotly modebar interaction triggering container resize
-- Hidden element height changes affecting layout
 - Need to intercept Gradio's plot update mechanism
 
-### Issue 6: asyncio Cleanup Errors
+### Issue 9: asyncio Cleanup Errors
 
 **Symptom:** Console warnings on shutdown:
 ```
@@ -396,9 +395,9 @@ RuntimeError: Event loop is closed
 
 **Status:** Not addressed (low priority).
 
-## Phase 5c: JS/CSS Cleanup (IN PROGRESS)
+## Phase 5c: JS/CSS Cleanup (COMPLETE)
 
-After extensive debugging, accumulated cruft needs cleanup. Fresh analysis identified:
+Cleaned up accumulated debug code and failed attempts:
 
 ### What to Keep (Matches Clean Pattern)
 

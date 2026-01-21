@@ -120,10 +120,12 @@ Completed:
 - [x] Configure queue settings (`max_size=20`)
 - [x] Test multi-user scenarios (verified session isolation)
 
-### Phase 5: HF Spaces Deployment (IN PROGRESS)
-**Branch:** `feature/phase5-hf-spaces-deployment` → `feature/gradio-6-migration`
+### Phase 5: HF Spaces Deployment ✅ FUNCTIONAL DEMO
+**Branch:** `functional-gradio6` (locked snapshot), `fix/gradio6-layout` (active)
 
 Focus: Deploy to HuggingFace Spaces for public demo
+
+**Status:** Functional demo live on HF Spaces. All core features working.
 
 **Phase 5a: Initial Deployment Attempt (Gradio 4)**
 - [x] Create `app.py` in repo root (HF Spaces entry point)
@@ -161,10 +163,15 @@ Completed:
 - [x] **Regenerate UMAP pickles** with current numba (fixes trajectory projection)
 - [x] Verify generation works - DMD2 and EDM both working
 
+Completed (HF Spaces):
+- [x] Test on HF Spaces - functional demo working
+- [x] Fix plot height explosion (100vh → fixed 1000px)
+- [x] Fix EDM checkpoint download (default "all")
+- [x] Fix UMAP regeneration for both models
+- [x] **Phase 5c: JS/CSS Cleanup** - removed debug cruft
+
 In Progress:
-- [ ] Test on HF Spaces free tier (CPU)
-- [ ] Test on HF Spaces paid tier (GPU)
-- [ ] **Phase 5c: JS/CSS Cleanup** (see below)
+- [ ] **Phase 5d: Layout Polish** (branch: `fix/gradio6-layout`)
 
 **Vendored NVIDIA Modules:**
 EDM/DMD2 checkpoints are pickles containing class references to `torch_utils` and `dnnlib`.
@@ -212,35 +219,26 @@ python_version: "3.10"
 - `pyproject.toml` - Python 3.10+, Gradio 6
 - `SPACES_README.md` - sdk_version 6.3.0
 
-**Phase 5c: JS/CSS Cleanup (IN PROGRESS)**
+**Phase 5c: JS/CSS Cleanup (COMPLETE)**
 
-After extensive HF Spaces debugging, accumulated cruft needs cleanup.
+Cleaned up accumulated debug code:
+- Removed `debugDOM()` function
+- Simplified retry logic (removed MAX_RETRIES complexity)
+- Removed excessive logging
+- JS reduced from ~300 to ~150 lines
 
-**Keep (core pattern is correct):**
-- JS bridge pattern with hidden textboxes
-- MutationObserver + polling for handler persistence
-- Debounced hover with deduplication
-- `curveNumber === 0` check to ignore overlay traces
-- `visible=True` + CSS hiding for textboxes
-- `.change()` events (not `.input()`)
-- `go.Scatter` (not `go.Scattergl`)
-- `uirevision=model_name` for view state
+**Phase 5d: Layout Polish (IN PROGRESS)**
 
-**Remove (accumulated debug/failed attempts):**
-- `debugDOM()` function (lines 808-830)
-- Excessive retry logging throughout JS
-- `attachRetries` + MAX_RETRIES complexity
-- `observerSetupRetries` redundant logic
-- Failed CSS isolation attempts (`transform: translateZ(0)`, `isolation: isolate`, etc.)
+Branch: `fix/gradio6-layout`
 
-**Investigate:**
-- `Plotly.react()` for in-place updates (may fix view shift)
+Current issues to address:
+- Minor view shift on some interactions
+- Layout fine-tuning for different screen sizes
 
 See `docs/gradio-6-migration-plan.md` for full details.
 
-**Phase 5d: UMAP Serialization (COMPLETE)**
-UMAP pickles were regenerated with current numba version. Trajectory projection now works.
-The `numba==0.58.1` pin may no longer be strictly required but kept for stability.
+**Phase 5e: UMAP Serialization (COMPLETE)**
+UMAP pickles regenerated on startup for numba compatibility. Trajectory projection works for both DMD2 and EDM.
 
 If UMAP compatibility issues recur, options include:
 1. Re-generate UMAP pickles with current numba ✅ (done)
