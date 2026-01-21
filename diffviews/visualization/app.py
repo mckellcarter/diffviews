@@ -1541,7 +1541,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     step_idx = int(step_idx)
                     if 0 <= step_idx < len(intermediates):
                         img, stored_sigma = intermediates[step_idx]
-                        details = f"**Trajectory {traj_idx + 1}, Step {step_idx}**\n\n"
+                        details = f"**Trajectory {traj_idx + 1}, Step {step_idx + 1}**\n\n"
                         details += f"σ = {stored_sigma:.1f}\n\n"
                         details += f"Coords: ({hover_data.get('x', 0):.2f}, {hover_data.get('y', 0):.2f})"
                         return img, details
