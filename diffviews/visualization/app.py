@@ -772,7 +772,7 @@ class GradioVisualizer:
                 ),
                 hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>σ=%{{text:.1f}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
                 text=traj_sigma,
-                customdata=list(range(len(traj))),
+                customdata=list(range(1,len(traj)+1)),
                 name=f"trajectory_{traj_idx}",
                 showlegend=False,
             ))
