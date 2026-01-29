@@ -2057,6 +2057,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Project trajectory through UMAP
             traj_coords = []
             if trajectory_acts and model_data.umap_reducer:
+                # Pin UMAP random_state for deterministic transform
+                model_data.umap_reducer.random_state = 42
                 for i, act in enumerate(trajectory_acts):
                     try:
                         # Scale if scaler exists

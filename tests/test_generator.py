@@ -485,6 +485,171 @@ class TestNoiseModes:
             assert len(intermediates) == 4
 
 
+class HookableMockAdapter(GeneratorAdapter):
+    """Mock adapter with real nn.Module layers for hook testing.
+
+    Has two hookable layers (encoder_bottleneck, midblock) implemented
+    as nn.Identity so hooks can attach. Forward pass is deterministic:
+    returns x * 0.5.
+    """
+
+    def __init__(self):
+        import torch.nn as nn
+        self._encoder_bottleneck = nn.Identity()
+        self._midblock = nn.Identity()
+        self._layer_map = {
+            'encoder_bottleneck': self._encoder_bottleneck,
+            'midblock': self._midblock,
+        }
+        self.calls = []
+
+    @property
+    def model_type(self) -> str:
+        return 'hookable_mock'
+
+    @property
+    def resolution(self) -> int:
+        return 64
+
+    @property
+    def num_classes(self) -> int:
+        return 1000
+
+    @property
+    def hookable_layers(self) -> List[str]:
+        return ['encoder_bottleneck', 'midblock']
+
+    def forward(self, x, sigma, class_labels=None, **kwargs):
+        self.calls.append({'x': x.clone(), 'sigma': sigma})
+        # Pass through hookable layers so hooks fire
+        # Produce (B, 256, 8, 8) and (B, 512, 4, 4) shaped activations
+        B = x.shape[0]
+        enc_act = x[:, :1, :8, :8].expand(B, 256, 8, 8).contiguous()
+        mid_act = x[:, :1, :4, :4].expand(B, 512, 4, 4).contiguous()
+        self._encoder_bottleneck(enc_act)
+        self._midblock(mid_act)
+        return x * 0.5
+
+    def register_activation_hooks(self, layer_names, hook_fn):
+        handles = []
+        for name in layer_names:
+            if name in self._layer_map:
+                h = self._layer_map[name].register_forward_hook(hook_fn)
+                handles.append(h)
+        return handles
+
+    def get_layer_shapes(self):
+        return {
+            'encoder_bottleneck': (256, 8, 8),
+            'midblock': (512, 4, 4),
+        }
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint_path, device='cpu', **kwargs):
+        return cls()
+
+    @classmethod
+    def get_default_config(cls):
+        return {}
+
+
+class TestMaskedActivationDeterminism:
+    """Test that masked generation produces identical high-D activations
+    but potentially different UMAP embeddings (isolating divergence source)."""
+
+    def test_same_mask_yields_same_trajectory_activations(self):
+        """Repeated zero-noise generation with same mask → identical trajectory activations."""
+        import numpy as np
+
+        extract_layers = ['encoder_bottleneck', 'midblock']
+        # Fixed mask activation (what a single selected point would produce)
+        mask_act_enc = torch.randn(1, 256, 8, 8)
+        mask_act_mid = torch.randn(1, 512, 4, 4)
+
+        trajectories = []
+        for _ in range(3):
+            adapter = HookableMockAdapter()
+            masker = ActivationMasker(adapter)
+            masker.set_mask('encoder_bottleneck', mask_act_enc)
+            masker.set_mask('midblock', mask_act_mid)
+            masker.register_hooks()
+
+            result = generate_with_mask_multistep(
+                adapter, masker,
+                class_label=0, num_steps=3, mask_steps=1,
+                noise_mode="zero", num_samples=1, device='cpu',
+                extract_layers=extract_layers,
+                return_trajectory=True,
+            )
+            _, _, traj_acts = result
+            trajectories.append(traj_acts)
+            masker.remove_hooks()
+
+        # All 3 runs should produce identical high-D trajectory activations
+        assert len(trajectories[0]) == 3  # one per step
+        for step_idx in range(3):
+            for run in range(1, 3):
+                np.testing.assert_array_equal(
+                    trajectories[0][step_idx],
+                    trajectories[run][step_idx],
+                    err_msg=f"Trajectory activations differ at step {step_idx}, run {run}"
+                )
+
+    def test_umap_transform_determinism_with_seeded_reducer(self):
+        """UMAP transform with random_state=42 should be deterministic (realistic dims)."""
+        import numpy as np
+        try:
+            import umap
+        except ImportError:
+            pytest.skip("umap-learn not installed")
+
+        # Realistic: 1168 samples, 98304 dims (matches dmd2 layer setup)
+        N_SAMPLES = 1168
+        N_DIMS = 98304
+        rng = np.random.RandomState(42)
+        train_data = rng.randn(N_SAMPLES, N_DIMS).astype(np.float32)
+        reducer = umap.UMAP(n_components=2, random_state=42)
+        reducer.fit(train_data)
+
+        # Transform same point multiple times with random_state pinned
+        test_point = rng.randn(1, N_DIMS).astype(np.float32)
+        reducer.random_state = 42
+        results = [reducer.transform(test_point) for _ in range(5)]
+
+        for i in range(1, 5):
+            np.testing.assert_array_equal(
+                results[0], results[i],
+                err_msg=f"Seeded UMAP transform not deterministic on call {i}"
+            )
+
+    def test_umap_transform_unseeded_diverges(self):
+        """UMAP transform WITHOUT random_state diverges at realistic scale."""
+        import numpy as np
+        try:
+            import umap
+        except ImportError:
+            pytest.skip("umap-learn not installed")
+
+        N_SAMPLES = 1168
+        N_DIMS = 98304
+        rng = np.random.RandomState(42)
+        train_data = rng.randn(N_SAMPLES, N_DIMS).astype(np.float32)
+        # Fit without random_state (reproduces the bug)
+        reducer = umap.UMAP(n_components=2)
+        reducer.fit(train_data)
+
+        test_point = rng.randn(1, N_DIMS).astype(np.float32)
+        # Leave random_state=None — should diverge
+        results = np.array([reducer.transform(test_point)[0] for _ in range(5)])
+
+        spread = results.max(axis=0) - results.min(axis=0)
+        print(f"Unseeded UMAP spread (98304-D, 1168 samples): x={spread[0]:.4f}, y={spread[1]:.4f}")
+        # Expect non-zero spread (this documents the bug we fixed)
+        assert spread[0] > 0 or spread[1] > 0, (
+            "Expected unseeded UMAP to diverge but it didn't"
+        )
+
+
 class TestSaveGeneratedSample:
     """Test saving generated samples."""
 
