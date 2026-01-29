@@ -1415,6 +1415,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             value=default_sigma_min, label="σ min",
                             elem_id="sigma-min", min_width=50
                         )
+                    noise_mode_dropdown = gr.Dropdown(
+                        choices=["stochastic", "fixed", "zero"],
+                        value="stochastic",
+                        label="Noise Mode",
+                        elem_id="noise-mode",
+                    )
                     generate_btn = gr.Button("Generate from Neighbors", variant="primary")
                     gen_status = gr.Markdown("Select neighbors, then generate")
                     # Generated output
@@ -1956,8 +1962,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         # --- Generate button ---
         def on_generate(
-            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, high_class, existing_traj, 
-            model_name, intermediates_state
+            sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, noise_mode,
+            high_class, existing_traj, model_name, intermediates_state
         ):
             """Generate image from selected neighbors with trajectory visualization."""
             existing_traj = existing_traj or []
@@ -2014,7 +2020,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         sigma_max=float(s_max),
                         sigma_min=float(s_min),
                         guidance_scale=float(guidance),
-                        stochastic=True,
+                        noise_mode=noise_mode or "stochastic",
                         num_samples=1,
                         device=visualizer.device,
                         extract_layers=extract_layers if can_project else None,
@@ -2051,6 +2057,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Project trajectory through UMAP
             traj_coords = []
             if trajectory_acts and model_data.umap_reducer:
+                # Pin UMAP random_state for deterministic transform
+                model_data.umap_reducer.random_state = 42
                 for i, act in enumerate(trajectory_acts):
                     try:
                         # Scale if scaler exists
@@ -2133,7 +2141,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             inputs=[
                 selected_idx, manual_neighbors, knn_neighbors,
                 num_steps_slider, mask_steps_slider, guidance_slider,
-                sigma_max_input, sigma_min_input, highlighted_class, trajectory_coords, current_model,
+                sigma_max_input, sigma_min_input, noise_mode_dropdown,
+                highlighted_class, trajectory_coords, current_model,
                 intermediate_images
             ],
             outputs=[

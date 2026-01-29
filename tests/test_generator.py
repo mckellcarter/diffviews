@@ -324,6 +324,332 @@ class TestGenerateWithMaskMultistep:
         assert images.shape == (1, 64, 64, 3)
 
 
+class DeterministicMockAdapter(MockAdapter):
+    """Mock adapter that returns a deterministic transform of input.
+
+    Allows tests to detect whether different noise was injected,
+    since output depends on input x.
+    """
+
+    def forward(self, x, sigma, class_labels=None, **kwargs):
+        self.calls.append({
+            'x': x,
+            'sigma': sigma,
+            'class_labels': class_labels
+        })
+        # Deterministic: scale input down (simulates denoising)
+        return x * 0.5
+
+
+class TestNoiseModes:
+    """Test noise_mode parameter in multi-step generation."""
+
+    def test_stochastic_produces_different_outputs(self):
+        """Stochastic mode should produce different results each call."""
+        results = []
+        for _ in range(2):
+            adapter = DeterministicMockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode="stochastic", num_samples=1, device='cpu'
+            )
+            results.append(images)
+        # Extremely unlikely to be identical with fresh random noise
+        assert not torch.equal(results[0], results[1])
+
+    def test_fixed_produces_identical_outputs(self):
+        """Fixed mode (same default seed) should produce identical results."""
+        results = []
+        for _ in range(2):
+            adapter = DeterministicMockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode="fixed", num_samples=1, device='cpu'
+            )
+            results.append(images)
+        assert torch.equal(results[0], results[1])
+
+    def test_fixed_uses_default_seed_42(self):
+        """Fixed mode with no seed should use seed 42."""
+        # Generate with fixed (no explicit seed) -> should use 42
+        adapter1 = DeterministicMockAdapter()
+        masker1 = ActivationMasker(adapter1)
+        images1, _ = generate_with_mask_multistep(
+            adapter1, masker1, class_label=0, num_steps=4,
+            noise_mode="fixed", num_samples=1, device='cpu'
+        )
+        # Generate with fixed + explicit seed=42 -> should match
+        adapter2 = DeterministicMockAdapter()
+        masker2 = ActivationMasker(adapter2)
+        images2, _ = generate_with_mask_multistep(
+            adapter2, masker2, class_label=0, num_steps=4,
+            noise_mode="fixed", seed=42, num_samples=1, device='cpu'
+        )
+        assert torch.equal(images1, images2)
+
+    def test_fixed_different_seeds_differ(self):
+        """Fixed mode with different seeds should produce different results."""
+        adapter1 = DeterministicMockAdapter()
+        masker1 = ActivationMasker(adapter1)
+        images1, _ = generate_with_mask_multistep(
+            adapter1, masker1, class_label=0, num_steps=4,
+            noise_mode="fixed", seed=42, num_samples=1, device='cpu'
+        )
+        adapter2 = DeterministicMockAdapter()
+        masker2 = ActivationMasker(adapter2)
+        images2, _ = generate_with_mask_multistep(
+            adapter2, masker2, class_label=0, num_steps=4,
+            noise_mode="fixed", seed=99, num_samples=1, device='cpu'
+        )
+        assert not torch.equal(images1, images2)
+
+    def test_zero_produces_identical_outputs(self):
+        """Zero mode should produce identical results every call."""
+        results = []
+        for _ in range(2):
+            adapter = DeterministicMockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode="zero", num_samples=1, device='cpu'
+            )
+            results.append(images)
+        assert torch.equal(results[0], results[1])
+
+    def test_zero_initial_noise_is_zeros(self):
+        """Zero mode should start from all-zero initial noise."""
+        adapter = DeterministicMockAdapter()
+        masker = ActivationMasker(adapter)
+        generate_with_mask_multistep(
+            adapter, masker, class_label=0, num_steps=1,
+            noise_mode="zero", num_samples=1, device='cpu'
+        )
+        # With 1 step: x = zeros * sigma_max = zeros, forward(zeros) = zeros * 0.5 = zeros
+        first_call_x = adapter.calls[0]['x']
+        assert torch.all(first_call_x == 0)
+
+    def test_zero_no_step_noise(self):
+        """Zero mode should not inject noise between steps."""
+        adapter = DeterministicMockAdapter()
+        masker = ActivationMasker(adapter)
+        generate_with_mask_multistep(
+            adapter, masker, class_label=0, num_steps=3,
+            noise_mode="zero", num_samples=1, device='cpu'
+        )
+        # All calls should receive zeros (initial=0, step noise=0, pred*0.5=0)
+        for call in adapter.calls:
+            assert torch.all(call['x'] == 0)
+
+    def test_stochastic_injects_step_noise(self):
+        """Stochastic mode should inject noise between steps (non-zero x after step 1)."""
+        adapter = DeterministicMockAdapter()
+        masker = ActivationMasker(adapter)
+        generate_with_mask_multistep(
+            adapter, masker, class_label=0, num_steps=3,
+            noise_mode="stochastic", num_samples=1, device='cpu'
+        )
+        # Step 2+ input should differ from pure deterministic (has added noise)
+        # With deterministic adapter: pred = x*0.5, next x = pred + sigma*noise
+        # So call[1].x should not be just call[0].x * 0.5
+        assert len(adapter.calls) == 3
+        # The second call's x should have noise added (not zero, not just scaled first)
+        assert not torch.all(adapter.calls[1]['x'] == 0)
+
+    def test_all_modes_produce_valid_images(self):
+        """All noise modes should produce valid uint8 images."""
+        for mode in ["stochastic", "fixed", "zero"]:
+            adapter = MockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode=mode, num_samples=1, device='cpu'
+            )
+            assert images.dtype == torch.uint8
+            assert images.shape == (1, 64, 64, 3)
+            assert images.min() >= 0
+            assert images.max() <= 255
+
+    def test_intermediates_returned_for_all_modes(self):
+        """All noise modes should return intermediates when requested."""
+        for mode in ["stochastic", "fixed", "zero"]:
+            adapter = MockAdapter()
+            masker = ActivationMasker(adapter)
+            result = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode=mode, num_samples=1, device='cpu',
+                return_intermediates=True
+            )
+            images, labels, intermediates = result
+            assert len(intermediates) == 4
+
+
+class HookableMockAdapter(GeneratorAdapter):
+    """Mock adapter with real nn.Module layers for hook testing.
+
+    Has two hookable layers (encoder_bottleneck, midblock) implemented
+    as nn.Identity so hooks can attach. Forward pass is deterministic:
+    returns x * 0.5.
+    """
+
+    def __init__(self):
+        import torch.nn as nn
+        self._encoder_bottleneck = nn.Identity()
+        self._midblock = nn.Identity()
+        self._layer_map = {
+            'encoder_bottleneck': self._encoder_bottleneck,
+            'midblock': self._midblock,
+        }
+        self.calls = []
+
+    @property
+    def model_type(self) -> str:
+        return 'hookable_mock'
+
+    @property
+    def resolution(self) -> int:
+        return 64
+
+    @property
+    def num_classes(self) -> int:
+        return 1000
+
+    @property
+    def hookable_layers(self) -> List[str]:
+        return ['encoder_bottleneck', 'midblock']
+
+    def forward(self, x, sigma, class_labels=None, **kwargs):
+        self.calls.append({'x': x.clone(), 'sigma': sigma})
+        # Pass through hookable layers so hooks fire
+        # Produce (B, 256, 8, 8) and (B, 512, 4, 4) shaped activations
+        B = x.shape[0]
+        enc_act = x[:, :1, :8, :8].expand(B, 256, 8, 8).contiguous()
+        mid_act = x[:, :1, :4, :4].expand(B, 512, 4, 4).contiguous()
+        self._encoder_bottleneck(enc_act)
+        self._midblock(mid_act)
+        return x * 0.5
+
+    def register_activation_hooks(self, layer_names, hook_fn):
+        handles = []
+        for name in layer_names:
+            if name in self._layer_map:
+                h = self._layer_map[name].register_forward_hook(hook_fn)
+                handles.append(h)
+        return handles
+
+    def get_layer_shapes(self):
+        return {
+            'encoder_bottleneck': (256, 8, 8),
+            'midblock': (512, 4, 4),
+        }
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint_path, device='cpu', **kwargs):
+        return cls()
+
+    @classmethod
+    def get_default_config(cls):
+        return {}
+
+
+class TestMaskedActivationDeterminism:
+    """Test that masked generation produces identical high-D activations
+    but potentially different UMAP embeddings (isolating divergence source)."""
+
+    def test_same_mask_yields_same_trajectory_activations(self):
+        """Repeated zero-noise generation with same mask → identical trajectory activations."""
+        import numpy as np
+
+        extract_layers = ['encoder_bottleneck', 'midblock']
+        # Fixed mask activation (what a single selected point would produce)
+        mask_act_enc = torch.randn(1, 256, 8, 8)
+        mask_act_mid = torch.randn(1, 512, 4, 4)
+
+        trajectories = []
+        for _ in range(3):
+            adapter = HookableMockAdapter()
+            masker = ActivationMasker(adapter)
+            masker.set_mask('encoder_bottleneck', mask_act_enc)
+            masker.set_mask('midblock', mask_act_mid)
+            masker.register_hooks()
+
+            result = generate_with_mask_multistep(
+                adapter, masker,
+                class_label=0, num_steps=3, mask_steps=1,
+                noise_mode="zero", num_samples=1, device='cpu',
+                extract_layers=extract_layers,
+                return_trajectory=True,
+            )
+            _, _, traj_acts = result
+            trajectories.append(traj_acts)
+            masker.remove_hooks()
+
+        # All 3 runs should produce identical high-D trajectory activations
+        assert len(trajectories[0]) == 3  # one per step
+        for step_idx in range(3):
+            for run in range(1, 3):
+                np.testing.assert_array_equal(
+                    trajectories[0][step_idx],
+                    trajectories[run][step_idx],
+                    err_msg=f"Trajectory activations differ at step {step_idx}, run {run}"
+                )
+
+    def test_umap_transform_determinism_with_seeded_reducer(self):
+        """UMAP transform with random_state=42 should be deterministic (realistic dims)."""
+        import numpy as np
+        try:
+            import umap
+        except ImportError:
+            pytest.skip("umap-learn not installed")
+
+        # Realistic: 1168 samples, 98304 dims (matches dmd2 layer setup)
+        N_SAMPLES = 1168
+        N_DIMS = 98304
+        rng = np.random.RandomState(42)
+        train_data = rng.randn(N_SAMPLES, N_DIMS).astype(np.float32)
+        reducer = umap.UMAP(n_components=2, random_state=42)
+        reducer.fit(train_data)
+
+        # Transform same point multiple times with random_state pinned
+        test_point = rng.randn(1, N_DIMS).astype(np.float32)
+        reducer.random_state = 42
+        results = [reducer.transform(test_point) for _ in range(5)]
+
+        for i in range(1, 5):
+            np.testing.assert_array_equal(
+                results[0], results[i],
+                err_msg=f"Seeded UMAP transform not deterministic on call {i}"
+            )
+
+    def test_umap_transform_unseeded_diverges(self):
+        """UMAP transform WITHOUT random_state diverges at realistic scale."""
+        import numpy as np
+        try:
+            import umap
+        except ImportError:
+            pytest.skip("umap-learn not installed")
+
+        N_SAMPLES = 1168
+        N_DIMS = 98304
+        rng = np.random.RandomState(42)
+        train_data = rng.randn(N_SAMPLES, N_DIMS).astype(np.float32)
+        # Fit without random_state (reproduces the bug)
+        reducer = umap.UMAP(n_components=2)
+        reducer.fit(train_data)
+
+        test_point = rng.randn(1, N_DIMS).astype(np.float32)
+        # Leave random_state=None — should diverge
+        results = np.array([reducer.transform(test_point)[0] for _ in range(5)])
+
+        spread = results.max(axis=0) - results.min(axis=0)
+        print(f"Unseeded UMAP spread (98304-D, 1168 samples): x={spread[0]:.4f}, y={spread[1]:.4f}")
+        # Expect non-zero spread (this documents the bug we fixed)
+        assert spread[0] > 0 or spread[1] > 0, (
+            "Expected unseeded UMAP to diverge but it didn't"
+        )
+
+
 class TestSaveGeneratedSample:
     """Test saving generated samples."""
 
