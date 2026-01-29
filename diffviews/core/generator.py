@@ -152,8 +152,8 @@ def generate_with_mask_multistep(
     """
     if mask_steps is None:
         mask_steps = num_steps
-    if seed is not None:
-        torch.manual_seed(seed)
+    if seed is not None or noise_mode in ("zero", "fixed"):
+        torch.manual_seed(seed if seed is not None else 42)
 
     resolution = adapter.resolution
     num_classes = adapter.num_classes
