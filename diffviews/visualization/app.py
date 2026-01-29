@@ -1295,7 +1295,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         trajectory_coords = gr.State(value=[])  # [[(x, y, sigma), ...], ...] list of trajectories
         intermediate_images = gr.State(value=[])  # [[(img, sigma), ...]] list (trajs) or list (steps) for hover
         animation_frame = gr.State(value=-1)  # Current animation frame (-1 = showing final)
-        generation_info = gr.State(value=None)  # {class_id, class_name, n_traj} for display
+        generation_infos = gr.State(value=[])  # [{class_id, class_name, n_steps, final_image}, ...] per traj
 
         # Get initial model data for default values
         default_model_data = visualizer.get_model(visualizer.default_model)
@@ -1416,13 +1416,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             elem_id="sigma-min", min_width=50
                         )
                     noise_mode_dropdown = gr.Dropdown(
-                        choices=["stochastic", "fixed", "zero"],
-                        value="stochastic",
-                        label="Noise Mode",
+                        choices=["stochastic noise", "fixed noise", "zero noise"],
+                        value="stochastic noise",
+                        show_label=False,
                         elem_id="noise-mode",
                     )
                     generate_btn = gr.Button("Generate from Neighbors", variant="primary")
-                    gen_status = gr.Markdown("Select neighbors, then generate")
+                    gen_traj_dropdown = gr.Dropdown(
+                        choices=[],
+                        value=None,
+                        show_label=False,
+                        elem_id="gen-traj-dropdown",
+                        interactive=True,
+                    )
                     # Generated output
                     generated_image = gr.Image(
                         label=None, show_label=False, elem_id="generated-image"
@@ -1436,6 +1442,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         height=70,
                         object_fit="contain",
                         buttons=[],  # Hide download/share buttons
+                        allow_preview=False,
                         elem_id="intermediate-gallery",
                     )
                     with gr.Row():
@@ -1761,7 +1768,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             All model data is preloaded, so no shared state is modified.
             """
             if new_model_name == cur_model:
-                return (gr.update(),) * 23  # +1 for current_model state
+                return (gr.update(),) * 23
 
             if not visualizer.is_valid_model(new_model_name):
                 return (gr.update(),) * 23
@@ -1788,10 +1795,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 gr.update(choices=visualizer.get_class_options(new_model_name), value=None),  # class_dropdown
                 None,                              # generated_image
                 gr.update(value=[], label="Denoising Steps"),  # intermediate_gallery
-                "Select neighbors, then generate", # gen_status
+                gr.update(choices=[], value=None),  # gen_traj_dropdown
                 [],                                # intermediate_images
                 -1,                                # animation_frame
-                None,                              # generation_info
+                [],                                # generation_infos
                 [],                                # neighbor_gallery
                 "No neighbors selected",           # neighbor_info
             )
@@ -1883,10 +1890,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_dropdown,
                     generated_image,
                     intermediate_gallery,
-                    gen_status,
+                    gen_traj_dropdown,
                     intermediate_images,
                     animation_frame,
-                    generation_info,
+                    generation_infos,
                     neighbor_gallery,
                     neighbor_info,
                 ],
@@ -1963,15 +1970,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # --- Generate button ---
         def on_generate(
             sel_idx, man_n, knn_n, n_steps, m_steps, guidance, s_max, s_min, noise_mode,
-            high_class, existing_traj, model_name, intermediates_state
+            high_class, existing_traj, model_name, intermediates_state, gen_infos_state
         ):
             """Generate image from selected neighbors with trajectory visualization."""
             existing_traj = existing_traj or []
 
             # Get model data
+            gen_infos_state = gen_infos_state or []
             model_data = visualizer.get_model(model_name)
             if model_data is None:
-                return None, gr.update(), "Model not loaded", gr.update(), existing_traj, [], None
+                return None, gr.update(), gr.update(), gr.update(), existing_traj, [], gen_infos_state, -1
 
             # Combine all neighbors
             all_neighbors = list(set((man_n or []) + (knn_n or [])))
@@ -1979,7 +1987,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 all_neighbors.insert(0, sel_idx)
 
             if not all_neighbors:
-                return None, gr.update(), "Select neighbors first", gr.update(), existing_traj, [], None
+                return None, gr.update(), gr.update(), gr.update(), existing_traj, [], gen_infos_state, -1
 
             # Get class label from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
@@ -1996,12 +2004,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             with visualizer._generation_lock:
                 adapter = visualizer.load_adapter(model_name)
                 if adapter is None:
-                    return None, gr.update(), "Checkpoint not found", gr.update(), [], [], None
+                    return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
 
                 # Prepare activation dict
                 activation_dict = visualizer.prepare_activation_dict(model_name, all_neighbors)
                 if activation_dict is None:
-                    return None, gr.update(), "Failed to prepare activations", gr.update(), [], [], None
+                    return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
 
                 # Create masker and register hooks
                 masker = ActivationMasker(adapter)
@@ -2020,7 +2028,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         sigma_max=float(s_max),
                         sigma_min=float(s_min),
                         guidance_scale=float(guidance),
-                        noise_mode=noise_mode or "stochastic",
+                        noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
                         num_samples=1,
                         device=visualizer.device,
                         extract_layers=extract_layers if can_project else None,
@@ -2089,7 +2097,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Convert to numpy for gr.Image
             gen_img_raw = images[0].numpy()
             class_name = visualizer.get_class_name(class_label) if class_label else "random"
-            n_traj = len(all_trajectories) if all_trajectories else 0
             n_steps = len(intermediate_imgs)
 
             # Create composite for final image (output + last noised input as inset)
@@ -2099,17 +2106,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             else:
                 gen_img = gen_img_raw
 
-            # Build generation info for frame display
+            # Build generation info for this trajectory
             gen_info = {
                 "class_id": class_label,
                 "class_name": class_name,
-                "n_traj": n_traj,
                 "n_steps": n_steps,
+                "final_image": gen_img,
             }
-
-            # Status shows final result info
-            traj_info = f" | {n_traj} traj" if n_traj else ""
-            status = f"Class {class_label}: {class_name}{traj_info} | Final"
+            gen_infos_state = list(gen_infos_state)
+            gen_infos_state.append(gen_info)
 
             # Build intermediate gallery and state: list of (image, sigma) tuples
             # Each step shows denoised output with noised input as inset
@@ -2130,11 +2135,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 step_gallery.append((composite_img, caption))
                 intermediates_state[-1].append((composite_img, sigma))
 
-            # Gallery label (shown when nothing selected)
+            # Gallery label
             gallery_label = f"{class_label}: {class_name} | {n_steps} steps"
             gallery_update = gr.update(value=step_gallery, label=gallery_label)
 
-            return gen_img, gallery_update, status, fig, all_trajectories, intermediates_state, gen_info
+            # Build dropdown choices: (label, index) for each trajectory
+            traj_choices = []
+            for i, info in enumerate(gen_infos_state):
+                cid = info.get("class_id", "?")
+                cname = info.get("class_name", "")
+                traj_choices.append((f"Traj {i+1} Class {cid}: {cname}", i))
+            new_traj_idx = len(gen_infos_state) - 1
+            dropdown_update = gr.update(choices=traj_choices, value=new_traj_idx)
+
+            return (
+                gen_img, gallery_update, dropdown_update, fig,
+                all_trajectories, intermediates_state, gen_infos_state, -1
+            )
 
         generate_btn.click(
             on_generate,
@@ -2143,12 +2160,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 num_steps_slider, mask_steps_slider, guidance_slider,
                 sigma_max_input, sigma_min_input, noise_mode_dropdown,
                 highlighted_class, trajectory_coords, current_model,
-                intermediate_images
+                intermediate_images, generation_infos
             ],
             outputs=[
-                generated_image, intermediate_gallery, gen_status,
+                generated_image, intermediate_gallery, gen_traj_dropdown,
                 umap_plot, trajectory_coords, intermediate_images,
-                generation_info
+                generation_infos, animation_frame
             ],
         )
 
@@ -2163,15 +2180,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 highlighted_class=high_class,
             )
             gallery_update = gr.update(value=[], label="Denoising Steps")
-            return None, gallery_update, "Select neighbors, then generate", fig, [], [], -1, None
+            dropdown_update = gr.update(choices=[], value=None)
+            return None, gallery_update, dropdown_update, fig, [], [], -1, []
 
         clear_gen_btn.click(
             on_clear_generated,
             inputs=[selected_idx, manual_neighbors, knn_neighbors, highlighted_class, current_model],
             outputs=[
-                generated_image, intermediate_gallery, gen_status,
+                generated_image, intermediate_gallery, gen_traj_dropdown,
                 umap_plot, trajectory_coords, intermediate_images,
-                animation_frame, generation_info
+                animation_frame, generation_infos
             ],
         )
 
@@ -2186,65 +2204,112 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
 
-        def on_next_frame(intermediates, current_frame, gen_info):
+        def _get_traj_idx(traj_sel, intermediates):
+            """Resolve selected trajectory index, default to last."""
+            if traj_sel is not None and isinstance(traj_sel, int):
+                return traj_sel
+            return len(intermediates) - 1 if intermediates else -1
+
+        def _get_gen_info(traj_idx, gen_infos):
+            """Get gen_info dict for a trajectory index."""
+            if gen_infos and 0 <= traj_idx < len(gen_infos):
+                return gen_infos[traj_idx]
+            return None
+
+        def on_next_frame(intermediates, current_frame, gen_infos, traj_sel):
             """Show next intermediate frame."""
-            if not intermediates[-1]:
+            ti = _get_traj_idx(traj_sel, intermediates)
+            if ti < 0 or not intermediates[ti]:
                 return gr.update(), -1, gr.update()
 
-            n_frames = len(intermediates[-1])
-            # If at final (-1), go to first frame; otherwise advance
+            n_frames = len(intermediates[ti])
             if current_frame == -1:
                 new_frame = 0
             else:
                 new_frame = (current_frame + 1) % n_frames
 
-            img, sigma = intermediates[-1][new_frame]
-            label = format_frame_info(gen_info, new_frame, n_frames, sigma)
+            img, sigma = intermediates[ti][new_frame]
+            label = format_frame_info(_get_gen_info(ti, gen_infos), new_frame, n_frames, sigma)
             return img, new_frame, gr.update(label=label)
 
-        def on_prev_frame(intermediates, current_frame, gen_info):
+        def on_prev_frame(intermediates, current_frame, gen_infos, traj_sel):
             """Show previous intermediate frame."""
-            if not intermediates[-1]:
+            ti = _get_traj_idx(traj_sel, intermediates)
+            if ti < 0 or not intermediates[ti]:
                 return gr.update(), -1, gr.update()
 
-            n_frames = len(intermediates[-1])
-            # If at final (-1) or first, go to last frame; otherwise go back
+            n_frames = len(intermediates[ti])
             if current_frame <= 0:
                 new_frame = n_frames - 1
             else:
                 new_frame = current_frame - 1
 
-            img, sigma = intermediates[-1][new_frame]
-            label = format_frame_info(gen_info, new_frame, n_frames, sigma)
+            img, sigma = intermediates[ti][new_frame]
+            label = format_frame_info(_get_gen_info(ti, gen_infos), new_frame, n_frames, sigma)
             return img, new_frame, gr.update(label=label)
 
         next_frame_btn.click(
             on_next_frame,
-            inputs=[intermediate_images, animation_frame, generation_info],
+            inputs=[intermediate_images, animation_frame, generation_infos, gen_traj_dropdown],
             outputs=[generated_image, animation_frame, intermediate_gallery],
         )
 
         prev_frame_btn.click(
             on_prev_frame,
-            inputs=[intermediate_images, animation_frame, generation_info],
+            inputs=[intermediate_images, animation_frame, generation_infos, gen_traj_dropdown],
             outputs=[generated_image, animation_frame, intermediate_gallery],
         )
 
         # Clicking gallery item shows it in main image
-        def on_gallery_select(evt: gr.SelectData, intermediates, gen_info):
+        def on_gallery_select(evt: gr.SelectData, intermediates, gen_infos, traj_sel):
             """Show selected gallery item in main generated image."""
-            if not intermediates[-1] or evt.index >= len(intermediates[-1]):
+            ti = _get_traj_idx(traj_sel, intermediates)
+            if ti < 0 or not intermediates[ti] or evt.index >= len(intermediates[ti]):
                 return gr.update(), -1, gr.update()
 
-            img, sigma = intermediates[-1][evt.index]
-            n_frames = len(intermediates[-1])
-            label = format_frame_info(gen_info, evt.index, n_frames, sigma)
+            img, sigma = intermediates[ti][evt.index]
+            n_frames = len(intermediates[ti])
+            label = format_frame_info(_get_gen_info(ti, gen_infos), evt.index, n_frames, sigma)
             return img, evt.index, gr.update(label=label)
 
         intermediate_gallery.select(
             on_gallery_select,
-            inputs=[intermediate_images, generation_info],
+            inputs=[intermediate_images, generation_infos, gen_traj_dropdown],
             outputs=[generated_image, animation_frame, intermediate_gallery],
+        )
+
+        # --- Trajectory selector dropdown ---
+        def on_traj_select(traj_sel, intermediates, gen_infos):
+            """Switch displayed trajectory when dropdown changes."""
+            if traj_sel is None or not intermediates or not gen_infos:
+                return gr.update(), gr.update(), -1
+
+            ti = int(traj_sel)
+            if ti < 0 or ti >= len(intermediates) or ti >= len(gen_infos):
+                return gr.update(), gr.update(), -1
+
+            info = gen_infos[ti]
+            final_img = info.get("final_image")
+
+            # Rebuild gallery for this trajectory
+            steps = intermediates[ti]
+            step_gallery = []
+            cid = info.get("class_id", "?")
+            cname = info.get("class_name", "")
+            n_steps = len(steps)
+            for i, (img, sigma) in enumerate(steps):
+                caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                step_gallery.append((img, caption))
+
+            gallery_label = f"{cid}: {cname} | {n_steps} steps"
+            gallery_update = gr.update(value=step_gallery, label=gallery_label)
+
+            return final_img, gallery_update, -1
+
+        gen_traj_dropdown.change(
+            on_traj_select,
+            inputs=[gen_traj_dropdown, intermediate_images, generation_infos],
+            outputs=[generated_image, intermediate_gallery, animation_frame],
         )
 
     return app
