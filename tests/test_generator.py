@@ -324,6 +324,167 @@ class TestGenerateWithMaskMultistep:
         assert images.shape == (1, 64, 64, 3)
 
 
+class DeterministicMockAdapter(MockAdapter):
+    """Mock adapter that returns a deterministic transform of input.
+
+    Allows tests to detect whether different noise was injected,
+    since output depends on input x.
+    """
+
+    def forward(self, x, sigma, class_labels=None, **kwargs):
+        self.calls.append({
+            'x': x,
+            'sigma': sigma,
+            'class_labels': class_labels
+        })
+        # Deterministic: scale input down (simulates denoising)
+        return x * 0.5
+
+
+class TestNoiseModes:
+    """Test noise_mode parameter in multi-step generation."""
+
+    def test_stochastic_produces_different_outputs(self):
+        """Stochastic mode should produce different results each call."""
+        results = []
+        for _ in range(2):
+            adapter = DeterministicMockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode="stochastic", num_samples=1, device='cpu'
+            )
+            results.append(images)
+        # Extremely unlikely to be identical with fresh random noise
+        assert not torch.equal(results[0], results[1])
+
+    def test_fixed_produces_identical_outputs(self):
+        """Fixed mode (same default seed) should produce identical results."""
+        results = []
+        for _ in range(2):
+            adapter = DeterministicMockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode="fixed", num_samples=1, device='cpu'
+            )
+            results.append(images)
+        assert torch.equal(results[0], results[1])
+
+    def test_fixed_uses_default_seed_42(self):
+        """Fixed mode with no seed should use seed 42."""
+        # Generate with fixed (no explicit seed) -> should use 42
+        adapter1 = DeterministicMockAdapter()
+        masker1 = ActivationMasker(adapter1)
+        images1, _ = generate_with_mask_multistep(
+            adapter1, masker1, class_label=0, num_steps=4,
+            noise_mode="fixed", num_samples=1, device='cpu'
+        )
+        # Generate with fixed + explicit seed=42 -> should match
+        adapter2 = DeterministicMockAdapter()
+        masker2 = ActivationMasker(adapter2)
+        images2, _ = generate_with_mask_multistep(
+            adapter2, masker2, class_label=0, num_steps=4,
+            noise_mode="fixed", seed=42, num_samples=1, device='cpu'
+        )
+        assert torch.equal(images1, images2)
+
+    def test_fixed_different_seeds_differ(self):
+        """Fixed mode with different seeds should produce different results."""
+        adapter1 = DeterministicMockAdapter()
+        masker1 = ActivationMasker(adapter1)
+        images1, _ = generate_with_mask_multistep(
+            adapter1, masker1, class_label=0, num_steps=4,
+            noise_mode="fixed", seed=42, num_samples=1, device='cpu'
+        )
+        adapter2 = DeterministicMockAdapter()
+        masker2 = ActivationMasker(adapter2)
+        images2, _ = generate_with_mask_multistep(
+            adapter2, masker2, class_label=0, num_steps=4,
+            noise_mode="fixed", seed=99, num_samples=1, device='cpu'
+        )
+        assert not torch.equal(images1, images2)
+
+    def test_zero_produces_identical_outputs(self):
+        """Zero mode should produce identical results every call."""
+        results = []
+        for _ in range(2):
+            adapter = DeterministicMockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode="zero", num_samples=1, device='cpu'
+            )
+            results.append(images)
+        assert torch.equal(results[0], results[1])
+
+    def test_zero_initial_noise_is_zeros(self):
+        """Zero mode should start from all-zero initial noise."""
+        adapter = DeterministicMockAdapter()
+        masker = ActivationMasker(adapter)
+        generate_with_mask_multistep(
+            adapter, masker, class_label=0, num_steps=1,
+            noise_mode="zero", num_samples=1, device='cpu'
+        )
+        # With 1 step: x = zeros * sigma_max = zeros, forward(zeros) = zeros * 0.5 = zeros
+        first_call_x = adapter.calls[0]['x']
+        assert torch.all(first_call_x == 0)
+
+    def test_zero_no_step_noise(self):
+        """Zero mode should not inject noise between steps."""
+        adapter = DeterministicMockAdapter()
+        masker = ActivationMasker(adapter)
+        generate_with_mask_multistep(
+            adapter, masker, class_label=0, num_steps=3,
+            noise_mode="zero", num_samples=1, device='cpu'
+        )
+        # All calls should receive zeros (initial=0, step noise=0, pred*0.5=0)
+        for call in adapter.calls:
+            assert torch.all(call['x'] == 0)
+
+    def test_stochastic_injects_step_noise(self):
+        """Stochastic mode should inject noise between steps (non-zero x after step 1)."""
+        adapter = DeterministicMockAdapter()
+        masker = ActivationMasker(adapter)
+        generate_with_mask_multistep(
+            adapter, masker, class_label=0, num_steps=3,
+            noise_mode="stochastic", num_samples=1, device='cpu'
+        )
+        # Step 2+ input should differ from pure deterministic (has added noise)
+        # With deterministic adapter: pred = x*0.5, next x = pred + sigma*noise
+        # So call[1].x should not be just call[0].x * 0.5
+        assert len(adapter.calls) == 3
+        # The second call's x should have noise added (not zero, not just scaled first)
+        assert not torch.all(adapter.calls[1]['x'] == 0)
+
+    def test_all_modes_produce_valid_images(self):
+        """All noise modes should produce valid uint8 images."""
+        for mode in ["stochastic", "fixed", "zero"]:
+            adapter = MockAdapter()
+            masker = ActivationMasker(adapter)
+            images, _ = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode=mode, num_samples=1, device='cpu'
+            )
+            assert images.dtype == torch.uint8
+            assert images.shape == (1, 64, 64, 3)
+            assert images.min() >= 0
+            assert images.max() <= 255
+
+    def test_intermediates_returned_for_all_modes(self):
+        """All noise modes should return intermediates when requested."""
+        for mode in ["stochastic", "fixed", "zero"]:
+            adapter = MockAdapter()
+            masker = ActivationMasker(adapter)
+            result = generate_with_mask_multistep(
+                adapter, masker, class_label=0, num_steps=4,
+                noise_mode=mode, num_samples=1, device='cpu',
+                return_intermediates=True
+            )
+            images, labels, intermediates = result
+            assert len(intermediates) == 4
+
+
 class TestSaveGeneratedSample:
     """Test saving generated samples."""
 

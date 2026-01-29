@@ -110,6 +110,7 @@ def generate_with_mask_multistep(
     rho: float = 7.0,
     guidance_scale: float = 1.0,
     stochastic: bool = True,
+    noise_mode: str = "stochastic",
     num_samples: int = 1,
     device: str = 'cuda',
     seed: Optional[int] = None,
@@ -131,7 +132,11 @@ def generate_with_mask_multistep(
         sigma_min: Minimum sigma
         rho: Karras schedule parameter
         guidance_scale: CFG scale (0=uncond, 1=class, >1=amplify)
-        stochastic: Add noise between steps
+        stochastic: Legacy param, ignored when noise_mode is set
+        noise_mode: Noise injection mode:
+            "stochastic" - fresh random noise each step (default)
+            "fixed" - pre-generated noise reused across generations (seeded)
+            "zero" - no noise (deterministic, zeros)
         num_samples: Number of images
         device: Device for generation
         seed: Random seed
@@ -179,9 +184,23 @@ def generate_with_mask_multistep(
     # Generate sigma schedule
     sigmas = get_denoising_sigmas(num_steps, sigma_max, sigma_min, rho).to(device)
 
-    # Start from pure noise
-    noise = torch.randn(num_samples, 3, resolution, resolution, device=device)
-    x = noise * sigma_max
+    # Pre-generate noise based on mode
+    noise_shape = (num_samples, 3, resolution, resolution)
+    if noise_mode == "zero":
+        initial_noise = torch.zeros(noise_shape, device=device)
+        step_noises = [torch.zeros(noise_shape, device=device)] * (num_steps - 1)
+    elif noise_mode == "fixed":
+        # Use seed (or 0) to generate reproducible noise for all steps
+        rng = torch.Generator(device=device)
+        rng.manual_seed(seed if seed is not None else 42)
+        initial_noise = torch.randn(noise_shape, device=device, generator=rng)
+        step_noises = [torch.randn(noise_shape, device=device, generator=rng) for _ in range(num_steps - 1)]
+    else:
+        # "stochastic" (default) - fresh random noise
+        initial_noise = torch.randn(noise_shape, device=device)
+        step_noises = None  # generated inline
+
+    x = initial_noise * sigma_max
 
     # Iterative denoising
     for i, sigma in enumerate(sigmas):
@@ -226,7 +245,9 @@ def generate_with_mask_multistep(
         # Transition to next step
         if i < len(sigmas) - 1:
             next_sigma = sigmas[i + 1]
-            if stochastic:
+            if step_noises is not None:
+                x = pred + next_sigma * step_noises[i]
+            elif noise_mode == "stochastic":
                 x = pred + next_sigma * torch.randn_like(pred)
             else:
                 x = pred
