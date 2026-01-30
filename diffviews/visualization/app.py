@@ -1570,9 +1570,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         interactive=True,
                         elem_id="layer-dropdown",
                     )
+                _default_layer = visualizer.get_default_layer_label(visualizer.default_model) if visualizer.default_model else None
                 status_text = gr.Markdown(
                     f"Showing {initial_sample_count} samples"
-                    + (f" ({visualizer.default_model})" if visualizer.default_model else ""),
+                    + (f" ({visualizer.default_model})" if visualizer.default_model else "")
+                    + (f" — layer: {_default_layer}" if _default_layer else ""),
                     elem_id="status-text"
                 )
                 model_status = gr.Markdown("", visible=False)
