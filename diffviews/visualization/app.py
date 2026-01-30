@@ -1332,16 +1332,6 @@ CUSTOM_CSS = """
         width: auto !important;
     }
 
-    #layer-status {
-        font-size: 0.75rem !important;
-        color: #888 !important;
-        margin: 0 !important;
-    }
-
-    #layer-status p {
-        margin: 0 !important;
-    }
-
     /* KNN row styling */
     #knn-row {
         flex-wrap: nowrap !important;
@@ -1565,7 +1555,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         interactive=True,
                         elem_id="layer-dropdown",
                     )
-                layer_status = gr.Markdown("", elem_id="layer-status")
                 status_text = gr.Markdown(
                     f"Showing {initial_sample_count} samples"
                     + (f" ({visualizer.default_model})" if visualizer.default_model else ""),
@@ -1998,10 +1987,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         def on_model_switch(new_model_name, cur_model, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
             """Handle model switching (resets all state including preview)."""
             if new_model_name == cur_model:
-                return (gr.update(),) * 25
+                return (gr.update(),) * 24
 
             if not visualizer.is_valid_model(new_model_name):
-                return (gr.update(),) * 25
+                return (gr.update(),) * 24
 
             # Restore default embeddings for the new model
             visualizer._restore_default_embeddings(new_model_name)
@@ -2035,7 +2024,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 [],                                # neighbor_gallery
                 "No neighbors selected",           # neighbor_info
                 gr.update(choices=visualizer.get_layer_choices(new_model_name), value=None),  # layer_dropdown
-                "",                                # layer_status
             )
 
         # Wire up events
@@ -2132,7 +2120,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     neighbor_gallery,
                     neighbor_info,
                     layer_dropdown,
-                    layer_status,
                 ],
             )
 
@@ -2141,7 +2128,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             """Handle layer dropdown change: recompute UMAP for selected layer."""
             model_data = visualizer.get_model(model_name)
             if model_data is None or not layer_name:
-                return (gr.update(),) * 14
+                return (gr.update(),) * 13
 
             success = visualizer.recompute_layer_umap(model_name, layer_name)
             if not success:
@@ -2151,7 +2138,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 return (
                     fig,
                     f"Showing {n} samples ({model_name}) — failed {layer_name}, restored default",
-                    f"Failed: {layer_name}",
                     None, [], [], {}, [], [], "No neighbors selected",
                     None, gr.update(value=[], label="Denoising Steps"), [], None,
                 )
@@ -2161,7 +2147,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             return (
                 fig,                                                            # umap_plot
                 f"Showing {n} samples ({model_name}) — layer: {layer_name}",   # status_text
-                f"Layer: {layer_name}",                                         # layer_status
                 None,                                                           # selected_idx
                 [],                                                             # manual_neighbors
                 [],                                                             # knn_neighbors
@@ -2181,7 +2166,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             outputs=[
                 umap_plot,
                 status_text,
-                layer_status,
                 selected_idx,
                 manual_neighbors,
                 knn_neighbors,
