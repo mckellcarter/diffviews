@@ -54,6 +54,15 @@ class ModelData:
     adapter: Any = None
     layer_shapes: Dict[str, tuple] = field(default_factory=dict)
 
+    # Default (pre-computed) embeddings backup for restore after layer change
+    default_df: Optional[pd.DataFrame] = None
+    default_activations: Optional[np.ndarray] = None
+    default_umap_reducer: Any = None
+    default_umap_scaler: Any = None
+    default_umap_params: Optional[Dict] = None
+    default_nn_model: Optional[NearestNeighbors] = None
+    current_layer: str = "default"
+
 
 class GradioVisualizer:
     """Gradio-based visualizer with multi-user support.
@@ -176,6 +185,8 @@ class GradioVisualizer:
             model_data = self._load_model_data(model_name, config)
             if model_data is not None:
                 self.model_data[model_name] = model_data
+                # Eagerly load adapter so hookable_layers is available for UI
+                self.load_adapter(model_name)
 
     def _load_model_data(self, model_name: str, config: dict) -> Optional[ModelData]:
         """Load all data for a single model into a ModelData instance."""
@@ -246,6 +257,14 @@ class GradioVisualizer:
 
             # Fit KNN model
             self._fit_knn_model(model_data)
+
+            # Backup default embeddings for restore after layer changes
+            model_data.default_df = model_data.df.copy()
+            model_data.default_activations = model_data.activations
+            model_data.default_umap_reducer = model_data.umap_reducer
+            model_data.default_umap_scaler = model_data.umap_scaler
+            model_data.default_umap_params = dict(model_data.umap_params)
+            model_data.default_nn_model = model_data.nn_model
 
             print(f"  Loaded {len(model_data.df)} samples")
         else:
@@ -441,6 +460,208 @@ class GradioVisualizer:
         model_data.layer_shapes = model_data.adapter.get_layer_shapes()
         print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
         return model_data.adapter
+
+    def get_layer_choices(self, model_name: str) -> List[str]:
+        """Get available layer choices for dropdown."""
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return []
+        if model_data.adapter is not None:
+            return model_data.adapter.hookable_layers
+        return []
+
+    def _restore_default_embeddings(self, model_name: str):
+        """Restore pre-computed default embeddings after a layer change."""
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.default_df is None:
+            return
+        model_data.df = model_data.default_df.copy()
+        model_data.activations = model_data.default_activations
+        model_data.umap_reducer = model_data.default_umap_reducer
+        model_data.umap_scaler = model_data.default_umap_scaler
+        model_data.umap_params = dict(model_data.default_umap_params) if model_data.default_umap_params else {}
+        model_data.nn_model = model_data.default_nn_model
+        model_data.current_layer = "default"
+        print(f"[{model_name}] Restored default embeddings")
+
+    def _load_layer_cache(self, model_name: str, layer_name: str) -> bool:
+        """Load cached layer embeddings from disk. Returns True if cache hit."""
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return False
+
+        cache_dir = model_data.data_dir / "embeddings" / "layer_cache"
+        csv_path = cache_dir / f"{layer_name}.csv"
+        pkl_path = cache_dir / f"{layer_name}.pkl"
+        npy_path = cache_dir / f"{layer_name}.npy"
+
+        if not csv_path.exists() or not pkl_path.exists():
+            return False
+
+        print(f"[{model_name}] Loading cached layer: {layer_name}")
+        df = pd.read_csv(csv_path)
+
+        with open(pkl_path, "rb") as f:
+            umap_data = pickle.load(f)
+
+        activations = None
+        if npy_path.exists():
+            activations = np.load(npy_path)
+
+        # Load params
+        json_path = cache_dir / f"{layer_name}.json"
+        umap_params = {}
+        if json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as f:
+                umap_params = json.load(f)
+
+        # Swap into model data
+        model_data.df = df
+        model_data.activations = activations
+        model_data.umap_reducer = umap_data["reducer"]
+        model_data.umap_scaler = umap_data["scaler"]
+        model_data.umap_params = umap_params
+        self._fit_knn_model(model_data)
+        model_data.current_layer = layer_name
+        print(f"[{model_name}] Loaded cached layer: {layer_name} ({len(df)} samples)")
+        return True
+
+    def extract_layer_activations(
+        self, model_name: str, layer_name: str, batch_size: int = 32
+    ) -> Optional[np.ndarray]:
+        """Extract activations for a single layer across all samples.
+
+        Runs batched forward passes using ActivationExtractor.
+        Must be called under _generation_lock (GPU access).
+
+        Returns (N, D) flattened activation matrix, or None on error.
+        """
+        import torch
+        from diffviews.core.extractor import ActivationExtractor
+
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.metadata_df is None:
+            return None
+
+        adapter = self.load_adapter(model_name)
+        if adapter is None:
+            return None
+
+        metadata_df = model_data.metadata_df
+        n_samples = len(metadata_df)
+        num_classes = adapter.num_classes
+        n_batches = (n_samples + batch_size - 1) // batch_size
+        print(f"[{model_name}] Extracting {layer_name} for {n_samples} samples ({n_batches} batches)")
+
+        all_activations = []
+        extractor = ActivationExtractor(adapter, [layer_name])
+
+        with extractor:
+            for batch_start in range(0, n_samples, batch_size):
+                batch_end = min(batch_start + batch_size, n_samples)
+                batch_meta = metadata_df.iloc[batch_start:batch_end]
+
+                # Load images from PNG paths
+                images = []
+                sigmas = []
+                labels = []
+                for _, row in batch_meta.iterrows():
+                    img_path = model_data.data_dir / row["image_path"]
+                    img = np.array(Image.open(img_path))  # (H, W, 3) uint8
+                    images.append(img.transpose(2, 0, 1))  # -> (3, H, W)
+                    sigmas.append(row["conditioning_sigma"])
+                    labels.append(int(row["class_label"]))
+
+                # Build tensors
+                img_tensor = torch.from_numpy(np.stack(images)).float().to(self.device)
+                img_tensor = (img_tensor / 127.5) - 1.0
+                sigma_tensor = torch.tensor(sigmas, dtype=torch.float32, device=self.device)
+                x_noisy = img_tensor * sigma_tensor.view(-1, 1, 1, 1)
+
+                # One-hot class labels
+                label_tensor = None
+                if num_classes > 0:
+                    label_tensor = torch.zeros(len(labels), num_classes, device=self.device)
+                    for i, lbl in enumerate(labels):
+                        if 0 <= lbl < num_classes:
+                            label_tensor[i, lbl] = 1.0
+
+                # Forward pass (hooks capture activations)
+                with torch.no_grad():
+                    adapter.forward(x_noisy, sigma_tensor, label_tensor)
+
+                # Grab and flatten
+                act = extractor.get_activations().get(layer_name)
+                if act is not None:
+                    if act.dim() > 2:
+                        act = act.flatten(1)  # (B, C*H*W)
+                    all_activations.append(act.numpy())
+                extractor.clear()
+
+                batch_idx = batch_start // batch_size
+                if batch_idx % 5 == 0:
+                    print(f"  Batch {batch_idx + 1}/{n_batches}")
+
+        if not all_activations:
+            return None
+
+        result = np.concatenate(all_activations, axis=0)  # (N, D)
+        print(f"[{model_name}] Extracted {layer_name}: shape {result.shape}")
+        return result
+
+    def recompute_layer_umap(self, model_name: str, layer_name: str) -> bool:
+        """Extract activations for layer, compute UMAP, cache to disk, swap into ModelData.
+
+        Returns True on success, False on error.
+        """
+        from diffviews.processing.umap import compute_umap, save_embeddings
+
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return False
+
+        # Check disk cache first
+        if self._load_layer_cache(model_name, layer_name):
+            return True
+
+        # Extract activations (GPU, under lock)
+        with self._generation_lock:
+            activations = self.extract_layer_activations(model_name, layer_name)
+
+        if activations is None:
+            print(f"[{model_name}] Failed to extract {layer_name}")
+            return False
+
+        # Compute UMAP (CPU, no lock needed)
+        print(f"[{model_name}] Computing UMAP for {layer_name}...")
+        embeddings, reducer, scaler = compute_umap(
+            activations, n_neighbors=15, min_dist=0.1, normalize=True
+        )
+
+        # Build new df with UMAP coords + original metadata
+        new_df = model_data.metadata_df.copy()
+        new_df["umap_x"] = embeddings[:, 0]
+        new_df["umap_y"] = embeddings[:, 1]
+
+        umap_params = {"layers": [layer_name], "n_neighbors": 15, "min_dist": 0.1}
+
+        # Save to disk cache
+        cache_dir = model_data.data_dir / "embeddings" / "layer_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = cache_dir / f"{layer_name}.csv"
+        save_embeddings(embeddings, new_df, csv_path, umap_params, reducer, scaler)
+        np.save(cache_dir / f"{layer_name}.npy", activations)
+        print(f"[{model_name}] Cached {layer_name} to {cache_dir}")
+
+        # Atomic swap into ModelData
+        model_data.df = new_df
+        model_data.activations = activations
+        model_data.umap_reducer = reducer
+        model_data.umap_scaler = scaler
+        model_data.umap_params = umap_params
+        self._fit_knn_model(model_data)
+        model_data.current_layer = layer_name
+        return True
 
     def prepare_activation_dict(
         self, model_name: str, neighbor_indices: List[int]
@@ -1080,7 +1301,7 @@ CUSTOM_CSS = """
     }
 
     /* Model selector row: label + dropdown inline */
-    #model-row {
+    #model-row, #layer-row {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
@@ -1089,26 +1310,36 @@ CUSTOM_CSS = """
         margin-bottom: 0.25rem !important;
     }
 
-    #model-row > div {
+    #model-row > div, #layer-row > div {
         flex: 0 0 auto !important;
     }
 
-    #model-label {
+    #model-label, #layer-label {
         flex: 0 0 auto !important;
         width: auto !important;
         min-width: 0 !important;
         max-width: 60px !important;
     }
 
-    #model-label p {
+    #model-label p, #layer-label p {
         margin: 0 !important;
         font-size: 0.9rem !important;
     }
 
-    #model-dropdown {
+    #model-dropdown, #layer-dropdown {
         flex: 1 1 auto !important;
         min-width: 0 !important;
         width: auto !important;
+    }
+
+    #layer-status {
+        font-size: 0.75rem !important;
+        color: #888 !important;
+        margin: 0 !important;
+    }
+
+    #layer-status p {
+        margin: 0 !important;
     }
 
     /* KNN row styling */
@@ -1196,7 +1427,7 @@ CUSTOM_CSS = """
     #generated-image img,
     #intermediate-gallery img,
     #neighbor-gallery img {
-        image-rendering: crisp-edges !important;
+        image-rendering: auto !important;
     }
 
     /* Image containers: fill available space */
@@ -1325,6 +1556,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             visible=len(visualizer.model_configs) > 0,
                             elem_id="model-dropdown",
                         )
+                with gr.Row(elem_id="layer-row"):
+                    gr.Markdown("**Layer**", elem_id="layer-label")
+                    layer_dropdown = gr.Dropdown(
+                        choices=visualizer.get_layer_choices(visualizer.default_model) if visualizer.default_model else [],
+                        value=None,
+                        show_label=False,
+                        interactive=True,
+                        elem_id="layer-dropdown",
+                    )
+                layer_status = gr.Markdown("", elem_id="layer-status")
                 status_text = gr.Markdown(
                     f"Showing {initial_sample_count} samples"
                     + (f" ({visualizer.default_model})" if visualizer.default_model else ""),
@@ -1755,16 +1996,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             return fig, None, None, ""
 
         def on_model_switch(new_model_name, cur_model, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
-            """Handle model switching (resets all state including preview).
-
-            Note: This now just updates the session's current_model state.
-            All model data is preloaded, so no shared state is modified.
-            """
+            """Handle model switching (resets all state including preview)."""
             if new_model_name == cur_model:
-                return (gr.update(),) * 23  # +1 for current_model state
+                return (gr.update(),) * 25
 
             if not visualizer.is_valid_model(new_model_name):
-                return (gr.update(),) * 23
+                return (gr.update(),) * 25
+
+            # Restore default embeddings for the new model
+            visualizer._restore_default_embeddings(new_model_name)
 
             model_data = visualizer.get_model(new_model_name)
             fig = visualizer.create_umap_figure(new_model_name)
@@ -1794,6 +2034,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 None,                              # generation_info
                 [],                                # neighbor_gallery
                 "No neighbors selected",           # neighbor_info
+                gr.update(choices=visualizer.get_layer_choices(new_model_name), value=None),  # layer_dropdown
+                "",                                # layer_status
             )
 
         # Wire up events
@@ -1889,8 +2131,62 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     generation_info,
                     neighbor_gallery,
                     neighbor_info,
+                    layer_dropdown,
+                    layer_status,
                 ],
             )
+
+        # --- Layer change handler ---
+        def on_layer_change(layer_name, model_name):
+            """Handle layer dropdown change: recompute UMAP for selected layer."""
+            model_data = visualizer.get_model(model_name)
+            if model_data is None or not layer_name:
+                return (gr.update(),) * 10
+
+            success = visualizer.recompute_layer_umap(model_name, layer_name)
+            if not success:
+                # Fallback: restore pre-computed embeddings
+                visualizer._restore_default_embeddings(model_name)
+                fig = visualizer.create_umap_figure(model_name)
+                n = len(model_data.df)
+                return (
+                    fig,
+                    f"Showing {n} samples ({model_name}) — failed {layer_name}, restored default",
+                    f"Failed: {layer_name}",
+                    None, [], [], {}, [], [], "No neighbors selected",
+                )
+
+            fig = visualizer.create_umap_figure(model_name)
+            n = len(model_data.df)
+            return (
+                fig,
+                f"Showing {n} samples ({model_name}) — layer: {layer_name}",
+                f"Layer: {layer_name}",
+                None,                       # selected_idx
+                [],                         # manual_neighbors
+                [],                         # knn_neighbors
+                {},                         # knn_distances
+                [],                         # trajectory_coords
+                [],                         # neighbor_gallery
+                "No neighbors selected",    # neighbor_info
+            )
+
+        layer_dropdown.change(
+            on_layer_change,
+            inputs=[layer_dropdown, current_model],
+            outputs=[
+                umap_plot,
+                status_text,
+                layer_status,
+                selected_idx,
+                manual_neighbors,
+                knn_neighbors,
+                knn_distances,
+                trajectory_coords,
+                neighbor_gallery,
+                neighbor_info,
+            ],
+        )
 
         # Note: neighbor display is updated directly in click/suggest handlers
         # No need for state.change() listeners which can cause duplicate events
