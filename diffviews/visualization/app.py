@@ -461,14 +461,28 @@ class GradioVisualizer:
         print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
         return model_data.adapter
 
+    def get_default_layer_label(self, model_name: str) -> Optional[str]:
+        """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""
+        model_data = self.get_model(model_name)
+        if model_data is None or not model_data.umap_params:
+            return None
+        layers = model_data.umap_params.get("layers", [])
+        return "+".join(layers) if layers else None
+
     def get_layer_choices(self, model_name: str) -> List[str]:
-        """Get available layer choices for dropdown."""
+        """Get available layer choices: [default_label] + hookable_layers."""
         model_data = self.get_model(model_name)
         if model_data is None:
             return []
+        choices = []
+        default_label = self.get_default_layer_label(model_name)
+        if default_label:
+            choices.append(default_label)
         if model_data.adapter is not None:
-            return model_data.adapter.hookable_layers
-        return []
+            for layer in model_data.adapter.hookable_layers:
+                if layer not in choices:
+                    choices.append(layer)
+        return choices
 
     def _restore_default_embeddings(self, model_name: str):
         """Restore pre-computed default embeddings after a layer change."""
@@ -1551,7 +1565,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     gr.Markdown("**Layer**", elem_id="layer-label")
                     layer_dropdown = gr.Dropdown(
                         choices=visualizer.get_layer_choices(visualizer.default_model) if visualizer.default_model else [],
-                        value=None,
+                        value=visualizer.get_default_layer_label(visualizer.default_model) if visualizer.default_model else None,
                         show_label=False,
                         interactive=True,
                         elem_id="layer-dropdown",
@@ -2024,7 +2038,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 None,                              # generation_info
                 [],                                # neighbor_gallery
                 "No neighbors selected",           # neighbor_info
-                gr.update(choices=visualizer.get_layer_choices(new_model_name), value=None),  # layer_dropdown
+                gr.update(choices=visualizer.get_layer_choices(new_model_name), value=visualizer.get_default_layer_label(new_model_name)),  # layer_dropdown
             )
 
         # Wire up events
@@ -2130,6 +2144,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             model_data = visualizer.get_model(model_name)
             if model_data is None or not layer_name:
                 return (gr.update(),) * 15
+
+            # If user selected the default label, restore pre-computed embeddings
+            default_label = visualizer.get_default_layer_label(model_name)
+            if layer_name == default_label:
+                visualizer._restore_default_embeddings(model_name)
+                fig = visualizer.create_umap_figure(model_name)
+                n = len(model_data.df)
+                return (
+                    fig,
+                    f"Showing {n} samples ({model_name})",
+                    None, [], [], {}, [], [], "No neighbors selected",
+                    None, gr.update(value=[], label="Denoising Steps"), [], None,
+                    None, "Click a point to select",
+                )
 
             success = visualizer.recompute_layer_umap(model_name, layer_name)
             if not success:
