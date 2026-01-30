@@ -1196,7 +1196,7 @@ CUSTOM_CSS = """
     #generated-image img,
     #intermediate-gallery img,
     #neighbor-gallery img {
-        image-rendering: auto !important;
+        image-rendering: crisp-edges !important;
     }
 
     /* Image containers: fill available space */
