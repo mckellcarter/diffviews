@@ -2141,11 +2141,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             """Handle layer dropdown change: recompute UMAP for selected layer."""
             model_data = visualizer.get_model(model_name)
             if model_data is None or not layer_name:
-                return (gr.update(),) * 10
+                return (gr.update(),) * 14
 
             success = visualizer.recompute_layer_umap(model_name, layer_name)
             if not success:
-                # Fallback: restore pre-computed embeddings
                 visualizer._restore_default_embeddings(model_name)
                 fig = visualizer.create_umap_figure(model_name)
                 n = len(model_data.df)
@@ -2154,21 +2153,26 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     f"Showing {n} samples ({model_name}) — failed {layer_name}, restored default",
                     f"Failed: {layer_name}",
                     None, [], [], {}, [], [], "No neighbors selected",
+                    None, gr.update(value=[], label="Denoising Steps"), [], None,
                 )
 
             fig = visualizer.create_umap_figure(model_name)
             n = len(model_data.df)
             return (
-                fig,
-                f"Showing {n} samples ({model_name}) — layer: {layer_name}",
-                f"Layer: {layer_name}",
-                None,                       # selected_idx
-                [],                         # manual_neighbors
-                [],                         # knn_neighbors
-                {},                         # knn_distances
-                [],                         # trajectory_coords
-                [],                         # neighbor_gallery
-                "No neighbors selected",    # neighbor_info
+                fig,                                                            # umap_plot
+                f"Showing {n} samples ({model_name}) — layer: {layer_name}",   # status_text
+                f"Layer: {layer_name}",                                         # layer_status
+                None,                                                           # selected_idx
+                [],                                                             # manual_neighbors
+                [],                                                             # knn_neighbors
+                {},                                                             # knn_distances
+                [],                                                             # trajectory_coords
+                [],                                                             # neighbor_gallery
+                "No neighbors selected",                                        # neighbor_info
+                None,                                                           # generated_image
+                gr.update(value=[], label="Denoising Steps"),                   # intermediate_gallery
+                [],                                                             # intermediate_images
+                None,                                                           # generation_info
             )
 
         layer_dropdown.change(
@@ -2185,6 +2189,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 trajectory_coords,
                 neighbor_gallery,
                 neighbor_info,
+                generated_image,
+                intermediate_gallery,
+                intermediate_images,
+                generation_info,
             ],
         )
 
