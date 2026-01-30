@@ -50,5 +50,8 @@ checkpoints/
 # Logs
 *.log
 
+# Layer activation cache (generated at runtime)
+**/layer_cache/
+
 # Generated images
 *_generated.png
