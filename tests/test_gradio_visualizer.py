@@ -5,7 +5,7 @@ Unit tests for diffviews.visualization.app
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import numpy as np
 import pandas as pd
@@ -624,6 +624,338 @@ class TestMultiUserIsolation:
             assert viz.get_plot_dataframe("dmd2") is not None
             assert viz.get_class_options("dmd2") is not None
             assert viz.create_umap_figure("dmd2") is not None
+
+
+class TestLayerChoices:
+    """Test layer choice retrieval."""
+
+    def test_get_layer_choices_no_adapter(self):
+        """Returns empty list when adapter not loaded."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # No adapter loaded -> empty list
+            model_data = viz.get_model("dmd2")
+            model_data.adapter = None
+            assert viz.get_layer_choices("dmd2") == []
+
+    def test_get_layer_choices_with_adapter(self):
+        """Returns hookable_layers from adapter."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            mock_adapter = MagicMock()
+            mock_adapter.hookable_layers = ["encoder_block_0", "midblock", "decoder_block_0"]
+            viz.get_model("dmd2").adapter = mock_adapter
+
+            choices = viz.get_layer_choices("dmd2")
+            assert choices == ["encoder_block_0", "midblock", "decoder_block_0"]
+
+    def test_get_layer_choices_invalid_model(self):
+        """Returns empty list for unknown model."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            assert viz.get_layer_choices("unknown") == []
+
+
+class TestDefaultEmbeddingsBackup:
+    """Test default embeddings backup and restore."""
+
+    def test_default_fields_populated_at_init(self):
+        """Default backup fields set during model loading."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            md = viz.get_model("dmd2")
+            assert md.default_df is not None
+            assert len(md.default_df) == 10
+            assert md.default_umap_params is not None
+            assert md.default_nn_model is not None
+            assert md.current_layer == "default"
+
+    def test_restore_default_embeddings(self):
+        """Restore swaps back original data after modification."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            md = viz.get_model("dmd2")
+            original_df = md.df.copy()
+
+            # Simulate layer change by overwriting fields
+            md.df = pd.DataFrame({"umap_x": [0], "umap_y": [0]})
+            md.umap_params = {"layers": ["fake_layer"]}
+            md.current_layer = "fake_layer"
+
+            viz._restore_default_embeddings("dmd2")
+
+            assert len(md.df) == 10
+            assert md.current_layer == "default"
+            assert md.df["umap_x"].tolist() == original_df["umap_x"].tolist()
+
+    def test_restore_default_invalid_model(self):
+        """Restore on invalid model is a no-op."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Should not raise
+            viz._restore_default_embeddings("unknown")
+
+
+class TestLoadLayerCache:
+    """Test layer cache loading from disk."""
+
+    def test_cache_miss(self):
+        """Returns False when no cache exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            assert viz._load_layer_cache("dmd2", "encoder_block_0") is False
+
+    def test_cache_hit(self):
+        """Returns True and swaps data when cache exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            md = viz.get_model("dmd2")
+
+            # Create fake cache files
+            cache_dir = md.data_dir / "embeddings" / "layer_cache"
+            cache_dir.mkdir(parents=True)
+
+            cached_df = pd.DataFrame({
+                "sample_id": ["s0", "s1", "s2"],
+                "umap_x": [1.0, 2.0, 3.0],
+                "umap_y": [4.0, 5.0, 6.0],
+            })
+            cached_df.to_csv(cache_dir / "encoder_block_0.csv", index=False)
+
+            import pickle
+            with open(cache_dir / "encoder_block_0.pkl", "wb") as f:
+                pickle.dump({"reducer": "fake_reducer", "scaler": "fake_scaler"}, f)
+
+            cached_params = {"layers": ["encoder_block_0"], "n_neighbors": 15}
+            with open(cache_dir / "encoder_block_0.json", "w") as f:
+                json.dump(cached_params, f)
+
+            np.save(cache_dir / "encoder_block_0.npy", np.zeros((3, 100)))
+
+            result = viz._load_layer_cache("dmd2", "encoder_block_0")
+            assert result is True
+            assert len(md.df) == 3
+            assert md.umap_reducer == "fake_reducer"
+            assert md.umap_scaler == "fake_scaler"
+            assert md.activations.shape == (3, 100)
+            assert md.current_layer == "encoder_block_0"
+            assert md.umap_params["layers"] == ["encoder_block_0"]
+
+    def test_cache_invalid_model(self):
+        """Returns False for unknown model."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            assert viz._load_layer_cache("unknown", "encoder_block_0") is False
+
+    def test_cache_partial_files_missing(self):
+        """Returns False when pkl is missing (csv alone not enough)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            md = viz.get_model("dmd2")
+            cache_dir = md.data_dir / "embeddings" / "layer_cache"
+            cache_dir.mkdir(parents=True)
+
+            # Only CSV, no PKL
+            pd.DataFrame({"umap_x": [1.0], "umap_y": [2.0]}).to_csv(
+                cache_dir / "midblock.csv", index=False
+            )
+
+            assert viz._load_layer_cache("dmd2", "midblock") is False
+
+
+class TestExtractLayerActivations:
+    """Test activation extraction (mocked GPU)."""
+
+    def test_returns_none_no_metadata(self):
+        """Returns None when metadata_df is missing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            md = viz.get_model("dmd2")
+            assert md.metadata_df is None
+            result = viz.extract_layer_activations("dmd2", "encoder_block_0")
+            assert result is None
+
+    def test_returns_none_no_adapter(self):
+        """Returns None when adapter can't be loaded."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            metadata_df = pd.DataFrame({
+                "image_path": ["images/imagenet_real/sample_000000.png"],
+                "conditioning_sigma": [10.0],
+                "class_label": [0],
+            })
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, metadata_df)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # No checkpoint -> adapter can't load
+            result = viz.extract_layer_activations("dmd2", "encoder_block_0")
+            assert result is None
+
+    def test_returns_none_invalid_model(self):
+        """Returns None for unknown model."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            result = viz.extract_layer_activations("unknown", "encoder_block_0")
+            assert result is None
+
+
+class TestRecomputeLayerUmap:
+    """Test UMAP recomputation orchestration."""
+
+    def test_uses_cache_when_available(self):
+        """Loads from cache instead of recomputing when cache exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            # Mock cache hit
+            with patch.object(viz, '_load_layer_cache', return_value=True) as mock_cache:
+                result = viz.recompute_layer_umap("dmd2", "encoder_block_0")
+
+            assert result is True
+            mock_cache.assert_called_once_with("dmd2", "encoder_block_0")
+
+    def test_extracts_and_computes_on_cache_miss(self):
+        """Full pipeline: extract -> UMAP -> cache -> swap."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            metadata_df = pd.DataFrame({
+                "sample_id": [f"s{i}" for i in range(5)],
+                "image_path": [f"images/imagenet_real/sample_{i:06d}.png" for i in range(5)],
+                "conditioning_sigma": [10.0] * 5,
+                "class_label": list(range(5)),
+            })
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, metadata_df)):
+                viz = GradioVisualizer(data_dir=root)
+
+            fake_activations = np.random.randn(5, 100).astype(np.float32)
+            fake_embeddings = np.random.randn(5, 2).astype(np.float32)
+            fake_reducer = MagicMock()
+            fake_scaler = MagicMock()
+
+            with patch.object(viz, '_load_layer_cache', return_value=False), \
+                 patch.object(viz, 'extract_layer_activations', return_value=fake_activations) as mock_extract, \
+                 patch('diffviews.visualization.app.GradioVisualizer.recompute_layer_umap') as _:
+                # Call the real method manually to test orchestration
+                pass
+
+            # Test the cache-miss path with mocked extraction + UMAP
+            with patch.object(viz, '_load_layer_cache', return_value=False), \
+                 patch.object(viz, 'extract_layer_activations', return_value=fake_activations), \
+                 patch('diffviews.processing.umap.compute_umap', return_value=(fake_embeddings, fake_reducer, fake_scaler)), \
+                 patch('diffviews.processing.umap.save_embeddings'):
+                result = viz.recompute_layer_umap("dmd2", "encoder_block_0")
+
+            assert result is True
+            md = viz.get_model("dmd2")
+            assert md.current_layer == "encoder_block_0"
+            assert md.activations is fake_activations
+            assert md.umap_reducer is fake_reducer
+            assert md.umap_scaler is fake_scaler
+            assert "umap_x" in md.df.columns
+
+    def test_returns_false_on_extraction_failure(self):
+        """Returns False when extraction fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
+
+            metadata_df = pd.DataFrame({
+                "sample_id": ["s0"],
+                "image_path": ["images/imagenet_real/sample_000000.png"],
+                "conditioning_sigma": [10.0],
+                "class_label": [0],
+            })
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, metadata_df)):
+                viz = GradioVisualizer(data_dir=root)
+
+            with patch.object(viz, '_load_layer_cache', return_value=False), \
+                 patch.object(viz, 'extract_layer_activations', return_value=None):
+                result = viz.recompute_layer_umap("dmd2", "encoder_block_0")
+
+            assert result is False
+
+    def test_returns_false_invalid_model(self):
+        """Returns False for unknown model."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+
+            with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+                viz = GradioVisualizer(data_dir=root)
+
+            result = viz.recompute_layer_umap("unknown", "encoder_block_0")
+            assert result is False
 
 
 if __name__ == "__main__":
