@@ -1307,7 +1307,7 @@ CUSTOM_CSS = """
         flex-wrap: nowrap !important;
         align-items: center !important;
         gap: 0.5rem !important;
-        margin-bottom: 0.25rem !important;
+        margin-bottom: 0 !important;
     }
 
     #model-row > div, #layer-row > div {
@@ -1366,7 +1366,8 @@ CUSTOM_CSS = """
     #status-text {
         font-size: 0.8rem !important;
         color: #666 !important;
-        margin: 0 0 0.5rem 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
 
     #status-text p {
