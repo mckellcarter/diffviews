@@ -2129,7 +2129,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             """Handle layer dropdown change: recompute UMAP for selected layer."""
             model_data = visualizer.get_model(model_name)
             if model_data is None or not layer_name:
-                return (gr.update(),) * 13
+                return (gr.update(),) * 15
 
             success = visualizer.recompute_layer_umap(model_name, layer_name)
             if not success:
@@ -2141,6 +2141,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     f"Showing {n} samples ({model_name}) — failed {layer_name}, restored default",
                     None, [], [], {}, [], [], "No neighbors selected",
                     None, gr.update(value=[], label="Denoising Steps"), [], None,
+                    None, "Click a point to select",
                 )
 
             fig = visualizer.create_umap_figure(model_name)
@@ -2159,6 +2160,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 gr.update(value=[], label="Denoising Steps"),                   # intermediate_gallery
                 [],                                                             # intermediate_images
                 None,                                                           # generation_info
+                None,                                                           # selected_image
+                "Click a point to select",                                      # selected_details
             )
 
         layer_dropdown.change(
@@ -2178,6 +2181,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 intermediate_gallery,
                 intermediate_images,
                 generation_info,
+                selected_image,
+                selected_details,
             ],
         )
 
