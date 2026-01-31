@@ -19,6 +19,19 @@ from sklearn.neighbors import NearestNeighbors
 
 import plotly.graph_objects as go
 
+try:
+    import spaces
+except ImportError:
+    spaces = None
+
+
+def _gpu_decorator(duration=60):
+    """Return @spaces.GPU decorator if available, identity otherwise."""
+    if spaces is not None:
+        return spaces.GPU(duration=duration)
+    return lambda fn: fn
+
+
 from diffviews.processing.umap import load_dataset_activations
 from diffviews.utils.device import get_device
 from diffviews.adapters.registry import get_adapter
@@ -638,9 +651,8 @@ class GradioVisualizer:
         if self._load_layer_cache(model_name, layer_name):
             return True
 
-        # Extract activations (GPU, under lock)
-        with self._generation_lock:
-            activations = self.extract_layer_activations(model_name, layer_name)
+        # Extract activations (GPU, ZeroGPU-compatible)
+        activations = _extract_layer_on_gpu(self, model_name, layer_name)
 
         if activations is None:
             print(f"[{model_name}] Failed to extract {layer_name}")
@@ -1046,6 +1058,57 @@ class GradioVisualizer:
         )
 
         return fig
+
+
+@_gpu_decorator(duration=120)
+def _generate_on_gpu(
+    visualizer, model_name, all_neighbors, class_label,
+    n_steps, m_steps, s_max, s_min, guidance, noise_mode,
+    extract_layers, can_project
+):
+    """Run masked generation on GPU. Decorated for ZeroGPU compatibility."""
+    with visualizer._generation_lock:
+        adapter = visualizer.load_adapter(model_name)
+        if adapter is None:
+            return None
+
+        activation_dict = visualizer.prepare_activation_dict(model_name, all_neighbors)
+        if activation_dict is None:
+            return None
+
+        masker = ActivationMasker(adapter)
+        for layer_name, activation in activation_dict.items():
+            masker.set_mask(layer_name, activation)
+        masker.register_hooks(list(activation_dict.keys()))
+
+        try:
+            result = generate_with_mask_multistep(
+                adapter,
+                masker,
+                class_label=class_label,
+                num_steps=int(n_steps),
+                mask_steps=int(m_steps),
+                sigma_max=float(s_max),
+                sigma_min=float(s_min),
+                guidance_scale=float(guidance),
+                noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
+                num_samples=1,
+                device=visualizer.device,
+                extract_layers=extract_layers if can_project else None,
+                return_trajectory=can_project,
+                return_intermediates=True,
+                return_noised_inputs=True,
+            )
+        finally:
+            masker.remove_hooks()
+
+    return result
+
+
+@_gpu_decorator(duration=180)
+def _extract_layer_on_gpu(visualizer, model_name, layer_name, batch_size=32):
+    """Extract layer activations on GPU. Decorated for ZeroGPU compatibility."""
+    return visualizer.extract_layer_activations(model_name, layer_name, batch_size)
 
 
 # JavaScript for Plotly click and hover handling
@@ -2328,44 +2391,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             extract_layers = sorted(model_data.umap_params.get("layers", []))
             can_project = model_data.umap_reducer is not None and len(extract_layers) > 0
 
-            # Load adapter (lazy)
-            with visualizer._generation_lock:
-                adapter = visualizer.load_adapter(model_name)
-                if adapter is None:
-                    return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
-
-                # Prepare activation dict
-                activation_dict = visualizer.prepare_activation_dict(model_name, all_neighbors)
-                if activation_dict is None:
-                    return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
-
-                # Create masker and register hooks
-                masker = ActivationMasker(adapter)
-                for layer_name, activation in activation_dict.items():
-                    masker.set_mask(layer_name, activation)
-                masker.register_hooks(list(activation_dict.keys()))
-
-                try:
-                    # Generate with trajectory, intermediates, and noised inputs
-                    result = generate_with_mask_multistep(
-                        adapter,
-                        masker,
-                        class_label=class_label,
-                        num_steps=int(n_steps),
-                        mask_steps=int(m_steps),
-                        sigma_max=float(s_max),
-                        sigma_min=float(s_min),
-                        guidance_scale=float(guidance),
-                        noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
-                        num_samples=1,
-                        device=visualizer.device,
-                        extract_layers=extract_layers if can_project else None,
-                        return_trajectory=can_project,
-                        return_intermediates=True,
-                        return_noised_inputs=True,
-                    )
-                finally:
-                    masker.remove_hooks()
+            # Run generation on GPU (ZeroGPU-compatible)
+            result = _generate_on_gpu(
+                visualizer, model_name, all_neighbors, class_label,
+                n_steps, m_steps, s_max, s_min, guidance, noise_mode,
+                extract_layers, can_project
+            )
+            if result is None:
+                return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
 
             # Unpack results: (images, labels, [trajectory], [intermediates], [noised_inputs])
             images = result[0]

@@ -22,5 +22,8 @@ matplotlib>=3.5.0
 # HuggingFace Hub
 huggingface_hub>=0.25.0
 
+# ZeroGPU support (no-op when not on HF Spaces)
+spaces
+
 # Optional but useful
 scipy>=1.7.0
