@@ -22,14 +22,10 @@ import plotly.graph_objects as go
 try:
     import spaces
 except ImportError:
-    spaces = None
-
-
-def _gpu_decorator(duration=60):
-    """Return @spaces.GPU decorator if available, identity otherwise."""
-    if spaces is not None:
-        return spaces.GPU(duration=duration)
-    return lambda fn: fn
+    # Provide stub so @spaces.GPU(...) is a no-op outside HF Spaces
+    import types
+    spaces = types.ModuleType("spaces")
+    spaces.GPU = lambda fn=None, duration=60: fn if fn is not None else (lambda f: f)
 
 
 from diffviews.processing.umap import load_dataset_activations
@@ -1060,7 +1056,7 @@ class GradioVisualizer:
         return fig
 
 
-@_gpu_decorator(duration=120)
+@spaces.GPU(duration=120)
 def _generate_on_gpu(
     visualizer, model_name, all_neighbors, class_label,
     n_steps, m_steps, s_max, s_min, guidance, noise_mode,
@@ -1105,7 +1101,7 @@ def _generate_on_gpu(
     return result
 
 
-@_gpu_decorator(duration=180)
+@spaces.GPU(duration=180)
 def _extract_layer_on_gpu(visualizer, model_name, layer_name, batch_size=32):
     """Extract layer activations on GPU. Decorated for ZeroGPU compatibility."""
     return visualizer.extract_layer_activations(model_name, layer_name, batch_size)
