@@ -639,7 +639,7 @@ class GradioVisualizer:
             return True
 
         # Extract activations (GPU, ZeroGPU-compatible)
-        activations = _extract_layer_on_gpu(self, model_name, layer_name)
+        activations = _extract_layer_on_gpu(model_name, layer_name)
 
         if activations is None:
             print(f"[{model_name}] Failed to extract {layer_name}")
@@ -1047,12 +1047,19 @@ class GradioVisualizer:
         return fig
 
 
+# Module-level visualizer reference for GPU functions (set by create_gradio_app).
+# ZeroGPU runs @spaces.GPU functions in a subprocess — args must be picklable,
+# so the visualizer (which has threading.Lock) is accessed via this global instead.
+_app_visualizer = None
+
+
 def _generate_on_gpu(
-    visualizer, model_name, all_neighbors, class_label,
+    model_name, all_neighbors, class_label,
     n_steps, m_steps, s_max, s_min, guidance, noise_mode,
     extract_layers, can_project
 ):
     """Run masked generation on GPU. Decorated for ZeroGPU compatibility."""
+    visualizer = _app_visualizer
     with visualizer._generation_lock:
         adapter = visualizer.load_adapter(model_name)
         if adapter is None:
@@ -1091,9 +1098,9 @@ def _generate_on_gpu(
     return result
 
 
-def _extract_layer_on_gpu(visualizer, model_name, layer_name, batch_size=32):
+def _extract_layer_on_gpu(model_name, layer_name, batch_size=32):
     """Extract layer activations on GPU. Decorated for ZeroGPU compatibility."""
-    return visualizer.extract_layer_activations(model_name, layer_name, batch_size)
+    return _app_visualizer.extract_layer_activations(model_name, layer_name, batch_size)
 
 
 # JavaScript for Plotly click and hover handling
@@ -1565,6 +1572,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
     Note: In Gradio 6, theme/css/head are passed to launch() not Blocks().
     Use CUSTOM_CSS and PLOTLY_HANDLER_JS module constants when calling launch().
     """
+    global _app_visualizer
+    _app_visualizer = visualizer
     with gr.Blocks(
         title="Diffusion Activation Visualizer",
     ) as app:
@@ -2378,7 +2387,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Run generation on GPU (ZeroGPU-compatible)
             result = _generate_on_gpu(
-                visualizer, model_name, all_neighbors, class_label,
+                model_name, all_neighbors, class_label,
                 n_steps, m_steps, s_max, s_min, guidance, noise_mode,
                 extract_layers, can_project
             )
