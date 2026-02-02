@@ -257,11 +257,12 @@ def get_device() -> str:
 
 @spaces.GPU(duration=120)
 def generate_on_gpu(
-    visualizer, model_name, all_neighbors, class_label,
+    model_name, all_neighbors, class_label,
     n_steps, m_steps, s_max, s_min, guidance, noise_mode,
     extract_layers, can_project
 ):
     """Run masked generation on GPU. Must live in app_file for ZeroGPU detection."""
+    from diffviews.visualization.app import _app_visualizer as visualizer
     from diffviews.core.masking import ActivationMasker
     from diffviews.core.generator import generate_with_mask_multistep
 
@@ -304,8 +305,9 @@ def generate_on_gpu(
 
 
 @spaces.GPU(duration=180)
-def extract_layer_on_gpu(visualizer, model_name, layer_name, batch_size=32):
+def extract_layer_on_gpu(model_name, layer_name, batch_size=32):
     """Extract layer activations on GPU. Must live in app_file for ZeroGPU detection."""
+    from diffviews.visualization.app import _app_visualizer as visualizer
     return visualizer.extract_layer_activations(model_name, layer_name, batch_size)
 
 
