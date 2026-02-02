@@ -17,6 +17,8 @@ Environment variables:
 import os
 from pathlib import Path
 
+import spaces
+
 # Data source configuration
 DATA_REPO_ID = "mckell/diffviews_demo_data"
 CHECKPOINT_URLS = {
@@ -253,6 +255,60 @@ def get_device() -> str:
     return "cpu"
 
 
+@spaces.GPU(duration=120)
+def generate_on_gpu(
+    visualizer, model_name, all_neighbors, class_label,
+    n_steps, m_steps, s_max, s_min, guidance, noise_mode,
+    extract_layers, can_project
+):
+    """Run masked generation on GPU. Must live in app_file for ZeroGPU detection."""
+    from diffviews.core.masking import ActivationMasker
+    from diffviews.core.generator import generate_with_mask_multistep
+
+    with visualizer._generation_lock:
+        adapter = visualizer.load_adapter(model_name)
+        if adapter is None:
+            return None
+
+        activation_dict = visualizer.prepare_activation_dict(model_name, all_neighbors)
+        if activation_dict is None:
+            return None
+
+        masker = ActivationMasker(adapter)
+        for layer_name, activation in activation_dict.items():
+            masker.set_mask(layer_name, activation)
+        masker.register_hooks(list(activation_dict.keys()))
+
+        try:
+            result = generate_with_mask_multistep(
+                adapter,
+                masker,
+                class_label=class_label,
+                num_steps=int(n_steps),
+                mask_steps=int(m_steps),
+                sigma_max=float(s_max),
+                sigma_min=float(s_min),
+                guidance_scale=float(guidance),
+                noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
+                num_samples=1,
+                device=visualizer.device,
+                extract_layers=extract_layers if can_project else None,
+                return_trajectory=can_project,
+                return_intermediates=True,
+                return_noised_inputs=True,
+            )
+        finally:
+            masker.remove_hooks()
+
+    return result
+
+
+@spaces.GPU(duration=180)
+def extract_layer_on_gpu(visualizer, model_name, layer_name, batch_size=32):
+    """Extract layer activations on GPU. Must live in app_file for ZeroGPU detection."""
+    return visualizer.extract_layer_activations(model_name, layer_name, batch_size)
+
+
 def main():
     """Main entry point for HF Spaces."""
     # Configuration from environment
@@ -287,6 +343,12 @@ def main():
         CUSTOM_CSS,
         PLOTLY_HANDLER_JS,
     )
+
+    # Inject ZeroGPU-decorated functions into visualization module
+    # so Gradio callbacks use the versions codefind can detect
+    import diffviews.visualization.app as viz_mod
+    viz_mod._generate_on_gpu = generate_on_gpu
+    viz_mod._extract_layer_on_gpu = extract_layer_on_gpu
 
     print("\nInitializing visualizer...")
     visualizer = GradioVisualizer(
