@@ -311,14 +311,12 @@ def extract_layer_on_gpu(model_name, layer_name, batch_size=32):
     return visualizer.extract_layer_activations(model_name, layer_name, batch_size)
 
 
-def main():
-    """Main entry point for HF Spaces."""
-    # Configuration from environment
+def _setup():
+    """Initialize data, visualizer, and Gradio app."""
     data_dir = Path(os.environ.get("DIFFVIEWS_DATA_DIR", "data"))
-    checkpoint_config = os.environ.get("DIFFVIEWS_CHECKPOINT", "all")  # Download all by default
+    checkpoint_config = os.environ.get("DIFFVIEWS_CHECKPOINT", "all")
     device = get_device()
 
-    # Parse checkpoint config
     if checkpoint_config == "all":
         checkpoints = list(CHECKPOINT_URLS.keys())
     elif checkpoint_config == "none":
@@ -334,44 +332,42 @@ def main():
     print(f"Checkpoints: {checkpoints}")
     print("=" * 50)
 
-    # Ensure data is ready
     ensure_data_ready(data_dir, checkpoints)
 
-    # Import and launch visualizer
-    import gradio as gr
+    import diffviews.visualization.app as viz_mod
     from diffviews.visualization.app import (
         GradioVisualizer,
         create_gradio_app,
-        CUSTOM_CSS,
-        PLOTLY_HANDLER_JS,
     )
 
     # Inject ZeroGPU-decorated functions into visualization module
     # so Gradio callbacks use the versions codefind can detect
-    import diffviews.visualization.app as viz_mod
     viz_mod._generate_on_gpu = generate_on_gpu
     viz_mod._extract_layer_on_gpu = extract_layer_on_gpu
 
     print("\nInitializing visualizer...")
-    visualizer = GradioVisualizer(
-        data_dir=data_dir,
-        device=device,
-    )
+    visualizer = GradioVisualizer(data_dir=data_dir, device=device)
 
     print("Creating Gradio app...")
     app = create_gradio_app(visualizer)
+    app.queue(max_size=20)
+    return app
 
-    print("Launching...")
-    # HF Spaces expects server on 0.0.0.0:7860
-    app.queue(max_size=20).launch(
+
+# Module-level setup so Gradio hot-reload (which imports but doesn't call main)
+# still initializes everything and finds the app as `demo`.
+demo = _setup()
+
+
+if __name__ == "__main__":
+    import gradio as gr
+    from diffviews.visualization.app import CUSTOM_CSS, PLOTLY_HANDLER_JS
+
+    demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False,  # Spaces handles public URL
+        share=False,
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
         js=PLOTLY_HANDLER_JS,
     )
-
-
-if __name__ == "__main__":
-    main()
