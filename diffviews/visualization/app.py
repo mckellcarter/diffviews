@@ -617,7 +617,9 @@ class GradioVisualizer:
                 act_scaled = pca_reducer.fit_transform(act_scaled)
 
             coords_init = df[["umap_x", "umap_y"]].values
-            reducer = _UMAP(n_neighbors=15, min_dist=0.1, init=coords_init, n_epochs=0)
+            # n_epochs=1 (not 0): n_epochs=0 leaves transform internals
+            # uninitialized, causing divide-by-zero on .transform()
+            reducer = _UMAP(n_neighbors=15, min_dist=0.1, init=coords_init, n_epochs=1)
             reducer.fit(act_scaled)
 
             # Save pkl locally for next time
