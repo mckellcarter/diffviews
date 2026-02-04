@@ -116,3 +116,24 @@ Layer dropdown change
 4. Re-select same layer - should load from disk cache (fast)
 5. Generate from neighbors after layer change - trajectory projection should use correct layer
 6. Switch models - layer dropdown should reset to "default" with new model's layers
+
+## ZeroGPU / HF Spaces Constraints
+
+GPU-touching code (extraction, generation) must go through `@spaces.GPU` decorated functions.
+
+### Architecture
+- `@spaces.GPU` decorators **must** live in root `app.py` — `codefind` only scans the `app_file`
+- Root `app.py` runs setup at **module level** (`demo = _setup()`), not in `main()` — Gradio hot-reload imports but never calls `main()`
+- GPU functions are injected into the visualization submodule: `viz_mod._generate_on_gpu = generate_on_gpu`
+- Non-picklable objects (visualizer with `threading.Lock`) accessed via module-level global `_app_visualizer`, not passed as args — ZeroGPU runs GPU functions in a forked subprocess, all args must be picklable
+
+### Adding new GPU functions
+1. Define in root `app.py` with `@spaces.GPU(duration=N)`
+2. Import visualizer inside the function body: `from diffviews.visualization.app import _app_visualizer as visualizer`
+3. Define matching undecorated version in `diffviews/visualization/app.py`
+4. Inject in `_setup()`: `viz_mod._new_gpu_fn = new_gpu_fn`
+5. `extract_layer_on_gpu` already exists for layer extraction — reuse it
+
+### Package install caching
+- `requirements.txt` pins `git+https://...@<commit_hash>` — **must update hash** after merging submodule changes
+- `@main` is insufficient; pip aggressively caches git installs

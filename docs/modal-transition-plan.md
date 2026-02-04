@@ -5,7 +5,7 @@
 
 ## Milestones
 
-### M1: Cloudflare R2 Data Cache Layer ← CURRENT
+### M1: Cloudflare R2 Data Cache Layer ✓
 Cache activations + UMAP layer embeddings on CF R2. HF remains compute host.
 
 ### M2: Model + Data Hosting on CF
@@ -119,22 +119,44 @@ All R2 calls wrapped in try/except, return False on failure. `R2LayerCache.enabl
 
 ---
 
-## M2: CF Data Hosting (Planned)
+## M2: CF Data Hosting ← CURRENT
 
-Move all data from HF Hub to CF R2:
+Move all data from HF Hub to CF R2. R2-first download with HF fallback.
+
+### What's on R2
 ```
-data/{model}/checkpoints/{model}.pkl        (~1GB each)
-data/{model}/activations/imagenet_real/      (~50MB each)
-data/{model}/embeddings/demo_embeddings.*    (~500MB each with pkl)
-data/{model}/images/imagenet_real/           (~100MB each)
-data/{model}/metadata/imagenet_real/         (<1MB)
+data/{model}/config.json
+data/{model}/checkpoints/*.pkl              (~1GB each)
+data/{model}/activations/imagenet_real/*.npy + *.npy.json
+data/{model}/embeddings/demo_embeddings.csv + .json  (no .pkl — numba)
+data/{model}/metadata/imagenet_real/dataset_info.json
+data/{model}/images/imagenet_real/sample_*.png
+data/imagenet_standard_class_index.json
+data/imagenet64_class_labels.json
 ```
 
-### Changes Required
-- Replace `ensure_data_ready()` HF `snapshot_download` with R2 bulk download
-- Add `R2LayerCache.download_model_data()` method for full model data
-- Keep HF as fallback during transition
-- Consider chunked/streaming download for large checkpoints
+**Skipped:** intermediates/, .npz (old), .pkl in embeddings/, layer_cache/
+
+### Implementation Status
+
+| Step | File | Status |
+|------|------|--------|
+| R2DataStore class | `diffviews/data/r2_cache.py` | done |
+| R2DataStore tests (15 tests) | `tests/test_r2_cache.py` | done |
+| Seeding script | `scripts/seed_r2.py` | done |
+| Replace download_data() (R2 first, HF fallback) | `app.py` | done |
+| Replace download_checkpoint() (R2 first, URL fallback) | `app.py` | done |
+| Update CLI download_command() + --source flag | `diffviews/scripts/cli.py` | done |
+| Seed R2 bucket | run `scripts/seed_r2.py --execute` | **pending** |
+| E2E test on HF | verify R2 download on fresh start | **pending** |
+
+### Architecture
+- `_make_r2_client()` shared helper for boto3 setup (used by R2DataStore + R2LayerCache)
+- `R2DataStore.download_model_data()` downloads all files for a model
+- `R2DataStore.download_prefix()` lists + downloads preserving key structure
+- `download_data()` tries R2 first, falls back to HF `snapshot_download`
+- `download_checkpoint()` tries R2 first, falls back to direct URL
+- CLI `--source auto|r2|hf` flag for explicit control
 
 ---
 
