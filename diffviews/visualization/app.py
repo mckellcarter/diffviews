@@ -509,6 +509,16 @@ class GradioVisualizer:
         model_data.current_layer = "default"
         print(f"[{model_name}] Restored default embeddings")
 
+    @staticmethod
+    def _clear_layer_data(model_data: "ModelData") -> None:
+        """Release heavy layer data from memory before loading a new layer."""
+        model_data.activations = None
+        model_data.df = pd.DataFrame()
+        model_data.umap_reducer = None
+        model_data.umap_scaler = None
+        model_data.umap_pca = None
+        model_data.nn_model = None
+
     # Max layer cache disk usage per model (bytes). Override via env.
     LAYER_CACHE_MAX_BYTES = int(os.environ.get(
         "DIFFVIEWS_LAYER_CACHE_MAX_MB", "2048"
@@ -572,6 +582,9 @@ class GradioVisualizer:
         if not csv_path.exists():
             return False
 
+        # Free old layer data before loading new (avoid 2x memory peak)
+        self._clear_layer_data(model_data)
+
         print(f"[{model_name}] Loading cached layer: {layer_name}")
         df = pd.read_csv(csv_path)
 
@@ -586,7 +599,7 @@ class GradioVisualizer:
 
         activations = None
         if npy_path.exists():
-            activations = np.load(npy_path)
+            activations = np.load(npy_path, mmap_mode="r")
 
         # If no pkl but we have activations + coordinates, refit reducer locally
         if reducer is None and activations is not None and "umap_x" in df.columns:
@@ -728,6 +741,9 @@ class GradioVisualizer:
         # Check disk cache first
         if self._load_layer_cache(model_name, layer_name):
             return True
+
+        # Free old layer data before extraction (avoid 2x memory peak)
+        self._clear_layer_data(model_data)
 
         # Extract activations (GPU, ZeroGPU-compatible)
         activations = _extract_layer_on_gpu(model_name, layer_name)
