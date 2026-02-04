@@ -42,10 +42,11 @@ Thumbs.db
 *.mdb
 
 # Model data (download via scripts/download_data.py)
-data/
-demo_data/
-demo_data_edm/
-checkpoints/
+# Leading slash = root-level only, won't match diffviews/data/
+/data/
+/demo_data/
+/demo_data_edm/
+/checkpoints/
 
 # Logs
 *.log
