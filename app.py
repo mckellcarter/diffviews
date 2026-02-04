@@ -24,10 +24,15 @@ _REPO_URL = "https://github.com/mckellcarter/diffviews.git"
 _REPO_BRANCH = os.environ.get("DIFFVIEWS_BRANCH", "feature/modal-transition")
 _REPO_DIR = "/tmp/diffviews"
 
+# Remove stale pip-installed version so our clone takes priority
+subprocess.run(["pip", "uninstall", "-y", "diffviews"], capture_output=True)
+# Purge any cached diffviews modules
+for mod in list(sys.modules):
+    if mod == "diffviews" or mod.startswith("diffviews."):
+        del sys.modules[mod]
+
 if not os.path.exists(_REPO_DIR):
     print(f"Cloning diffviews from {_REPO_BRANCH}...")
-    # Remove stale pip-installed version so our clone takes priority
-    subprocess.run(["pip", "uninstall", "-y", "diffviews"], capture_output=True)
     subprocess.run(
         ["git", "clone", "--depth=1", "-b", _REPO_BRANCH, _REPO_URL, _REPO_DIR],
         check=True,
