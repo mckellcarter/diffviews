@@ -83,6 +83,14 @@ def download_checkpoint(output_dir: Path, model: str) -> None:
         print("  Generation will be disabled without checkpoint")
 
 
+def get_pca_components() -> int | None:
+    """Read PCA pre-reduction setting from env. None = disabled."""
+    val = os.environ.get("DIFFVIEWS_PCA_COMPONENTS", "50")
+    if val.lower() in ("0", "none", "off", ""):
+        return None
+    return int(val)
+
+
 def regenerate_umap(data_dir: Path, model: str) -> bool:
     """Regenerate UMAP pickle for a model to ensure numba compatibility.
 
@@ -122,24 +130,26 @@ def regenerate_umap(data_dir: Path, model: str) -> bool:
         with open(json_path, "r") as f:
             umap_params = json.load(f)
 
+    pca_components = get_pca_components()
     print(f"  Regenerating UMAP for {model}...")
-    print(f"    Params: n_neighbors={umap_params.get('n_neighbors', 15)}, min_dist={umap_params.get('min_dist', 0.1)}")
+    print(f"    Params: n_neighbors={umap_params.get('n_neighbors', 15)}, min_dist={umap_params.get('min_dist', 0.1)}, pca={pca_components}")
 
     try:
         # Load activations
         activations, metadata_df = load_dataset_activations(activation_dir, metadata_path)
-        print(f"    Loaded {activations.shape[0]} activations")
+        print(f"    Loaded {activations.shape[0]} activations ({activations.shape[1]} dims)")
 
-        # Compute UMAP
-        embeddings, reducer, scaler = compute_umap(
+        # Compute UMAP (with optional PCA pre-reduction)
+        embeddings, reducer, scaler, pca_reducer = compute_umap(
             activations,
             n_neighbors=umap_params.get("n_neighbors", 15),
             min_dist=umap_params.get("min_dist", 0.1),
             normalize=True,
+            pca_components=pca_components,
         )
 
         # Save (overwrites existing pickle with compatible version)
-        save_embeddings(embeddings, metadata_df, csv_path, umap_params, reducer, scaler)
+        save_embeddings(embeddings, metadata_df, csv_path, umap_params, reducer, scaler, pca_reducer)
         print(f"    UMAP pickle regenerated: {pkl_path}")
         return True
 

@@ -792,8 +792,8 @@ class TestLoadLayerCache:
 
             assert viz._load_layer_cache("unknown", "encoder_block_0") is False
 
-    def test_cache_partial_files_missing(self):
-        """Returns False when pkl is missing (csv alone not enough)."""
+    def test_cache_csv_only_loads_without_reducer(self):
+        """CSV without pkl loads successfully (reducer is None, no refit without npy)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
@@ -805,12 +805,14 @@ class TestLoadLayerCache:
             cache_dir = md.data_dir / "embeddings" / "layer_cache"
             cache_dir.mkdir(parents=True)
 
-            # Only CSV, no PKL
+            # Only CSV, no PKL or NPY — loads but reducer stays None
             pd.DataFrame({"umap_x": [1.0], "umap_y": [2.0]}).to_csv(
                 cache_dir / "midblock.csv", index=False
             )
 
-            assert viz._load_layer_cache("dmd2", "midblock") is False
+            assert viz._load_layer_cache("dmd2", "midblock") is True
+            assert md.umap_reducer is None
+            assert md.current_layer == "midblock"
 
 
 class TestExtractLayerActivations:
@@ -910,8 +912,8 @@ class TestRecomputeLayerUmap:
 
             # Test the cache-miss path with mocked extraction + UMAP
             with patch.object(viz, '_load_layer_cache', return_value=False), \
-                 patch.object(viz, 'extract_layer_activations', return_value=fake_activations), \
-                 patch('diffviews.processing.umap.compute_umap', return_value=(fake_embeddings, fake_reducer, fake_scaler)), \
+                 patch('diffviews.visualization.app._extract_layer_on_gpu', return_value=fake_activations), \
+                 patch('diffviews.processing.umap.compute_umap', return_value=(fake_embeddings, fake_reducer, fake_scaler, None)), \
                  patch('diffviews.processing.umap.save_embeddings'):
                 result = viz.recompute_layer_umap("dmd2", "encoder_block_0")
 

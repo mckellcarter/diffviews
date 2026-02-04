@@ -25,5 +25,8 @@ huggingface_hub>=0.25.0
 # ZeroGPU support (no-op when not on HF Spaces)
 spaces
 
+# Cloudflare R2 cache (S3-compatible)
+boto3>=1.28.0
+
 # Optional but useful
 scipy>=1.7.0

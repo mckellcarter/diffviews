@@ -5,6 +5,7 @@ Port of the Dash visualization app with multi-user support.
 
 import argparse
 import json
+import os
 import pickle
 import threading
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import StandardScaler
 
 import plotly.graph_objects as go
 
@@ -47,6 +49,7 @@ class ModelData:
     metadata_df: Optional[pd.DataFrame] = None
     umap_reducer: Any = None
     umap_scaler: Any = None
+    umap_pca: Any = None  # PCA pre-reducer (if used)
     umap_params: Dict = field(default_factory=dict)
     nn_model: Optional[NearestNeighbors] = None
 
@@ -59,6 +62,7 @@ class ModelData:
     default_activations: Optional[np.ndarray] = None
     default_umap_reducer: Any = None
     default_umap_scaler: Any = None
+    default_umap_pca: Any = None
     default_umap_params: Optional[Dict] = None
     default_nn_model: Optional[NearestNeighbors] = None
     current_layer: str = "default"
@@ -124,6 +128,10 @@ class GradioVisualizer:
 
         # Thread lock for adapter loading
         self._generation_lock = threading.Lock()
+
+        # R2 cache layer (disabled gracefully if no credentials)
+        from diffviews.data.r2_cache import R2LayerCache
+        self.r2_cache = R2LayerCache()
 
         # Shared class labels (typically same across models for ImageNet)
         self.class_labels: Dict[int, str] = {}
@@ -235,6 +243,7 @@ class GradioVisualizer:
                     umap_data = pickle.load(f)
                     model_data.umap_reducer = umap_data["reducer"]
                     model_data.umap_scaler = umap_data["scaler"]
+                    model_data.umap_pca = umap_data.get("pca_reducer")
 
             # Filter by max_classes if specified
             if self.max_classes is not None and "class_label" in model_data.df.columns:
@@ -263,6 +272,7 @@ class GradioVisualizer:
             model_data.default_activations = model_data.activations
             model_data.default_umap_reducer = model_data.umap_reducer
             model_data.default_umap_scaler = model_data.umap_scaler
+            model_data.default_umap_pca = model_data.umap_pca
             model_data.default_umap_params = dict(model_data.umap_params)
             model_data.default_nn_model = model_data.nn_model
 
@@ -493,13 +503,14 @@ class GradioVisualizer:
         model_data.activations = model_data.default_activations
         model_data.umap_reducer = model_data.default_umap_reducer
         model_data.umap_scaler = model_data.default_umap_scaler
+        model_data.umap_pca = model_data.default_umap_pca
         model_data.umap_params = dict(model_data.default_umap_params) if model_data.default_umap_params else {}
         model_data.nn_model = model_data.default_nn_model
         model_data.current_layer = "default"
         print(f"[{model_name}] Restored default embeddings")
 
     def _load_layer_cache(self, model_name: str, layer_name: str) -> bool:
-        """Load cached layer embeddings from disk. Returns True if cache hit."""
+        """Load cached layer embeddings from disk or R2. Returns True if cache hit."""
         model_data = self.get_model(model_name)
         if model_data is None:
             return False
@@ -509,18 +520,53 @@ class GradioVisualizer:
         pkl_path = cache_dir / f"{layer_name}.pkl"
         npy_path = cache_dir / f"{layer_name}.npy"
 
-        if not csv_path.exists() or not pkl_path.exists():
+        # Try R2 download if local cache miss
+        if not csv_path.exists() and self.r2_cache.enabled:
+            print(f"[{model_name}] Local cache miss, trying R2...")
+            self.r2_cache.download_layer(model_name, layer_name, cache_dir)
+
+        if not csv_path.exists():
             return False
 
         print(f"[{model_name}] Loading cached layer: {layer_name}")
         df = pd.read_csv(csv_path)
 
-        with open(pkl_path, "rb") as f:
-            umap_data = pickle.load(f)
+        # Load reducer from pkl if available (local-only artifact)
+        reducer, scaler, pca_reducer = None, None, None
+        if pkl_path.exists():
+            with open(pkl_path, "rb") as f:
+                umap_data = pickle.load(f)
+            reducer = umap_data["reducer"]
+            scaler = umap_data["scaler"]
+            pca_reducer = umap_data.get("pca_reducer")
 
         activations = None
         if npy_path.exists():
             activations = np.load(npy_path)
+
+        # If no pkl but we have activations + coordinates, refit reducer locally
+        if reducer is None and activations is not None and "umap_x" in df.columns:
+            print(f"[{model_name}] Refitting UMAP reducer from cached coords...")
+            from umap import UMAP as _UMAP
+            scaler = StandardScaler()
+            act_scaled = scaler.fit_transform(activations)
+
+            # PCA if configured
+            pca_val = os.environ.get("DIFFVIEWS_PCA_COMPONENTS", "50")
+            pca_components = None if pca_val.lower() in ("0", "none", "off", "") else int(pca_val)
+            if pca_components and act_scaled.shape[1] > pca_components:
+                from sklearn.decomposition import PCA
+                pca_reducer = PCA(n_components=pca_components, random_state=42)
+                act_scaled = pca_reducer.fit_transform(act_scaled)
+
+            coords_init = df[["umap_x", "umap_y"]].values
+            reducer = _UMAP(n_neighbors=15, min_dist=0.1, init=coords_init, n_epochs=0)
+            reducer.fit(act_scaled)
+
+            # Save pkl locally for next time
+            with open(pkl_path, "wb") as f:
+                pickle.dump({"reducer": reducer, "scaler": scaler, "pca_reducer": pca_reducer}, f)
+            print(f"[{model_name}] Saved refit pkl to {pkl_path}")
 
         # Load params
         json_path = cache_dir / f"{layer_name}.json"
@@ -532,8 +578,9 @@ class GradioVisualizer:
         # Swap into model data
         model_data.df = df
         model_data.activations = activations
-        model_data.umap_reducer = umap_data["reducer"]
-        model_data.umap_scaler = umap_data["scaler"]
+        model_data.umap_reducer = reducer
+        model_data.umap_scaler = scaler
+        model_data.umap_pca = pca_reducer
         model_data.umap_params = umap_params
         self._fit_knn_model(model_data)
         model_data.current_layer = layer_name
@@ -646,9 +693,14 @@ class GradioVisualizer:
             return False
 
         # Compute UMAP (CPU, no lock needed)
-        print(f"[{model_name}] Computing UMAP for {layer_name}...")
-        embeddings, reducer, scaler = compute_umap(
-            activations, n_neighbors=15, min_dist=0.1, normalize=True
+        # Use PCA pre-reduction if configured (reads DIFFVIEWS_PCA_COMPONENTS env)
+        pca_val = os.environ.get("DIFFVIEWS_PCA_COMPONENTS", "50")
+        pca_components = None if pca_val.lower() in ("0", "none", "off", "") else int(pca_val)
+
+        print(f"[{model_name}] Computing UMAP for {layer_name} (pca={pca_components})...")
+        embeddings, reducer, scaler, pca_reducer = compute_umap(
+            activations, n_neighbors=15, min_dist=0.1, normalize=True,
+            pca_components=pca_components,
         )
 
         # Build new df with UMAP coords + original metadata
@@ -662,15 +714,19 @@ class GradioVisualizer:
         cache_dir = model_data.data_dir / "embeddings" / "layer_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         csv_path = cache_dir / f"{layer_name}.csv"
-        save_embeddings(embeddings, new_df, csv_path, umap_params, reducer, scaler)
+        save_embeddings(embeddings, new_df, csv_path, umap_params, reducer, scaler, pca_reducer)
         np.save(cache_dir / f"{layer_name}.npy", activations)
         print(f"[{model_name}] Cached {layer_name} to {cache_dir}")
+
+        # Push to R2 in background (non-blocking)
+        self.r2_cache.upload_layer_async(model_name, layer_name, cache_dir)
 
         # Atomic swap into ModelData
         model_data.df = new_df
         model_data.activations = activations
         model_data.umap_reducer = reducer
         model_data.umap_scaler = scaler
+        model_data.umap_pca = pca_reducer
         model_data.umap_params = umap_params
         self._fit_knn_model(model_data)
         model_data.current_layer = layer_name
@@ -2427,6 +2483,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         # Scale if scaler exists
                         if model_data.umap_scaler is not None:
                             act = model_data.umap_scaler.transform(act)
+                        # PCA pre-reduction if used during fitting
+                        if model_data.umap_pca is not None:
+                            act = model_data.umap_pca.transform(act)
                         # Project to 2D
                         coords = model_data.umap_reducer.transform(act)
                         sigma = sigmas[i] if i < len(sigmas) else 0.0
