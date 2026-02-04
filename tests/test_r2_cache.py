@@ -374,8 +374,36 @@ class TestR2DataStoreDownloadModelData:
         mock_boto3.download_file.side_effect = fake_download
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = store.download_model_data("dmd2", Path(tmpdir))
+            local_dir = Path(tmpdir)
+            result = store.download_model_data("dmd2", local_dir)
 
-        assert result is True
-        # 1 model file + 2 shared files
-        assert mock_boto3.download_file.call_count == 3
+            assert result is True
+            # 1 model file + 2 shared files
+            assert mock_boto3.download_file.call_count == 3
+            # Model file lands under model subdir
+            assert (local_dir / "dmd2" / "config.json").exists()
+
+    def test_excludes_layer_cache(self, r2_env, mock_boto3):
+        """download_model_data skips layer_cache/ keys."""
+        store = R2DataStore()
+        paginator = MagicMock()
+        mock_boto3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {"Contents": [
+                {"Key": "data/dmd2/config.json"},
+                {"Key": "data/dmd2/layer_cache/block.csv"},
+            ]},
+        ]
+
+        def fake_download(bucket, key, path):
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text("x")
+        mock_boto3.download_file.side_effect = fake_download
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir)
+            store.download_model_data("dmd2", local_dir)
+
+            # config.json downloaded, layer_cache skipped (+ 2 shared)
+            assert (local_dir / "dmd2" / "config.json").exists()
+            assert not (local_dir / "dmd2" / "layer_cache" / "block.csv").exists()

@@ -180,7 +180,9 @@ class R2DataStore:
         Returns True if any files were downloaded or already exist.
         """
         prefix = f"data/{model}/"
-        count = self.download_prefix(prefix, local_dir, exclude_dirs={"layer_cache"})
+        # download_prefix strips prefix from keys, so target model subdir
+        # to preserve data/{model}/... → local_dir/{model}/...
+        count = self.download_prefix(prefix, local_dir / model, exclude_dirs={"layer_cache"})
         # Also download root-level shared files
         for shared in ["imagenet_standard_class_index.json", "imagenet64_class_labels.json"]:
             key = f"data/{shared}"
