@@ -17,6 +17,7 @@ Env vars (set as HF Spaces Secrets or Modal secrets):
 
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -102,11 +103,19 @@ class R2DataStore:
             print(f"[R2] Download failed: {key}: {e}")
             return False
 
-    def download_prefix(self, prefix: str, local_dir: Path) -> int:
+    def download_prefix(
+        self, prefix: str, local_dir: Path,
+        exclude_dirs: set[str] | None = None,
+        max_workers: int = 8,
+    ) -> int:
         """Download all objects under prefix to local_dir, preserving structure.
 
         Keys like 'data/dmd2/config.json' with prefix='data/' download to
         local_dir/dmd2/config.json.
+
+        Args:
+            exclude_dirs: Set of directory names to skip (e.g. {"layer_cache"}).
+            max_workers: Concurrent download threads.
 
         Returns count of files downloaded.
         """
@@ -119,32 +128,59 @@ class R2DataStore:
             return 0
 
         local_dir = Path(local_dir)
-        downloaded = 0
+
+        # Filter out excluded dirs and already-existing files
+        to_download = []
         for key in keys:
-            # Strip prefix to get relative path
             rel = key[len(prefix):]
+            if exclude_dirs:
+                parts = Path(rel).parts
+                if any(p in exclude_dirs for p in parts):
+                    continue
             local_path = local_dir / rel
             if local_path.exists():
                 continue
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                self._client.download_file(self._bucket, key, str(local_path))
-                size_mb = local_path.stat().st_size / 1e6
-                print(f"[R2] Downloaded {key} ({size_mb:.1f}MB)")
-                downloaded += 1
-            except Exception as e:
-                print(f"[R2] Failed {key}: {e}")
+            to_download.append((key, local_path))
 
+        if not to_download:
+            return 0
+
+        print(f"[R2] Downloading {len(to_download)} files ({max_workers} threads)...")
+        downloaded = 0
+        failed = 0
+
+        def _download_one(key_path):
+            key, local_path = key_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            self._client.download_file(self._bucket, key, str(local_path))
+            return key, local_path
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_download_one, kp): kp for kp in to_download}
+            for future in as_completed(futures):
+                key, local_path = futures[future]
+                try:
+                    future.result()
+                    downloaded += 1
+                    if downloaded % 50 == 0 or downloaded == len(to_download):
+                        print(f"[R2] Progress: {downloaded}/{len(to_download)} files")
+                except Exception as e:
+                    failed += 1
+                    print(f"[R2] Failed {key}: {e}")
+
+        if failed:
+            print(f"[R2] Done: {downloaded} downloaded, {failed} failed")
         return downloaded
 
     def download_model_data(self, model: str, local_dir: Path) -> bool:
         """Download all data for a model from R2.
 
         Downloads data/{model}/* to local_dir/{model}/*.
+        Excludes layer_cache/ (lazy-loaded on demand via R2LayerCache).
         Returns True if any files were downloaded or already exist.
         """
         prefix = f"data/{model}/"
-        count = self.download_prefix(prefix, local_dir)
+        count = self.download_prefix(prefix, local_dir, exclude_dirs={"layer_cache"})
         # Also download root-level shared files
         for shared in ["imagenet_standard_class_index.json", "imagenet64_class_labels.json"]:
             key = f"data/{shared}"
