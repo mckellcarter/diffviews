@@ -1,4 +1,4 @@
-"""Tests for R2LayerCache with mocked boto3."""
+"""Tests for R2LayerCache and R2DataStore with mocked boto3."""
 
 import tempfile
 from pathlib import Path
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch, call
 import numpy as np
 import pytest
 
-from diffviews.data.r2_cache import R2LayerCache, LAYER_CACHE_EXTENSIONS
+from diffviews.data.r2_cache import R2LayerCache, R2DataStore, LAYER_CACHE_EXTENSIONS
 
 
 @pytest.fixture
@@ -202,3 +202,152 @@ class TestUploadLayerAsync:
             cache = R2LayerCache()
         # Should not raise
         cache.upload_layer_async("dmd2", "layer", Path("/tmp"))
+
+
+# ──────────────────────────────────────────────
+# R2DataStore tests
+# ──────────────────────────────────────────────
+
+class TestR2DataStoreInit:
+    def test_disabled_without_credentials(self):
+        with patch.dict("os.environ", {}, clear=True):
+            store = R2DataStore()
+        assert store.enabled is False
+
+    def test_enabled_with_credentials(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        assert store.enabled is True
+
+
+class TestR2DataStoreListObjects:
+    def test_lists_keys(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        paginator = MagicMock()
+        mock_boto3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {"Contents": [{"Key": "data/dmd2/config.json"}, {"Key": "data/dmd2/embeddings/demo.csv"}]},
+        ]
+        keys = store.list_objects("data/dmd2/")
+        assert keys == ["data/dmd2/config.json", "data/dmd2/embeddings/demo.csv"]
+
+    def test_empty_on_error(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        mock_boto3.get_paginator.side_effect = Exception("fail")
+        assert store.list_objects("data/") == []
+
+    def test_empty_when_disabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            store = R2DataStore()
+        assert store.list_objects("data/") == []
+
+
+class TestR2DataStoreFileExists:
+    def test_exists_true(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        mock_boto3.head_object.return_value = {}
+        assert store.file_exists("data/dmd2/config.json") is True
+
+    def test_exists_false(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        mock_boto3.head_object.side_effect = Exception("404")
+        assert store.file_exists("data/dmd2/config.json") is False
+
+    def test_exists_false_when_disabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            store = R2DataStore()
+        assert store.file_exists("data/dmd2/config.json") is False
+
+
+class TestR2DataStoreDownloadFile:
+    def test_downloads_single_file(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local = Path(tmpdir) / "sub" / "file.json"
+            # download_file creates parent dirs
+            result = store.download_file("data/dmd2/config.json", local)
+        assert result is True
+        mock_boto3.download_file.assert_called_once()
+
+    def test_returns_false_on_error(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        mock_boto3.download_file.side_effect = Exception("err")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = store.download_file("data/x", Path(tmpdir) / "x")
+        assert result is False
+
+    def test_returns_false_when_disabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            store = R2DataStore()
+        assert store.download_file("k", Path("/tmp/x")) is False
+
+
+class TestR2DataStoreDownloadPrefix:
+    def test_downloads_all_listed_objects(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        paginator = MagicMock()
+        mock_boto3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {"Contents": [
+                {"Key": "data/dmd2/config.json"},
+                {"Key": "data/dmd2/embeddings/demo.csv"},
+            ]},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir)
+            # Make download_file create files so stat() works
+            def fake_download(bucket, key, path):
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text("x")
+            mock_boto3.download_file.side_effect = fake_download
+
+            count = store.download_prefix("data/", local_dir)
+
+        assert count == 2
+        assert mock_boto3.download_file.call_count == 2
+
+    def test_skips_existing_files(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        paginator = MagicMock()
+        mock_boto3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {"Contents": [{"Key": "data/dmd2/config.json"}]},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir)
+            # Pre-create file
+            (local_dir / "dmd2").mkdir()
+            (local_dir / "dmd2" / "config.json").write_text("existing")
+
+            count = store.download_prefix("data/", local_dir)
+
+        assert count == 0
+        mock_boto3.download_file.assert_not_called()
+
+    def test_returns_zero_when_disabled(self):
+        with patch.dict("os.environ", {}, clear=True):
+            store = R2DataStore()
+        assert store.download_prefix("data/", Path("/tmp")) == 0
+
+
+class TestR2DataStoreDownloadModelData:
+    def test_downloads_model_and_shared(self, r2_env, mock_boto3):
+        store = R2DataStore()
+        paginator = MagicMock()
+        mock_boto3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {"Contents": [{"Key": "data/dmd2/config.json"}]},
+        ]
+
+        def fake_download(bucket, key, path):
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text("x")
+        mock_boto3.download_file.side_effect = fake_download
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = store.download_model_data("dmd2", Path(tmpdir))
+
+        assert result is True
+        # 1 model file + 2 shared files
+        assert mock_boto3.download_file.call_count == 3

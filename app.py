@@ -59,13 +59,25 @@ CHECKPOINT_FILENAMES = {
 }
 
 
-def download_data(output_dir: Path) -> None:
-    """Download data from HuggingFace Hub."""
+def download_data_r2(output_dir: Path) -> bool:
+    """Download data from Cloudflare R2. Returns True on success."""
+    from diffviews.data.r2_cache import R2DataStore
+
+    store = R2DataStore()
+    if not store.enabled:
+        return False
+
+    print(f"Downloading data from R2...")
+    for model in ["dmd2", "edm"]:
+        store.download_model_data(model, output_dir)
+    return True
+
+
+def download_data_hf(output_dir: Path) -> None:
+    """Fallback: download data from HuggingFace Hub."""
     from huggingface_hub import snapshot_download
 
-    print(f"Downloading data from {DATA_REPO_ID}...")
-    print(f"Output directory: {output_dir.absolute()}")
-
+    print(f"Downloading data from {DATA_REPO_ID} (HF fallback)...")
     snapshot_download(
         repo_id=DATA_REPO_ID,
         repo_type="dataset",
@@ -75,10 +87,15 @@ def download_data(output_dir: Path) -> None:
     print(f"Data downloaded to {output_dir}")
 
 
-def download_checkpoint(output_dir: Path, model: str) -> None:
-    """Download model checkpoint."""
-    import urllib.request
+def download_data(output_dir: Path) -> None:
+    """Download data: R2 first, HF fallback."""
+    print(f"Output directory: {output_dir.absolute()}")
+    if not download_data_r2(output_dir):
+        download_data_hf(output_dir)
 
+
+def download_checkpoint(output_dir: Path, model: str) -> None:
+    """Download model checkpoint: R2 first, URL fallback."""
     if model not in CHECKPOINT_URLS:
         print(f"Unknown model: {model}")
         return
@@ -93,8 +110,18 @@ def download_checkpoint(output_dir: Path, model: str) -> None:
         print(f"Checkpoint exists: {filepath}")
         return
 
+    # Try R2 first
+    from diffviews.data.r2_cache import R2DataStore
+    store = R2DataStore()
+    r2_key = f"data/{model}/checkpoints/{filename}"
+    if store.enabled and store.download_file(r2_key, filepath):
+        print(f"Checkpoint downloaded from R2: {filepath} ({filepath.stat().st_size / 1e6:.1f} MB)")
+        return
+
+    # Fallback to direct URL
+    import urllib.request
     url = CHECKPOINT_URLS[model]
-    print(f"Downloading {model} checkpoint (~1GB)...")
+    print(f"Downloading {model} checkpoint from URL (~1GB)...")
     print(f"  URL: {url}")
 
     try:

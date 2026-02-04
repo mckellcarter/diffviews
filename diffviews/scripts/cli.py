@@ -23,29 +23,38 @@ CHECKPOINT_FILENAMES = {
 
 
 def download_command(args):
-    """Download data and checkpoints from HuggingFace."""
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        print("Error: huggingface_hub not installed")
-        print("  pip install huggingface_hub")
-        sys.exit(1)
-
-    import urllib.request
-
+    """Download data and checkpoints (R2 first, HF fallback)."""
     output_path = Path(args.output_dir)
+    source = getattr(args, "source", "auto")
 
     # Download data
-    print(f"Downloading data from {DATA_REPO_ID}...")
     print(f"Output directory: {output_path.absolute()}")
+    r2_ok = False
 
-    snapshot_download(
-        repo_id=DATA_REPO_ID,
-        repo_type="dataset",
-        local_dir=output_path,
-        revision="main",
-    )
-    print(f"Data downloaded to {output_path}")
+    if source in ("auto", "r2"):
+        from ..data.r2_cache import R2DataStore
+        store = R2DataStore()
+        if store.enabled:
+            print("Downloading data from R2...")
+            for model in ["dmd2", "edm"]:
+                store.download_model_data(model, output_path)
+            r2_ok = True
+
+    if not r2_ok and source in ("auto", "hf"):
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            print("Error: huggingface_hub not installed")
+            print("  pip install huggingface_hub")
+            sys.exit(1)
+        print(f"Downloading data from {DATA_REPO_ID} (HF)...")
+        snapshot_download(
+            repo_id=DATA_REPO_ID,
+            repo_type="dataset",
+            local_dir=output_path,
+            revision="main",
+        )
+        print(f"Data downloaded to {output_path}")
 
     # Download checkpoints
     checkpoints = args.checkpoints
@@ -69,11 +78,23 @@ def download_command(args):
             print(f"Checkpoint exists: {filepath}")
             continue
 
-        url = CHECKPOINT_URLS[model]
-        print(f"Downloading {model} checkpoint...")
-        print(f"  URL: {url}")
-        urllib.request.urlretrieve(url, filepath)
-        print(f"  Done ({filepath.stat().st_size / 1e6:.1f} MB)")
+        # Try R2 first
+        if source in ("auto", "r2"):
+            from ..data.r2_cache import R2DataStore
+            store = R2DataStore()
+            r2_key = f"data/{model}/checkpoints/{filename}"
+            if store.enabled and store.download_file(r2_key, filepath):
+                print(f"Checkpoint from R2: {filepath} ({filepath.stat().st_size / 1e6:.1f} MB)")
+                continue
+
+        # Fallback to URL
+        if source in ("auto", "hf"):
+            import urllib.request
+            url = CHECKPOINT_URLS[model]
+            print(f"Downloading {model} checkpoint from URL...")
+            print(f"  URL: {url}")
+            urllib.request.urlretrieve(url, filepath)
+            print(f"  Done ({filepath.stat().st_size / 1e6:.1f} MB)")
 
     print("\n" + "=" * 50)
     print("Setup complete!")
@@ -168,6 +189,12 @@ def main():
         choices=["dmd2", "edm", "all", "none"],
         default=["all"],
         help="Checkpoints to download (default: all)"
+    )
+    download_parser.add_argument(
+        "--source",
+        choices=["auto", "r2", "hf"],
+        default="auto",
+        help="Data source: auto (R2 first, HF fallback), r2, or hf (default: auto)"
     )
 
     # Convert subcommand
