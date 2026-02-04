@@ -509,6 +509,49 @@ class GradioVisualizer:
         model_data.current_layer = "default"
         print(f"[{model_name}] Restored default embeddings")
 
+    # Max layer cache disk usage per model (bytes). Override via env.
+    LAYER_CACHE_MAX_BYTES = int(os.environ.get(
+        "DIFFVIEWS_LAYER_CACHE_MAX_MB", "2048"
+    )) * 1024 * 1024
+
+    def _evict_layer_cache(self, cache_dir: Path, needed_bytes: int = 300 * 1024 * 1024) -> None:
+        """Evict oldest-modified layers until cache_dir is under budget.
+
+        Groups files by layer stem, evicts least-recently-modified first.
+        """
+        if not cache_dir.exists():
+            return
+
+        # Group files by layer name
+        layers: dict[str, list[Path]] = {}
+        for f in cache_dir.iterdir():
+            if f.is_file() and f.suffix in (".csv", ".json", ".npy", ".pkl"):
+                layers.setdefault(f.stem, []).append(f)
+
+        if not layers:
+            return
+
+        total = sum(f.stat().st_size for files in layers.values() for f in files)
+        budget = self.LAYER_CACHE_MAX_BYTES
+
+        if total + needed_bytes <= budget:
+            return
+
+        # Sort layers by newest mtime (most recent last = evict from front)
+        def layer_mtime(name):
+            return max(f.stat().st_mtime for f in layers[name])
+
+        ordered = sorted(layers.keys(), key=layer_mtime)
+
+        for name in ordered:
+            if total + needed_bytes <= budget:
+                break
+            for f in layers[name]:
+                sz = f.stat().st_size
+                f.unlink()
+                total -= sz
+            print(f"[cache] Evicted layer {name} from {cache_dir.name}")
+
     def _load_layer_cache(self, model_name: str, layer_name: str) -> bool:
         """Load cached layer embeddings from disk or R2. Returns True if cache hit."""
         model_data = self.get_model(model_name)
@@ -523,6 +566,7 @@ class GradioVisualizer:
         # Try R2 download if local cache miss
         if not csv_path.exists() and self.r2_cache.enabled:
             print(f"[{model_name}] Local cache miss, trying R2...")
+            self._evict_layer_cache(cache_dir)
             self.r2_cache.download_layer(model_name, layer_name, cache_dir)
 
         if not csv_path.exists():
@@ -710,9 +754,10 @@ class GradioVisualizer:
 
         umap_params = {"layers": [layer_name], "n_neighbors": 15, "min_dist": 0.1}
 
-        # Save to disk cache
+        # Save to disk cache (evict oldest if over budget)
         cache_dir = model_data.data_dir / "embeddings" / "layer_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
+        self._evict_layer_cache(cache_dir)
         csv_path = cache_dir / f"{layer_name}.csv"
         save_embeddings(embeddings, new_df, csv_path, umap_params, reducer, scaler, pca_reducer)
         np.save(cache_dir / f"{layer_name}.npy", activations)

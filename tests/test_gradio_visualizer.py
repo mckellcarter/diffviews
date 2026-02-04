@@ -3,6 +3,7 @@ Unit tests for diffviews.visualization.app
 """
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -958,6 +959,94 @@ class TestRecomputeLayerUmap:
 
             result = viz.recompute_layer_umap("unknown", "encoder_block_0")
             assert result is False
+
+
+class TestEvictLayerCache:
+    """Tests for _evict_layer_cache disk budget enforcement."""
+
+    def _make_viz(self, root):
+        create_model_dir(root, "dmd2", "dmd2-imagenet-64")
+        with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
+            return GradioVisualizer(data_dir=root)
+
+    def _make_layer_files(self, cache_dir, layer_name, size_mb=1, mtime_offset=0):
+        """Create fake layer cache files with controlled size and mtime."""
+        import time
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        # .npy is the big one
+        npy = cache_dir / f"{layer_name}.npy"
+        npy.write_bytes(b"\x00" * int(size_mb * 1024 * 1024))
+        csv = cache_dir / f"{layer_name}.csv"
+        csv.write_text("umap_x,umap_y\n0,0\n")
+        json_f = cache_dir / f"{layer_name}.json"
+        json_f.write_text("{}")
+        # Set mtime for ordering
+        t = time.time() + mtime_offset
+        for f in [npy, csv, json_f]:
+            os.utime(f, (t, t))
+
+    def test_no_eviction_under_budget(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            viz = self._make_viz(root)
+            cache_dir = root / "dmd2" / "embeddings" / "layer_cache"
+            self._make_layer_files(cache_dir, "block_0", size_mb=1)
+
+            viz._evict_layer_cache(cache_dir)
+            assert (cache_dir / "block_0.npy").exists()
+
+    def test_evicts_oldest_first(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            viz = self._make_viz(root)
+            # Set very small budget
+            viz.LAYER_CACHE_MAX_BYTES = 3 * 1024 * 1024  # 3MB
+
+            cache_dir = root / "dmd2" / "embeddings" / "layer_cache"
+            self._make_layer_files(cache_dir, "old_layer", size_mb=1, mtime_offset=-100)
+            self._make_layer_files(cache_dir, "new_layer", size_mb=1, mtime_offset=0)
+
+            # Budget is 3MB, current usage ~2MB, requesting 300MB default
+            viz._evict_layer_cache(cache_dir)
+
+            # old_layer should be evicted first
+            assert not (cache_dir / "old_layer.npy").exists()
+            assert not (cache_dir / "old_layer.csv").exists()
+            assert not (cache_dir / "old_layer.json").exists()
+
+    def test_evicts_multiple_until_under_budget(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            viz = self._make_viz(root)
+            viz.LAYER_CACHE_MAX_BYTES = 5 * 1024 * 1024  # 5MB
+
+            cache_dir = root / "dmd2" / "embeddings" / "layer_cache"
+            self._make_layer_files(cache_dir, "oldest", size_mb=2, mtime_offset=-200)
+            self._make_layer_files(cache_dir, "middle", size_mb=2, mtime_offset=-100)
+            self._make_layer_files(cache_dir, "newest", size_mb=2, mtime_offset=0)
+
+            # 6MB used, 5MB budget, need 300MB → must evict all three
+            viz._evict_layer_cache(cache_dir, needed_bytes=2 * 1024 * 1024)
+
+            # oldest evicted first, then middle
+            assert not (cache_dir / "oldest.npy").exists()
+            assert not (cache_dir / "middle.npy").exists()
+
+    def test_noop_on_empty_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            viz = self._make_viz(root)
+            cache_dir = root / "dmd2" / "embeddings" / "layer_cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            # Should not raise
+            viz._evict_layer_cache(cache_dir)
+
+    def test_noop_on_missing_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            viz = self._make_viz(root)
+            # Should not raise
+            viz._evict_layer_cache(root / "nonexistent")
 
 
 if __name__ == "__main__":

@@ -295,7 +295,6 @@ class TestR2DataStoreDownloadPrefix:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             local_dir = Path(tmpdir)
-            # Make download_file create files so stat() works
             def fake_download(bucket, key, path):
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
                 Path(path).write_text("x")
@@ -316,7 +315,6 @@ class TestR2DataStoreDownloadPrefix:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             local_dir = Path(tmpdir)
-            # Pre-create file
             (local_dir / "dmd2").mkdir()
             (local_dir / "dmd2" / "config.json").write_text("existing")
 
@@ -329,6 +327,36 @@ class TestR2DataStoreDownloadPrefix:
         with patch.dict("os.environ", {}, clear=True):
             store = R2DataStore()
         assert store.download_prefix("data/", Path("/tmp")) == 0
+
+    def test_exclude_dirs(self, r2_env, mock_boto3):
+        """exclude_dirs filters out keys containing those dir names."""
+        store = R2DataStore()
+        paginator = MagicMock()
+        mock_boto3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {"Contents": [
+                {"Key": "data/dmd2/config.json"},
+                {"Key": "data/dmd2/layer_cache/block_0.csv"},
+                {"Key": "data/dmd2/layer_cache/block_0.npy"},
+                {"Key": "data/dmd2/embeddings/demo.csv"},
+            ]},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir)
+            def fake_download(bucket, key, path):
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text("x")
+            mock_boto3.download_file.side_effect = fake_download
+
+            count = store.download_prefix(
+                "data/", local_dir, exclude_dirs={"layer_cache"}
+            )
+
+        assert count == 2  # config.json + demo.csv, not layer_cache/*
+        downloaded_keys = [c.args[1] for c in mock_boto3.download_file.call_args_list]
+        assert "data/dmd2/layer_cache/block_0.csv" not in downloaded_keys
+        assert "data/dmd2/layer_cache/block_0.npy" not in downloaded_keys
 
 
 class TestR2DataStoreDownloadModelData:
