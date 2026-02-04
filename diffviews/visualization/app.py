@@ -606,8 +606,9 @@ class GradioVisualizer:
         if npy_path.exists():
             activations = np.load(npy_path, mmap_mode="r")
 
-        # If no pkl but we have activations + coordinates, refit reducer locally
-        if reducer is None and activations is not None and "umap_x" in df.columns:
+        # Always refit from cached coords when activations available —
+        # pkl may be stale (e.g. n_epochs=0 bug), and n_epochs=1 is fast.
+        if activations is not None and "umap_x" in df.columns:
             print(f"[{model_name}] Refitting UMAP reducer from cached coords...")
             from umap import UMAP as _UMAP
             scaler = StandardScaler()
