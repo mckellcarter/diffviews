@@ -1,7 +1,7 @@
 # DiffViews: HF Spaces → Modal Transition Plan
 
 **Branch:** `feature/modal-transition` (from `main`)
-**Status:** M1 code complete, HF rebuild in progress for E2E test
+**Status:** M2 code complete + R2 seeded, pending E2E test on HF
 
 ## Milestones
 
@@ -61,7 +61,7 @@ Cache self-populates as users select layers. Optional: pre-seed by running all l
 | Async upload after extraction | `diffviews/visualization/app.py` `recompute_layer_umap()` | done |
 | Set HF Spaces Secrets | R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME | done |
 | Update requirements.txt commit hash | pinned to `aef063b` (then `b1e62e7`) | done |
-| HF rebuild + E2E test | deploy, select layer, verify R2 upload, delete local, re-select | **in progress** |
+| HF rebuild + E2E test | deploy, select layer, verify R2 upload, delete local, re-select | done |
 
 ### Credentials (HF Spaces Secrets)
 ```
@@ -147,7 +147,7 @@ data/imagenet64_class_labels.json
 | Replace download_data() (R2 first, HF fallback) | `app.py` | done |
 | Replace download_checkpoint() (R2 first, URL fallback) | `app.py` | done |
 | Update CLI download_command() + --source flag | `diffviews/scripts/cli.py` | done |
-| Seed R2 bucket | run `scripts/seed_r2.py --execute` | **pending** |
+| Seed R2 bucket | run `scripts/seed_r2.py --execute` | done (2362 files, 3.31GB) |
 | E2E test on HF | verify R2 download on fresh start | **pending** |
 
 ### Architecture
