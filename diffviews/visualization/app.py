@@ -474,9 +474,14 @@ class GradioVisualizer:
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""
         model_data = self.get_model(model_name)
-        if model_data is None or not model_data.umap_params:
+        if model_data is None:
             return None
-        layers = model_data.umap_params.get("layers", [])
+        # Use default_umap_params (immutable backup) — umap_params gets
+        # overwritten on layer switch and would return the wrong label.
+        params = model_data.default_umap_params or model_data.umap_params
+        if not params:
+            return None
+        layers = params.get("layers", [])
         return "+".join(layers) if layers else None
 
     def get_layer_choices(self, model_name: str) -> List[str]:
