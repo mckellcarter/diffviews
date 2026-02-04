@@ -741,8 +741,10 @@ class TestLoadLayerCache:
 
             assert viz._load_layer_cache("dmd2", "encoder_block_0") is False
 
-    def test_cache_hit(self):
+    def test_cache_hit(self, monkeypatch):
         """Returns True and swaps data when cache exists."""
+        # Disable PCA — test data too small for PCA fit
+        monkeypatch.setenv("DIFFVIEWS_PCA_COMPONENTS", "0")
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
@@ -776,8 +778,9 @@ class TestLoadLayerCache:
             result = viz._load_layer_cache("dmd2", "encoder_block_0")
             assert result is True
             assert len(md.df) == 3
-            assert md.umap_reducer == "fake_reducer"
-            assert md.umap_scaler == "fake_scaler"
+            # Reducer is always refit from coords (not loaded from pkl)
+            assert md.umap_reducer is not None
+            assert md.umap_scaler is not None
             assert md.activations.shape == (3, 100)
             assert md.current_layer == "encoder_block_0"
             assert md.umap_params["layers"] == ["encoder_block_0"]
