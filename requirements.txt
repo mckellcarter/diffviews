@@ -1,6 +1,6 @@
 # DiffViews - HuggingFace Spaces Requirements
 # Requires Python 3.10+
-git+https://github.com/mckellcarter/diffviews.git@aef063b
+# Package installed via git clone in app.py (bypasses pip cache)
 
 # Core dependencies
 torch>=2.0.0

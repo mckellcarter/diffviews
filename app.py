@@ -15,7 +15,22 @@ Environment variables:
 """
 
 import os
+import subprocess
+import sys
 from pathlib import Path
+
+# Install diffviews from git to bypass pip cache issues
+_REPO_URL = "https://github.com/mckellcarter/diffviews.git"
+_REPO_BRANCH = os.environ.get("DIFFVIEWS_BRANCH", "feature/modal-transition")
+_REPO_DIR = "/tmp/diffviews"
+
+if not os.path.exists(_REPO_DIR):
+    print(f"Cloning diffviews from {_REPO_BRANCH}...")
+    subprocess.run(
+        ["git", "clone", "--depth=1", "-b", _REPO_BRANCH, _REPO_URL, _REPO_DIR],
+        check=True,
+    )
+sys.path.insert(0, _REPO_DIR)
 
 import spaces
 
