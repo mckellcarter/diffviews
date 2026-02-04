@@ -9,6 +9,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from umap import UMAP
@@ -183,10 +184,11 @@ def compute_umap(
     metric: str = 'euclidean',
     n_components: int = 2,
     random_state: Optional[int] = 42,
-    normalize: bool = True
-) -> Tuple[np.ndarray, UMAP, Optional[StandardScaler]]:
+    normalize: bool = True,
+    pca_components: Optional[int] = None,
+) -> Tuple[np.ndarray, UMAP, Optional[StandardScaler], Optional[PCA]]:
     """
-    Compute UMAP projection.
+    Compute UMAP projection with optional PCA pre-reduction.
 
     Args:
         activations: (N, D) activation matrix
@@ -196,9 +198,11 @@ def compute_umap(
         n_components: Output dimensions
         random_state: Random seed
         normalize: Whether to normalize before UMAP
+        pca_components: If set, reduce to this many dims via PCA before UMAP.
+            Dramatically speeds up UMAP on high-dim data (e.g. 49K -> 50).
 
     Returns:
-        (embeddings, reducer, scaler)
+        (embeddings, reducer, scaler, pca_reducer)
     """
     print(f"\nComputing UMAP (n_neighbors={n_neighbors}, min_dist={min_dist})")
 
@@ -207,6 +211,13 @@ def compute_umap(
         print("Normalizing activations...")
         scaler = StandardScaler()
         activations = scaler.fit_transform(activations)
+
+    pca_reducer = None
+    if pca_components and activations.shape[1] > pca_components:
+        print(f"PCA reduction: {activations.shape[1]} -> {pca_components} dims")
+        pca_reducer = PCA(n_components=pca_components, random_state=random_state)
+        activations = pca_reducer.fit_transform(activations)
+        print(f"  Explained variance: {pca_reducer.explained_variance_ratio_.sum():.2%}")
 
     print("Running UMAP...")
     reducer = UMAP(
@@ -220,7 +231,7 @@ def compute_umap(
     embeddings = reducer.fit_transform(activations)
 
     print(f"UMAP embeddings: {embeddings.shape}")
-    return embeddings, reducer, scaler
+    return embeddings, reducer, scaler, pca_reducer
 
 
 def save_embeddings(
@@ -229,7 +240,8 @@ def save_embeddings(
     output_path: Path,
     umap_params: dict,
     reducer: Optional[UMAP] = None,
-    scaler: Optional[StandardScaler] = None
+    scaler: Optional[StandardScaler] = None,
+    pca_reducer: Optional[PCA] = None,
 ):
     """
     Save UMAP embeddings + metadata to CSV.
@@ -241,6 +253,7 @@ def save_embeddings(
         umap_params: Dict of UMAP parameters
         reducer: Fitted UMAP model
         scaler: Fitted StandardScaler
+        pca_reducer: Fitted PCA model (if PCA pre-reduction was used)
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -268,6 +281,7 @@ def save_embeddings(
         with open(model_path, 'wb') as f:
             pickle.dump({
                 'reducer': reducer,
-                'scaler': scaler
+                'scaler': scaler,
+                'pca_reducer': pca_reducer,
             }, f)
         print(f"Saved UMAP model to {model_path}")
