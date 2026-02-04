@@ -1,7 +1,7 @@
 # DiffViews: HF Spaces → Modal Transition Plan
 
 **Branch:** `feature/modal-transition` (from `main`)
-**Status:** M1 R2 integration complete, E2E test pending
+**Status:** M1 code complete, HF rebuild in progress for E2E test
 
 ## Milestones
 
@@ -59,9 +59,9 @@ Cache self-populates as users select layers. Optional: pre-seed by running all l
 | Add boto3 dep | `requirements.txt` | done |
 | Wire into layer cache load + R2 fallback + pkl-less refit | `diffviews/visualization/app.py` `_load_layer_cache()` | done |
 | Async upload after extraction | `diffviews/visualization/app.py` `recompute_layer_umap()` | done |
-| Set HF Spaces Secrets | R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME | **TODO** |
-| E2E test on HF staging | deploy, select layer, verify R2 upload, delete local, re-select | **TODO** |
-| Update requirements.txt commit hash | pin to post-merge commit | **TODO** |
+| Set HF Spaces Secrets | R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME | done |
+| Update requirements.txt commit hash | pinned to `aef063b` (then `b1e62e7`) | done |
+| HF rebuild + E2E test | deploy, select layer, verify R2 upload, delete local, re-select | **in progress** |
 
 ### Credentials (HF Spaces Secrets)
 ```
