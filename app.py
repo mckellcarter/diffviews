@@ -26,6 +26,8 @@ _REPO_DIR = "/tmp/diffviews"
 
 if not os.path.exists(_REPO_DIR):
     print(f"Cloning diffviews from {_REPO_BRANCH}...")
+    # Remove stale pip-installed version so our clone takes priority
+    subprocess.run(["pip", "uninstall", "-y", "diffviews"], capture_output=True)
     subprocess.run(
         ["git", "clone", "--depth=1", "-b", _REPO_BRANCH, _REPO_URL, _REPO_DIR],
         check=True,
