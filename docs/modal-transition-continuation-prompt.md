@@ -1,6 +1,6 @@
 # Continuation Prompt: Modal Transition (M1→M3)
 
-Paste this after clearing context to resume implementation.
+Paste this after clearing context to resume work.
 
 ---
 
@@ -12,45 +12,37 @@ I'm migrating the diffviews visualizer from HF Spaces to Modal with Cloudflare R
 
 **M1 (R2 layer cache):** Complete, merged to main (PR #66). PCA pre-reduction, R2LayerCache for layer embeddings, full UMAP refit path, E2E verified on HF.
 
-**M2 (CF data hosting) — complete, E2E verified on HF:**
+**M2 (CF data hosting):** Complete, E2E verified on HF. R2DataStore in `diffviews/data/r2_cache.py`, R2-first downloads in `app.py`, CLI `--source` flag, seeding script. Bug fixes: concurrent downloads, path fix, OOM, trajectory projection.
 
-**R2DataStore:** `diffviews/data/r2_cache.py` has `R2DataStore` class alongside `R2LayerCache`. Shared `_make_r2_client()` helper. Methods: `list_objects()`, `file_exists()`, `download_file()`, `download_prefix()`, `download_model_data()`. Same graceful degradation pattern.
+**M3 (Modal compute):** Complete, E2E verified on Modal. All features working.
 
-**R2-first downloads in `app.py`:**
-- `download_data()` → tries `R2DataStore.download_model_data()` for each model, falls back to HF `snapshot_download`
-- `download_checkpoint()` → tries R2 `download_file()` for checkpoint key, falls back to direct URL
-- `ensure_data_ready()` unchanged (calls updated download functions)
+**`modal_app.py`** — Modal entry point:
+- Image: debian_slim + pip_install deps + `diffviews@git+...@main`
+- `@app.function(gpu="A10G", max_containers=1)` → `@modal.concurrent(max_inputs=100)` → `@modal.asgi_app()`
+- `ensure_data_ready()` downloads from R2 (HF fallback), checks/refits UMAP pkls
+- `_umap_pkl_ok()` reads `n_features_in_` from scaler for correct dummy dims, tests numba JIT compat
+- Gradio 6: `mount_gradio_app(theme=, css=, js=)` — NOT manual `_set_html_css_theme_variables()`
+- Volume `diffviews-data` at `/data`, Secret `R2_ACCESS`
 
-**CLI update:** `diffviews/scripts/cli.py` `download_command()` uses R2-first with `--source auto|r2|hf` flag.
+**`diffviews/visualization/app.py`** — ZeroGPU comments cleaned (4 locations), functions unchanged.
 
-**Seeding script:** `scripts/seed_r2.py` walks local `data/`, uploads to R2. Skips intermediates/, .npz, .pkl in embeddings/, layer_cache/. Dry-run by default, `--execute` to upload. R2 seeded: 2362 files, 3.31GB, 0 failures.
+**`requirements.txt`** — removed `spaces`, added `modal>=0.73.0`.
 
-**M2 bug fixes (E2E):**
-- Concurrent R2 downloads (`ThreadPoolExecutor(max_workers=8)`)
-- `download_model_data()` excludes `layer_cache/` + LRU disk eviction
-- Fixed `download_prefix` path bug (files landing outside model subdir)
-- OOM fix: `_clear_layer_data()` before loading new layer + `mmap_mode="r"` for .npy
-- Combo layer restore: `get_default_layer_label()` reads `default_umap_params` (immutable backup)
-- Trajectory projection: full `compute_umap()` fit instead of degenerate `n_epochs=0`/`1` refit
-
-**Tests:** 55 in `test_gradio_visualizer.py`, 37 in `test_r2_cache.py`, all passing.
-
-### What's Next
-
-**M2 remaining:**
-1. PR to main
-
-**M3 (Modal compute):** Replace `@spaces.GPU` with Modal `@app.function(gpu="A10G")`. Remove ZeroGPU workarounds. Data from R2 (M2).
+**Tests:** 148 passing (1 pre-existing flaky `test_cross_sample_masking`). Lint 9.81/10.
 
 ### Key Architecture Notes
 
-- Root `app.py` is HF Spaces entry; `@spaces.GPU` functions must live there (ZeroGPU codefind)
-- `_make_r2_client()` in `diffviews/data/r2_cache.py` shared by R2DataStore + R2LayerCache
-- `regenerate_umap()` runs every HF startup — rebuilds .pkl from csv+activations (since .pkl not on R2)
-- `download_prefix()` strips R2 key prefix to reconstruct local dir structure
-- Layer cache always does full `compute_umap()` from .npy — PKL is local-only acceleration, never on R2
-- `_clear_layer_data()` frees old layer before loading new (16GB HF memory limit)
-- `get_default_layer_label()` uses `default_umap_params` (immutable) not `umap_params` (overwritten on layer switch)
+- `mount_gradio_app(theme=, css=, js=)` is required for Gradio 6 ASGI. Manual Blocks attr assignment + `_set_html_css_theme_variables()` leaves `body_css=None` → Jinja2 crash.
+- `_umap_pkl_ok()` must use `scaler.n_features_in_` for dummy shape — hardcoded 50 causes shape mismatch at scaler, always fails.
+- `max_containers=1` required — Gradio SSE needs sticky sessions.
+- `@modal.concurrent` IS compatible with `@modal.asgi_app()` (canonical Modal pattern).
+- `app.py` kept for HF Spaces dual deployment.
+
+### What's Next
+
+1. PR `feature/modal-transition` → main
+2. `modal deploy modal_app.py` for production
+3. Future: cuML GPU UMAP, auth, `modal.web_server` alternative if ASGI issues arise
 
 ### Branch
 

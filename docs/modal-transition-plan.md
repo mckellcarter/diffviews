@@ -1,7 +1,7 @@
 # DiffViews: HF Spaces → Modal Transition Plan
 
 **Branch:** `feature/modal-transition` (from `main`)
-**Status:** M2 complete + E2E verified on HF, ready for PR
+**Status:** M3 complete + E2E verified on Modal
 
 ## Milestones
 
@@ -11,7 +11,7 @@ Cache activations + UMAP layer embeddings on CF R2. HF remains compute host.
 ### M2: Model + Data Hosting on CF ✓
 Move checkpoints and base data to R2. HF no longer source of truth for data.
 
-### M3: Compute Migration to Modal
+### M3: Compute Migration to Modal ✓
 Replace HF ZeroGPU with Modal serverless GPU. Full stack on CF (data) + Modal (compute).
 
 ---
@@ -121,7 +121,7 @@ PKL is a local-only acceleration artifact — always overwritten by fresh fit fr
 
 ---
 
-## M2: CF Data Hosting ← CURRENT
+## M2: CF Data Hosting ✓
 
 Move all data from HF Hub to CF R2. R2-first download with HF fallback.
 
@@ -174,25 +174,54 @@ data/imagenet64_class_labels.json
 
 ---
 
-## M3: Modal Compute Migration (Planned)
+## M3: Modal Compute Migration ✓
 
 ### Why Modal
 - Serverless GPU, scales to zero (no idle cost)
 - Full Docker control (install cuML, pin env)
 - Better for large model support (TransformerLens integration)
 
+### Architecture
+Single A10G container serving Gradio via `@modal.asgi_app()`.
+- `modal_app.py` — new entry point (replaces `app.py` for Modal deploy)
+- `app.py` — kept for HF Spaces dual deployment
+- GPU always available in container — no `@spaces.GPU` needed
+- Data on Modal Volume `/data` (persistent), sourced from R2
+- R2 creds via `modal.Secret.from_name("R2_ACCESS")`
+- Decorator stack: `@app.function` → `@modal.concurrent(max_inputs=100)` → `@modal.asgi_app()`
+
 ### UMAP Strategy per Host
 
 | Host | Strategy |
 |------|----------|
 | HF (M1-M2) | PCA(50) → CPU UMAP |
-| Modal (M3) | cuML GPU UMAP (or PCA → UMAP if fast enough) |
+| Modal (M3) | PCA(50) → CPU UMAP (same for now; cuML GPU UMAP future option) |
 
-### Key Changes for M3
-- Replace `@spaces.GPU` with Modal `@app.function(gpu="A10G")`
-- Remove ZeroGPU workarounds (codefind, module-level injection, picklability constraints)
-- `app.py` becomes Modal entry point instead of HF Spaces entry
-- Data loaded from R2 (M2) instead of HF Hub
+### Implementation Status
+
+| Step | File | Status |
+|------|------|--------|
+| Modal entry point | `modal_app.py` | done |
+| Remove ZeroGPU workarounds | `diffviews/visualization/app.py` | done |
+| Update deps (modal, drop spaces) | `requirements.txt` | done |
+| Modal Secret (R2 creds) | `R2_ACCESS` | done |
+| Modal Volume | `diffviews-data` | done |
+| UMAP pkl compatibility check | `modal_app.py` `_umap_pkl_ok()` | done |
+| Gradio 6 ASGI mount (theme/css/js) | `modal_app.py` `mount_gradio_app()` | done |
+| E2E test on Modal | `modal serve modal_app.py` | done |
+
+### E2E Verified Features
+- UMAP scatter plot with hover/click
+- Image generation (A10G GPU, no @spaces.GPU)
+- Trajectory projection + preview
+- Neighbor selection (manual + KNN)
+- Layer switch + new layer activation extraction + UMAP
+- Class filter, model switch (dmd2/edm)
+
+### Key Decisions
+- **Gradio 6 ASGI:** `mount_gradio_app(theme=, css=, js=)` — Gradio 6 moved these from `Blocks()` to `mount_gradio_app()`/`launch()`. Manual `_set_html_css_theme_variables()` causes `body_css=None` Jinja2 crash.
+- **UMAP warm start:** `_umap_pkl_ok()` loads pkl, reads `n_features_in_` from scaler for correct dummy shape, runs transform to verify numba JIT compat. Skips refit on warm restarts.
+- **max_containers=1:** Gradio requires sticky sessions (SSE). Single container with `@modal.concurrent(max_inputs=100)` for concurrency.
 
 ---
 

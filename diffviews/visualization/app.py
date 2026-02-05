@@ -752,7 +752,7 @@ class GradioVisualizer:
         # Free old layer data before extraction (avoid 2x memory peak)
         self._clear_layer_data(model_data)
 
-        # Extract activations (GPU, ZeroGPU-compatible)
+        # Extract activations on GPU
         activations = _extract_layer_on_gpu(model_name, layer_name)
 
         if activations is None:
@@ -1172,8 +1172,6 @@ class GradioVisualizer:
 
 
 # Module-level visualizer reference for GPU functions (set by create_gradio_app).
-# ZeroGPU runs @spaces.GPU functions in a subprocess — args must be picklable,
-# so the visualizer (which has threading.Lock) is accessed via this global instead.
 _app_visualizer = None
 
 
@@ -1182,7 +1180,7 @@ def _generate_on_gpu(
     n_steps, m_steps, s_max, s_min, guidance, noise_mode,
     extract_layers, can_project
 ):
-    """Run masked generation on GPU. Decorated for ZeroGPU compatibility."""
+    """Run masked generation on GPU."""
     visualizer = _app_visualizer
     with visualizer._generation_lock:
         adapter = visualizer.load_adapter(model_name)
@@ -1223,7 +1221,7 @@ def _generate_on_gpu(
 
 
 def _extract_layer_on_gpu(model_name, layer_name, batch_size=32):
-    """Extract layer activations on GPU. Decorated for ZeroGPU compatibility."""
+    """Extract layer activations on GPU."""
     return _app_visualizer.extract_layer_activations(model_name, layer_name, batch_size)
 
 
@@ -2509,7 +2507,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             extract_layers = sorted(model_data.umap_params.get("layers", []))
             can_project = model_data.umap_reducer is not None and len(extract_layers) > 0
 
-            # Run generation on GPU (ZeroGPU-compatible)
+            # Run generation on GPU
             result = _generate_on_gpu(
                 model_name, all_neighbors, class_label,
                 n_steps, m_steps, s_max, s_min, guidance, noise_mode,
