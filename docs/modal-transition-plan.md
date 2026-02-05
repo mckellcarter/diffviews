@@ -1,14 +1,14 @@
 # DiffViews: HF Spaces → Modal Transition Plan
 
 **Branch:** `feature/modal-transition` (from `main`)
-**Status:** M2 code complete + R2 seeded, pending E2E test on HF
+**Status:** M2 complete + E2E verified on HF, ready for PR
 
 ## Milestones
 
 ### M1: Cloudflare R2 Data Cache Layer ✓
 Cache activations + UMAP layer embeddings on CF R2. HF remains compute host.
 
-### M2: Model + Data Hosting on CF
+### M2: Model + Data Hosting on CF ✓
 Move checkpoints and base data to R2. HF no longer source of truth for data.
 
 ### M3: Compute Migration to Modal
@@ -33,7 +33,7 @@ UMAP pickles contain numba JIT refs that break across environments. R2 stores on
 - `.json` — UMAP params
 - `.npy` — raw flattened activations
 
-Reducer is refit locally from cached activations+coordinates using `UMAP(init=coords, n_epochs=0)` (~2-5s vs ~30s extraction+UMAP).
+Reducer is refit locally via full `compute_umap()` from cached activations. `n_epochs=0`/`1` refit left `.transform()` internals degenerate — full fit required for trajectory projection.
 
 ### R2 Bucket
 
@@ -106,12 +106,14 @@ All R2 calls wrapped in try/except, return False on failure. `R2LayerCache.enabl
 - `upload_layer_async()` — daemon thread fire-and-forget upload
 - Graceful degradation: `enabled=False` if creds missing or boto3 unavailable
 
-### Layer Cache Load (pkl-less refit path)
+### Layer Cache Load
 
-`_load_layer_cache()` now supports three paths:
-1. **Local pkl exists** → load reducer/scaler/pca from pkl (fast, existing behavior)
-2. **R2 hit, no pkl** → download csv/npy → refit reducer from cached coords via `UMAP(init=coords, n_epochs=0)` → save pkl locally
+`_load_layer_cache()` flow:
+1. **Local cache miss** → try R2 download (csv/json/npy)
+2. **Has activations (.npy)** → full `compute_umap()` fit → save pkl + updated CSV locally
 3. **CSV only, no npy** → load embeddings for display, reducer stays None (no trajectory projection)
+
+PKL is a local-only acceleration artifact — always overwritten by fresh fit from activations.
 
 ### Test Cleanup
 - Removed `tests/test_visualizer.py` — obsolete Dash-era tests
@@ -148,7 +150,8 @@ data/imagenet64_class_labels.json
 | Replace download_checkpoint() (R2 first, URL fallback) | `app.py` | done |
 | Update CLI download_command() + --source flag | `diffviews/scripts/cli.py` | done |
 | Seed R2 bucket | run `scripts/seed_r2.py --execute` | done (2362 files, 3.31GB) |
-| E2E test on HF | verify R2 download on fresh start | **pending** |
+| E2E test on HF | verify R2 download on fresh start | done |
+| M2 bug fixes | concurrent downloads, path fix, OOM, trajectory projection | done |
 
 ### Architecture
 - `_make_r2_client()` shared helper for boto3 setup (used by R2DataStore + R2LayerCache)
@@ -157,6 +160,17 @@ data/imagenet64_class_labels.json
 - `download_data()` tries R2 first, falls back to HF `snapshot_download`
 - `download_checkpoint()` tries R2 first, falls back to direct URL
 - CLI `--source auto|r2|hf` flag for explicit control
+
+### M2 Bug Fixes (E2E)
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| Slow R2 downloads (~1 img/sec) | `download_prefix()` sequential | `ThreadPoolExecutor(max_workers=8)` |
+| 50GB disk exceeded | `download_model_data()` included `layer_cache/` | `exclude_dirs={"layer_cache"}` + LRU eviction (`DIFFVIEWS_LAYER_CACHE_MAX_MB`) |
+| "no embeddings found" | `download_prefix` path bug — files landed outside model subdir | Target `local_dir / model` |
+| OOM on layer switch (16GB limit) | Old 3GB+ activations held while loading new | `_clear_layer_data()` before load + `mmap_mode="r"` for .npy |
+| Combo layer ValueError after switch | `get_default_layer_label()` read `umap_params` (overwritten) | Read from `default_umap_params` (immutable backup) |
+| Trajectory divide-by-zero after layer switch | `n_epochs=0`/`1` refit left `.transform()` degenerate | Full `compute_umap()` fit from cached activations |
 
 ---
 
@@ -197,8 +211,9 @@ UMAP pickles are not portable across numba/Python versions due to JIT compilatio
 
 1. **Parametric UMAP** — neural net reducer, portable but adds TF/PyTorch dep
 2. **Surrogate regressor** — sklearn MLP approximating the projection, fully portable
-3. **n_epochs=0 refit** — pass cached coords as `init`, reconstruct reducer locally (~2-5s) ← **used in M1**
-4. **Host-tagged pkls** — `{layer}.hf.pkl`, `{layer}.modal.pkl` per environment
-5. **cuML GPU UMAP** — for Modal (M3), different library entirely
+3. ~~**n_epochs=0 refit**~~ — degenerate `.transform()`, abandoned
+4. **Full refit from cached activations** — `compute_umap()` on .npy, saves pkl locally ← **current approach**
+5. **Host-tagged pkls** — `{layer}.hf.pkl`, `{layer}.modal.pkl` per environment
+6. **cuML GPU UMAP** — for Modal (M3), different library entirely
 
-Current approach: portable artifacts on R2 + local refit. Revisit if refit latency is noticeable.
+Current approach: portable artifacts (csv/json/npy) on R2 + full local UMAP fit from activations. PKL is local-only cache, never uploaded to R2.
