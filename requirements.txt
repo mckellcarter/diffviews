@@ -22,8 +22,8 @@ matplotlib>=3.5.0
 # HuggingFace Hub
 huggingface_hub>=0.25.0
 
-# ZeroGPU support (no-op when not on HF Spaces)
-spaces
+# Modal serverless GPU
+modal>=0.73.0
 
 # Cloudflare R2 cache (S3-compatible)
 boto3>=1.28.0

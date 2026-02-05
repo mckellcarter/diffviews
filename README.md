@@ -6,13 +6,7 @@ Model-agnostic diffusion activation visualizer.
 
 DiffViews provides tools for visualizing and exploring the internal activations of diffusion models through UMAP embeddings. It uses an adapter interface to support different model architectures.
 
-<a href="https://mckell-diffviews.hf.space">
-Hugging Face Space active demo
-</a>
-
-<a href="https://mckell-diffviews.hf.space">
 <img width="1943" height="1284" alt="image" src="https://github.com/user-attachments/assets/e3861312-e7a8-48ca-a37b-7278f011d287" />
-</a>
 
 ## Features
 
@@ -141,7 +135,7 @@ pip install diffviews[viz]
 
 ### 2. Download Data & Checkpoints
 
-All data is hosted on HuggingFace. One command downloads everything:
+Data hosted on Cloudflare R2 (HuggingFace fallback). One command downloads everything:
 
 ```bash
 # Downloads data (~1.7GB) + checkpoints (~2.4GB)
@@ -158,6 +152,10 @@ diffviews download --checkpoints none
 # Download only specific checkpoint
 diffviews download --checkpoints dmd2
 diffviews download --checkpoints edm
+
+# Force data source
+diffviews download --source r2    # Cloudflare R2 only
+diffviews download --source hf    # HuggingFace only
 ```
 
 ### 3. Run
@@ -187,26 +185,24 @@ data/
     └── (same structure)
 ```
 
-## Demo
+## Deployment
 
-Quick start (16 ImageNet classes, ~1168 samples per model):
+### Modal (serverless GPU)
+
+```bash
+pip install modal
+modal serve modal_app.py   # dev
+modal deploy modal_app.py  # prod
+```
+
+Single A10G container, data from R2, scales to zero when idle.
+
+### Local
 
 ```bash
 pip install diffviews[viz]
 diffviews download
-diffviews viz-gradio
-```
-
-## Visualization App
-
-Two visualization backends available:
-
-```bash
-# Gradio app (recommended) - better multi-user support
 diffviews viz-gradio --data-dir data
-
-# Dash app (legacy)
-diffviews viz --data-dir data
 ```
 
 ### Gradio Features
@@ -264,7 +260,8 @@ diffviews/
 │   └── umap.py
 ├── scripts/            # CLI entry points
 │   └── cli.py          # diffviews command (convert, viz)
-├── visualization/      # Dash interactive app
+├── data/               # R2 data cache + store
+├── visualization/      # Gradio interactive app
 └── utils/              # Utilities
     ├── device.py
     └── checkpoint.py
