@@ -21,7 +21,7 @@ from pathlib import Path
 
 # Install diffviews from git to bypass pip cache issues
 _REPO_URL = "https://github.com/mckellcarter/diffviews.git"
-_REPO_BRANCH = os.environ.get("DIFFVIEWS_BRANCH", "feature/modal-transition")
+_REPO_BRANCH = os.environ.get("DIFFVIEWS_BRANCH", "diffviews-gradio6-HFz-CFr2")
 _REPO_DIR = "/tmp/diffviews"
 
 # Remove stale pip-installed version so our clone takes priority
