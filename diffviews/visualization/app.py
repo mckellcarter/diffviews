@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from sklearn.neighbors import NearestNeighbors
-from sklearn.preprocessing import StandardScaler
+
 
 import plotly.graph_objects as go
 
@@ -606,31 +606,30 @@ class GradioVisualizer:
         if npy_path.exists():
             activations = np.load(npy_path, mmap_mode="r")
 
-        # Always refit from cached coords when activations available —
-        # pkl may be stale (e.g. n_epochs=0 bug), and n_epochs=1 is fast.
-        if activations is not None and "umap_x" in df.columns:
-            print(f"[{model_name}] Refitting UMAP reducer from cached coords...")
-            from umap import UMAP as _UMAP
-            scaler = StandardScaler()
-            act_scaled = scaler.fit_transform(activations)
+        # Always refit from cached activations — pkl may be stale or have
+        # degenerate .transform() internals (e.g. from n_epochs=0 era).
+        # Full fit ensures .transform() works for trajectory projection.
+        if activations is not None:
+            from diffviews.processing.umap import compute_umap
+            print(f"[{model_name}] Fitting UMAP from cached activations...")
 
-            # PCA if configured
             pca_val = os.environ.get("DIFFVIEWS_PCA_COMPONENTS", "50")
             pca_components = None if pca_val.lower() in ("0", "none", "off", "") else int(pca_val)
-            if pca_components and act_scaled.shape[1] > pca_components:
-                from sklearn.decomposition import PCA
-                pca_reducer = PCA(n_components=pca_components, random_state=42)
-                act_scaled = pca_reducer.fit_transform(act_scaled)
 
-            coords_init = df[["umap_x", "umap_y"]].values
-            # n_epochs=1 (not 0): n_epochs=0 leaves transform internals
-            # uninitialized, causing divide-by-zero on .transform()
-            reducer = _UMAP(n_neighbors=15, min_dist=0.1, init=coords_init, n_epochs=1)
-            reducer.fit(act_scaled)
+            embeddings, reducer, scaler, pca_reducer = compute_umap(
+                activations, n_neighbors=15, min_dist=0.1,
+                normalize=True, pca_components=pca_components,
+            )
+
+            # Update cached coordinates to match this fit
+            df["umap_x"] = embeddings[:, 0]
+            df["umap_y"] = embeddings[:, 1]
 
             # Save pkl locally for next time
             with open(pkl_path, "wb") as f:
                 pickle.dump({"reducer": reducer, "scaler": scaler, "pca_reducer": pca_reducer}, f)
+            # Update CSV with new coordinates
+            df.to_csv(csv_path, index=False)
             print(f"[{model_name}] Saved refit pkl to {pkl_path}")
 
         # Load params

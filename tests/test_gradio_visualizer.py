@@ -743,8 +743,8 @@ class TestLoadLayerCache:
 
     def test_cache_hit(self, monkeypatch):
         """Returns True and swaps data when cache exists."""
-        # Disable PCA — test data too small for PCA fit
         monkeypatch.setenv("DIFFVIEWS_PCA_COMPONENTS", "0")
+        n = 20  # must exceed n_neighbors=15
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=5)
@@ -754,34 +754,32 @@ class TestLoadLayerCache:
 
             md = viz.get_model("dmd2")
 
-            # Create fake cache files
+            # Create fake cache files with enough samples for full UMAP fit
             cache_dir = md.data_dir / "embeddings" / "layer_cache"
             cache_dir.mkdir(parents=True)
 
+            rng = np.random.RandomState(42)
             cached_df = pd.DataFrame({
-                "sample_id": ["s0", "s1", "s2"],
-                "umap_x": [1.0, 2.0, 3.0],
-                "umap_y": [4.0, 5.0, 6.0],
+                "sample_id": [f"s{i}" for i in range(n)],
+                "umap_x": rng.randn(n),
+                "umap_y": rng.randn(n),
             })
             cached_df.to_csv(cache_dir / "encoder_block_0.csv", index=False)
-
-            import pickle
-            with open(cache_dir / "encoder_block_0.pkl", "wb") as f:
-                pickle.dump({"reducer": "fake_reducer", "scaler": "fake_scaler"}, f)
 
             cached_params = {"layers": ["encoder_block_0"], "n_neighbors": 15}
             with open(cache_dir / "encoder_block_0.json", "w") as f:
                 json.dump(cached_params, f)
 
-            np.save(cache_dir / "encoder_block_0.npy", np.zeros((3, 100)))
+            np.save(cache_dir / "encoder_block_0.npy", rng.randn(n, 30))
 
             result = viz._load_layer_cache("dmd2", "encoder_block_0")
             assert result is True
-            assert len(md.df) == 3
-            # Reducer is always refit from coords (not loaded from pkl)
+            assert len(md.df) == n
+            # Full UMAP refit from activations — reducer supports .transform()
             assert md.umap_reducer is not None
+            assert hasattr(md.umap_reducer, 'transform')
             assert md.umap_scaler is not None
-            assert md.activations.shape == (3, 100)
+            assert md.activations.shape == (n, 30)
             assert md.current_layer == "encoder_block_0"
             assert md.umap_params["layers"] == ["encoder_block_0"]
 
