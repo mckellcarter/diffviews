@@ -60,7 +60,7 @@ def download_data(output_dir: Path) -> None:
     volumes={"/data": vol},
     secrets=[r2_secret],
     timeout=600,
-    scaledown_window=300,  # Keep CPU container warm longer
+    scaledown_window=1800,  # 30 min — keep session alive for browsing
     max_containers=2,  # Allow multiple CPU containers
 )
 @modal.concurrent(max_inputs=100)
