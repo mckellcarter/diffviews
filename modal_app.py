@@ -34,7 +34,10 @@ image = (
         "huggingface_hub>=0.25.0",
         "boto3>=1.28.0",
         "scipy>=1.7.0",
+        # cuML GPU acceleration (auto-detected by umap_backend.py)
+        extra_index_url="https://pypi.nvidia.com",
     )
+    .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
     .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
 )
 

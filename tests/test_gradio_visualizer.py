@@ -919,7 +919,7 @@ class TestRecomputeLayerUmap:
 
             # Test the cache-miss path with mocked extraction + UMAP
             with patch.object(viz, '_load_layer_cache', return_value=False), \
-                 patch('diffviews.visualization.app._extract_layer_on_gpu', return_value=fake_activations), \
+                 patch('diffviews.visualization.visualizer._extract_layer_on_gpu', return_value=fake_activations), \
                  patch('diffviews.processing.umap.compute_umap', return_value=(fake_embeddings, fake_reducer, fake_scaler, None)), \
                  patch('diffviews.processing.umap.save_embeddings'):
                 result = viz.recompute_layer_umap("dmd2", "encoder_block_0")
@@ -949,7 +949,7 @@ class TestRecomputeLayerUmap:
                 viz = GradioVisualizer(data_dir=root)
 
             with patch.object(viz, '_load_layer_cache', return_value=False), \
-                 patch.object(viz, 'extract_layer_activations', return_value=None):
+                 patch('diffviews.visualization.visualizer._extract_layer_on_gpu', return_value=None):
                 result = viz.recompute_layer_umap("dmd2", "encoder_block_0")
 
             assert result is False
