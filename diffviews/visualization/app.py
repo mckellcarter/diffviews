@@ -71,9 +71,10 @@ class ModelData:
 class GradioVisualizer:
     """Gradio-based visualizer with multi-user support.
 
-    Thread-safety model:
-    - model_data dict is populated at init, read-only afterward
-    - Each model's ModelData contains all model-specific state
+    Memory model (single-model-at-a-time):
+    - model_configs dict holds paths/config for all discovered models
+    - model_data dict holds ONLY the currently loaded model
+    - On model switch: unload current → load new (frees ~3GB+ per model)
     - current_model selection is per-session via gr.State (not instance attr)
     - Adapter loading protected by _generation_lock
     """
@@ -137,19 +138,24 @@ class GradioVisualizer:
         self.class_labels: Dict[int, str] = {}
         self.load_class_labels()
 
-        # Discover and load all models (read-only after init)
+        # Discover models (populates model_configs)
         self.model_configs: Dict[str, dict] = {}
         self.model_data: Dict[str, ModelData] = {}
         self.discover_models()
+
+        # Store requested initial model for _load_all_models
+        self._requested_initial_model = initial_model
+
+        # Load only the initial model (single-model-at-a-time pattern)
         self._load_all_models()
 
-        # Determine default model (for initial UI state, not mutable)
-        if initial_model and initial_model in self.model_data:
+        # Determine default model (for initial UI state)
+        if initial_model and initial_model in self.model_configs:
             self.default_model = initial_model
-        elif "dmd2" in self.model_data:
+        elif "dmd2" in self.model_configs:
             self.default_model = "dmd2"
-        elif self.model_data:
-            self.default_model = list(self.model_data.keys())[0]
+        elif self.model_configs:
+            self.default_model = list(self.model_configs.keys())[0]
         else:
             self.default_model = None
 
@@ -183,18 +189,22 @@ class GradioVisualizer:
                 print(f"Discovered model: {model_name} (adapter={config.get('adapter')})")
 
     def _load_all_models(self):
-        """Load data for all discovered models into model_data dict.
+        """Load ONLY the initial/default model to minimize memory.
 
-        This is called once during __init__ to preload all model data.
-        After this, model_data is read-only for thread safety.
+        Single-model-at-a-time pattern: only one model's data + adapter
+        in memory. Other models loaded on-demand via _ensure_model_loaded().
         """
-        for model_name, config in self.model_configs.items():
-            print(f"Loading model: {model_name}")
-            model_data = self._load_model_data(model_name, config)
-            if model_data is not None:
-                self.model_data[model_name] = model_data
-                # Eagerly load adapter so hookable_layers is available for UI
-                self.load_adapter(model_name)
+        # Determine which model to load initially
+        initial = None
+        if hasattr(self, '_requested_initial_model') and self._requested_initial_model in self.model_configs:
+            initial = self._requested_initial_model
+        elif "dmd2" in self.model_configs:
+            initial = "dmd2"
+        elif self.model_configs:
+            initial = next(iter(self.model_configs))
+
+        if initial:
+            self._ensure_model_loaded(initial)
 
     def _load_model_data(self, model_name: str, config: dict) -> Optional[ModelData]:
         """Load all data for a single model into a ModelData instance."""
@@ -312,12 +322,76 @@ class GradioVisualizer:
         model_data.nn_model.fit(umap_coords)
 
     def get_model(self, model_name: str) -> Optional[ModelData]:
-        """Get ModelData for a model name, or None if not found."""
+        """Get ModelData for a model name, or None if not loaded."""
         return self.model_data.get(model_name)
 
     def is_valid_model(self, model_name: str) -> bool:
-        """Check if a model name is valid."""
+        """Check if a model name is valid (discovered, not necessarily loaded)."""
+        return model_name in self.model_configs
+
+    def is_model_loaded(self, model_name: str) -> bool:
+        """Check if a model is currently loaded in memory."""
         return model_name in self.model_data
+
+    def _ensure_model_loaded(self, model_name: str) -> bool:
+        """Load a model if not already loaded. Unloads other models first.
+
+        Returns True if model is now loaded, False on error.
+        """
+        if model_name in self.model_data:
+            return True
+
+        if model_name not in self.model_configs:
+            print(f"Unknown model: {model_name}")
+            return False
+
+        # Unload any currently loaded models first
+        for loaded_name in list(self.model_data.keys()):
+            self._unload_model(loaded_name)
+
+        # Load the new model
+        config = self.model_configs[model_name]
+        print(f"Loading model: {model_name}")
+        model_data = self._load_model_data(model_name, config)
+        if model_data is not None:
+            self.model_data[model_name] = model_data
+            self.load_adapter(model_name)
+            return True
+        return False
+
+    def _unload_model(self, model_name: str) -> None:
+        """Unload a model from memory, freeing GPU and CPU resources."""
+        if model_name not in self.model_data:
+            return
+
+        print(f"Unloading model: {model_name}")
+        model_data = self.model_data[model_name]
+
+        # Clear adapter from GPU
+        if model_data.adapter is not None:
+            import torch
+            del model_data.adapter
+            model_data.adapter = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        # Clear large arrays
+        model_data.activations = None
+        model_data.default_activations = None
+        model_data.df = pd.DataFrame()
+        model_data.default_df = None
+        model_data.umap_reducer = None
+        model_data.umap_scaler = None
+        model_data.umap_pca = None
+        model_data.nn_model = None
+        model_data.default_umap_reducer = None
+        model_data.default_umap_scaler = None
+        model_data.default_umap_pca = None
+        model_data.default_nn_model = None
+
+        # Remove from dict
+        del self.model_data[model_name]
+        print(f"  Unloaded {model_name}")
 
     def load_class_labels(self):
         """Load ImageNet class labels (shared across models)."""
@@ -2188,15 +2262,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             return fig, None, None, ""
 
         def on_model_switch(new_model_name, cur_model, _sel_idx, _man_n, _knn_n, _knn_dist, _high_class):
-            """Handle model switching (resets all state including preview)."""
+            """Handle model switching (resets all state including preview).
+
+            Single-model-at-a-time: unloads current model, loads new one.
+            """
             if new_model_name == cur_model:
                 return (gr.update(),) * 24
 
             if not visualizer.is_valid_model(new_model_name):
                 return (gr.update(),) * 24
 
-            # Restore default embeddings for the new model
-            visualizer._restore_default_embeddings(new_model_name)
+            # Load new model (unloads current automatically)
+            if not visualizer._ensure_model_loaded(new_model_name):
+                return (gr.update(),) * 24
 
             model_data = visualizer.get_model(new_model_name)
             fig = visualizer.create_umap_figure(new_model_name)

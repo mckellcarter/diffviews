@@ -151,8 +151,8 @@ class TestModelDataAccess:
             assert viz.is_valid_model("edm") is True
             assert viz.is_valid_model("unknown") is False
 
-    def test_all_models_loaded_at_init(self):
-        """Test that all models are preloaded at init (thread-safe pattern)."""
+    def test_only_initial_model_loaded_at_init(self):
+        """Test single-model-at-a-time: only initial model loaded at init."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
@@ -161,14 +161,16 @@ class TestModelDataAccess:
             with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            # Both models should have their data loaded
+            # Only default model (dmd2) should be loaded
             dmd2_data = viz.get_model("dmd2")
             edm_data = viz.get_model("edm")
 
             assert dmd2_data is not None
-            assert edm_data is not None
+            assert edm_data is None  # Not loaded yet
             assert len(dmd2_data.df) == 10
-            assert len(edm_data.df) == 15
+            # But both should be discoverable
+            assert viz.is_valid_model("dmd2")
+            assert viz.is_valid_model("edm")
 
 
 class TestGetPlotDataframe:
@@ -581,8 +583,8 @@ class TestCreateUmapFigure:
 class TestMultiUserIsolation:
     """Test multi-user thread safety patterns."""
 
-    def test_model_data_is_per_model(self):
-        """Test that each model has isolated data."""
+    def test_model_switch_loads_and_unloads(self):
+        """Test single-model-at-a-time: switching models unloads previous."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             create_model_dir(root, "dmd2", "dmd2-imagenet-64", num_samples=10)
@@ -591,12 +593,15 @@ class TestMultiUserIsolation:
             with patch.object(GradioVisualizer, '_load_activations', return_value=(None, None)):
                 viz = GradioVisualizer(data_dir=root)
 
-            dmd2_data = viz.get_model("dmd2")
-            edm_data = viz.get_model("edm")
+            # Initially only dmd2 loaded
+            assert viz.is_model_loaded("dmd2")
+            assert not viz.is_model_loaded("edm")
 
-            # Each model should have its own dataframe
-            assert dmd2_data.df is not edm_data.df
-            assert len(dmd2_data.df) != len(edm_data.df)
+            # Switch to edm
+            viz._ensure_model_loaded("edm")
+            assert not viz.is_model_loaded("dmd2")  # Unloaded
+            assert viz.is_model_loaded("edm")
+            assert len(viz.get_model("edm").df) == 15
 
     def test_visualizer_has_no_current_model_attr(self):
         """Test that visualizer doesn't have mutable current_model attribute."""
