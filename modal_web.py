@@ -27,6 +27,7 @@ cpu_image = (
         "scikit-learn>=1.0.0",
         "gradio>=6.0.0",
         "plotly>=5.18.0",
+        "matplotlib>=3.5.0",
         "boto3>=1.28.0",
     )
     # TODO: revert to @main before merging
@@ -80,7 +81,7 @@ def web():
 
     # Configure GPU ops to use remote worker (lookup from deployed app)
     try:
-        GPUWorker = modal.Cls.lookup("diffviews-gpu", "GPUWorker")
+        GPUWorker = modal.Cls.from_name("diffviews-gpu", "GPUWorker")
         gpu_worker = GPUWorker()
         gpu_ops.set_remote_gpu_worker(gpu_worker)
         print("Remote GPU worker connected.")
