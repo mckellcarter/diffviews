@@ -53,6 +53,7 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
 
     from diffviews.data.r2_cache import R2DataStore, R2LayerCache
     from diffviews.visualization.visualizer import GradioVisualizer
+    from diffviews.visualization.gpu_ops import set_visualizer
 
     DATA_DIR = Path("/data")
 
@@ -72,6 +73,7 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
     # Initialize visualizer (loads adapters, has recompute_layer_umap)
     print("\nInitializing visualizer...")
     visualizer = GradioVisualizer(data_dir=DATA_DIR, device="cuda")
+    set_visualizer(visualizer)  # Required for _extract_layer_on_gpu
 
     # Get models to process
     models = list(visualizer.model_configs.keys())
