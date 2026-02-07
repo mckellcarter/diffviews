@@ -453,16 +453,22 @@ After M5 refactoring, the path to hybrid is clear:
 - [x] Single-model-at-a-time loading
 - [x] Tests passing (165)
 
-### M5: App Refactoring
-- [ ] Phase 1: Extract models.py
-- [ ] Phase 2: Extract layout.py
-- [ ] Phase 3: Extract gpu_ops.py
-- [ ] Phase 4: Extract visualizer.py
-- [ ] Phase 5: Extract callbacks.py
-- [ ] Phase 6: Simplify app.py
-- [ ] Update test patches if needed
+### M5: App Refactoring (Phases 1-4 Complete)
+- [x] Phase 1: Extract models.py (ModelData dataclass)
+- [x] Phase 2: Extract layout.py (CUSTOM_CSS, PLOTLY_HANDLER_JS)
+- [x] Phase 3: Extract gpu_ops.py (_generate_on_gpu, _extract_layer_on_gpu, set_visualizer)
+- [x] Phase 4: Extract visualizer.py (GradioVisualizer class)
+- [ ] Phase 5: Extract callbacks.py (deferred — tight Gradio coupling)
+- [ ] Phase 6: Simplify app.py (deferred)
+- [x] Update test patches if needed
 - [ ] Verify HF Spaces app.py still works
 - [ ] Verify modal_app.py still works
+
+**M5 Results:**
+- app.py: 2923 → 1183 lines (60% reduction)
+- Tests: 165 passing
+- Lint: 8.80/10
+- Key architecture (gpu_ops.py) ready for hybrid CPU/GPU split
 
 ### M6: cuML Integration
 - [ ] Create umap_backend.py
@@ -483,14 +489,18 @@ After M5 refactoring, the path to hybrid is clear:
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `diffviews/visualization/app.py` | Source file to refactor (2923 lines) |
-| `diffviews/processing/umap.py` | UMAP compute, needs backend abstraction |
-| `app.py` (root) | HF Spaces entry, injects @spaces.GPU |
-| `modal_app.py` | Modal entry, needs cuML deps |
-| `tests/test_gradio_visualizer.py` | 55 tests for visualizer |
-| `tests/test_r2_cache.py` | 37 tests for R2 operations |
+| File | Lines | Purpose |
+|------|-------|---------|
+| `diffviews/visualization/app.py` | 1183 | create_gradio_app + main() + re-exports |
+| `diffviews/visualization/visualizer.py` | 1204 | GradioVisualizer class |
+| `diffviews/visualization/layout.py` | 467 | CUSTOM_CSS, PLOTLY_HANDLER_JS |
+| `diffviews/visualization/gpu_ops.py` | 76 | GPU wrappers (key for hybrid split) |
+| `diffviews/visualization/models.py` | 51 | ModelData dataclass |
+| `diffviews/processing/umap.py` | — | UMAP compute, needs backend abstraction |
+| `app.py` (root) | — | HF Spaces entry, injects @spaces.GPU |
+| `modal_app.py` | — | Modal entry, needs cuML deps |
+| `tests/test_gradio_visualizer.py` | — | 55 tests for visualizer |
+| `tests/test_r2_cache.py` | — | 37 tests for R2 operations |
 
 ---
 

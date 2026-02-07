@@ -17,35 +17,37 @@ I'm refactoring the diffviews visualizer for better modularity and cuML GPU acce
 - `scaledown_window=120s` (was 300s)
 - Single-model-at-a-time loading in GradioVisualizer
 - `_ensure_model_loaded()`, `_unload_model()` methods added
-- Tests: 165 passing, lint 8.84/10
 
-### What's Next
-
-**M5 (App refactoring):** Break `diffviews/visualization/app.py` (2923 lines) into modules:
+**M5 (App refactoring):** Phases 1-4 complete on `feature/modal-migrate` branch:
 
 ```
 diffviews/visualization/
-├── models.py      # ModelData dataclass + load/unload
-├── visualizer.py  # GradioVisualizer class
-├── gpu_ops.py     # _generate_on_gpu, _extract_layer_on_gpu
-├── callbacks.py   # Event handlers
-├── layout.py      # CUSTOM_CSS, PLOTLY_HANDLER_JS
-└── app.py         # create_gradio_app shell + re-exports
+├── models.py      # ModelData dataclass (51 lines)
+├── layout.py      # CUSTOM_CSS, PLOTLY_HANDLER_JS (467 lines)
+├── gpu_ops.py     # _generate_on_gpu, _extract_layer_on_gpu, set_visualizer (76 lines)
+├── visualizer.py  # GradioVisualizer class (1204 lines)
+├── callbacks.py   # NOT extracted (tight Gradio coupling)
+└── app.py         # create_gradio_app + main() + re-exports (1183 lines)
 ```
 
-**Refactoring order (tests pass at each step):**
-1. Extract `models.py` (ModelData dataclass)
-2. Extract `layout.py` (CSS/JS constants)
-3. Extract `gpu_ops.py` (GPU wrappers — key for hybrid)
-4. Extract `visualizer.py` (GradioVisualizer class)
-5. Extract `callbacks.py` (event handlers)
-6. Simplify `app.py` (shell + re-exports)
+**M5 Results:**
+- app.py: 2923 → 1183 lines (60% reduction)
+- Tests: 165 passing
+- Lint: 8.80/10
+- Key architecture (`gpu_ops.py`) ready for hybrid CPU/GPU split
 
-**M6 (cuML integration):** After refactoring:
+### What's Next
+
+**M6 (cuML integration):**
 - Create `diffviews/processing/umap_backend.py` (auto-detect cuML vs umap-learn)
 - Update Modal image with `cuml-cu12`, `cupy-cuda12x`
 - Pre-seed all layer caches to R2 with cuML-generated pickles
 - Add `DIFFVIEWS_FORCE_CPU` env var for fallback
+
+**M7 (Hybrid CPU/GPU):** After M6:
+- Split `modal_app.py` into CPU web + GPU worker
+- CPU handles UI, cached layer viz; GPU only for generation/extraction
+- Significant cost savings (GPU scales to zero when idle)
 
 ### Key Architecture Notes
 
@@ -59,10 +61,17 @@ diffviews/visualization/
 
 **Branch:** `feature/modal-migrate`
 **Tests:** 165 passing
-**Changed files (M4):**
-- `modal_app.py` — T4 GPU, scaledown_window
-- `diffviews/visualization/app.py` — single-model loading
-- `tests/test_gradio_visualizer.py` — updated tests
+**Lint:** 8.80/10
+
+**New files (M5):**
+- `diffviews/visualization/models.py` — ModelData dataclass
+- `diffviews/visualization/layout.py` — CSS/JS constants
+- `diffviews/visualization/gpu_ops.py` — GPU wrappers
+- `diffviews/visualization/visualizer.py` — GradioVisualizer class
+
+**Modified files:**
+- `diffviews/visualization/app.py` — now just create_gradio_app + main + re-exports
+- `tests/test_gradio_visualizer.py` — updated patch paths for gpu_ops
 
 ### Commands
 
@@ -70,8 +79,8 @@ diffviews/visualization/
 # Run tests
 python -m pytest tests/ -v
 
-# Lint
-pylint diffviews/visualization/app.py modal_app.py --disable=C0114,C0115,C0116,R0913,R0914,R0915,R0912,R0902,W0612,W0611,W0718,W1514,E0401 --max-line-length=120
+# Lint all visualization modules
+pylint diffviews/visualization/*.py --disable=C0114,C0115,C0116,R0913,R0914,R0915,R0912,R0902,W0612,W0611,W0718,W1514,E0401 --max-line-length=120
 
 # Local Modal test
 modal serve modal_app.py
@@ -80,4 +89,4 @@ modal serve modal_app.py
 modal deploy modal_app.py
 ```
 
-Please read the plan file and continue from where we left off.
+Please read the plan file and continue with M6 (cuML integration).
