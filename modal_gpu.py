@@ -26,8 +26,7 @@ gpu_image = (
         "pillow>=9.0.0",
         "tqdm>=4.60.0",
     )
-    # TODO: revert to @main before merging
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@feature/modal-migrate")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
 )
 
 # Volume for checkpoints only

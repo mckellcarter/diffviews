@@ -30,8 +30,7 @@ cpu_image = (
         "matplotlib>=3.5.0",
         "boto3>=1.28.0",
     )
-    # TODO: revert to @main before merging
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@feature/modal-migrate")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
