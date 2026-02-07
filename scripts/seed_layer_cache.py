@@ -33,7 +33,7 @@ gpu_image = (
     )
     .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
     .pip_install("umap-learn>=0.5.0")
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@ce342f0")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@3dc6603")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
@@ -158,19 +158,42 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
                 if attempt > 0:
                     print(f"  Retry {attempt + 1}/{max_retries}...")
 
-                # Check if local cache is incomplete - if so, delete it to force re-extraction
+                # Clear any incomplete local cache
                 local_files = [cache_dir / f"{layer_name}{ext}" for ext in [".csv", ".json", ".npy", ".pkl"]]
                 existing = [f for f in local_files if f.exists()]
-                if existing and len(existing) < 4:
-                    print(f"  Clearing incomplete local cache ({len(existing)}/4 files)...")
+                if existing:
+                    print(f"  Clearing local cache ({len(existing)} files)...")
                     for f in existing:
                         f.unlink()
 
-                # Extract and compute UMAP (will recompute since local cache cleared)
-                success = visualizer.recompute_layer_umap(model_name, layer_name)
-                if not success:
-                    print(f"  ✗ Extraction/UMAP failed")
+                # Direct extraction (bypass recompute_layer_umap which may load partial R2 cache)
+                print(f"  Extracting activations...")
+                activations = visualizer.extract_layer_activations(model_name, layer_name)
+                if activations is None:
+                    print(f"  ✗ Extraction failed")
                     continue
+
+                # Compute UMAP
+                print(f"  Computing UMAP...")
+                from diffviews.processing.umap import compute_umap, save_embeddings
+                embeddings, reducer, scaler, pca_reducer = compute_umap(
+                    activations, n_neighbors=15, min_dist=0.1, normalize=True, pca_components=50
+                )
+
+                # Build df with UMAP coords
+                import pandas as pd
+                new_df = pd.read_csv(model_data.data_dir / "metadata" / "activation_metadata.csv")
+                new_df["umap_x"] = embeddings[:, 0]
+                new_df["umap_y"] = embeddings[:, 1]
+                umap_params = {"layers": [layer_name], "n_neighbors": 15, "min_dist": 0.1}
+
+                # Save all files
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                import numpy as np
+                csv_path = cache_dir / f"{layer_name}.csv"
+                save_embeddings(embeddings, new_df, csv_path, umap_params, reducer, scaler, pca_reducer)
+                np.save(cache_dir / f"{layer_name}.npy", activations)
+                print(f"  Saved to {cache_dir}")
 
                 # Verify all local files exist before upload
                 local_complete = all(f.exists() for f in local_files)
