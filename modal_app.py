@@ -265,11 +265,11 @@ def get_device() -> str:
 
 @app.function(
     image=image,
-    gpu="A10G",
+    gpu="T4",
     volumes={"/data": vol},
     secrets=[r2_secret],
     timeout=600,
-    scaledown_window=300,
+    scaledown_window=120,
     max_containers=1,
 )
 @modal.concurrent(max_inputs=100)
