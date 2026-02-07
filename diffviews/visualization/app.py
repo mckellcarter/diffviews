@@ -5,7 +5,6 @@ Port of the Dash visualization app with multi-user support.
 
 import argparse
 import json
-import threading
 
 import gradio as gr
 
@@ -844,19 +843,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             else:
                 class_label = None
 
-            # Get layers for trajectory extraction (check pkl path, lazy load later)
+            # Get layers for trajectory extraction
             extract_layers = sorted(model_data.umap_params.get("layers", []))
-            can_project = model_data.umap_pkl_path is not None and len(extract_layers) > 0
-
-            # Start UMAP loading in background (overlaps with GPU cold start)
-            umap_thread = None
-            if can_project and model_data.umap_reducer is None:
-                umap_thread = threading.Thread(
-                    target=visualizer._ensure_umap_loaded,
-                    args=(model_data,),
-                    daemon=True,
-                )
-                umap_thread.start()
+            can_project = model_data.umap_reducer is not None and len(extract_layers) > 0
 
             # Run generation on GPU
             result = _generate_on_gpu(
@@ -890,9 +879,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
                 sigmas.append(sigma)
 
-            # Project trajectory through UMAP (wait for lazy load if started)
-            if umap_thread is not None:
-                umap_thread.join()
+            # Project trajectory through UMAP
             traj_coords = []
             if trajectory_acts and model_data.umap_reducer:
                 # Pin UMAP random_state for deterministic transform

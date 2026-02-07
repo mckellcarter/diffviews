@@ -204,10 +204,15 @@ class GradioVisualizer:
                 with open(param_path, "r", encoding="utf-8") as f:
                     model_data.umap_params = json.load(f)
 
-            # Store UMAP pkl path for lazy loading (only needed for trajectory projection)
+            # Load UMAP model for inverse_transform (optional)
             umap_model_path = Path(embeddings_path).with_suffix(".pkl")
             if umap_model_path.exists():
-                model_data.umap_pkl_path = umap_model_path
+                print(f"  Loading UMAP model from {umap_model_path}")
+                with open(umap_model_path, "rb") as f:
+                    umap_data = pickle.load(f)
+                    model_data.umap_reducer = umap_data["reducer"]
+                    model_data.umap_scaler = umap_data["scaler"]
+                    model_data.umap_pca = umap_data.get("pca_reducer")
 
             # Filter by max_classes if specified
             if self.max_classes is not None and "class_label" in model_data.df.columns:
@@ -275,29 +280,6 @@ class GradioVisualizer:
         NearestNeighbors = get_knn_class()
         model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
         model_data.nn_model.fit(umap_coords)
-
-    def _ensure_umap_loaded(self, model_data: ModelData) -> bool:
-        """Lazy load UMAP reducer from pkl (only needed for trajectory projection).
-
-        Returns True if reducer is available, False otherwise.
-        """
-        if model_data.umap_reducer is not None:
-            return True
-
-        if model_data.umap_pkl_path is None or not model_data.umap_pkl_path.exists():
-            return False
-
-        print(f"  [UMAP] Lazy loading from {model_data.umap_pkl_path}")
-        try:
-            with open(model_data.umap_pkl_path, "rb") as f:
-                umap_data = pickle.load(f)
-                model_data.umap_reducer = umap_data["reducer"]
-                model_data.umap_scaler = umap_data["scaler"]
-                model_data.umap_pca = umap_data.get("pca_reducer")
-            return True
-        except Exception as e:
-            print(f"  [UMAP] Failed to load pkl: {e}")
-            return False
 
     def get_model(self, model_name: str) -> Optional[ModelData]:
         """Get ModelData for a model name, or None if not loaded."""

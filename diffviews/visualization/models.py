@@ -33,7 +33,6 @@ class ModelData:
     umap_scaler: Any = None
     umap_pca: Any = None  # PCA pre-reducer (if used)
     umap_params: Dict = field(default_factory=dict)
-    umap_pkl_path: Optional[Path] = None  # For lazy loading
     nn_model: Any = None  # NearestNeighbors (sklearn or cuML)
 
     # Lazy-loaded adapter (protected by lock in visualizer)
