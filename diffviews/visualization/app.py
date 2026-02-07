@@ -19,6 +19,8 @@ from .gpu_ops import (
     get_visualizer,
     _generate_on_gpu,
     _extract_layer_on_gpu,
+    set_remote_gpu_worker,
+    is_hybrid_mode,
 )
 from .visualizer import GradioVisualizer
 

@@ -15,11 +15,11 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from PIL import Image
-from sklearn.neighbors import NearestNeighbors
 
 import plotly.graph_objects as go
 
 from diffviews.processing.umap import load_dataset_activations
+from diffviews.processing.umap_backend import get_knn_class, to_numpy
 from diffviews.adapters.registry import get_adapter
 from diffviews.core.masking import unflatten_activation
 
@@ -277,6 +277,7 @@ class GradioVisualizer:
 
         umap_coords = model_data.df[["umap_x", "umap_y"]].values
         print(f"  [KNN] Fitting on {umap_coords.shape[0]} points")
+        NearestNeighbors = get_knn_class()
         model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
         model_data.nn_model.fit(umap_coords)
 
@@ -401,6 +402,10 @@ class GradioVisualizer:
         query_k = k + 1 if exclude_selected else k
         query_point = model_data.df.iloc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
         distances, indices = model_data.nn_model.kneighbors(query_point, n_neighbors=query_k)
+
+        # Ensure numpy arrays (cuML returns cupy)
+        distances = to_numpy(distances)
+        indices = to_numpy(indices)
 
         results = []
         for dist, neighbor_idx in zip(distances[0], indices[0]):

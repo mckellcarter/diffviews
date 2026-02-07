@@ -5,15 +5,15 @@ UMAP embedding computation for activation visualization.
 import json
 import pickle
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
-from umap import UMAP
 
+from .umap_backend import get_umap_class, get_backend_name, to_numpy
 from ..core.extractor import flatten_activations, load_activations, load_fast_activations
 
 
@@ -186,7 +186,7 @@ def compute_umap(
     random_state: Optional[int] = 42,
     normalize: bool = True,
     pca_components: Optional[int] = None,
-) -> Tuple[np.ndarray, UMAP, Optional[StandardScaler], Optional[PCA]]:
+) -> Tuple[np.ndarray, object, Optional[StandardScaler], Optional[PCA]]:
     """
     Compute UMAP projection with optional PCA pre-reduction.
 
@@ -205,6 +205,7 @@ def compute_umap(
         (embeddings, reducer, scaler, pca_reducer)
     """
     print(f"\nComputing UMAP (n_neighbors={n_neighbors}, min_dist={min_dist})")
+    print(f"  Backend: {get_backend_name()}")
 
     scaler = None
     if normalize:
@@ -220,6 +221,7 @@ def compute_umap(
         print(f"  Explained variance: {pca_reducer.explained_variance_ratio_.sum():.2%}")
 
     print("Running UMAP...")
+    UMAP = get_umap_class()
     reducer = UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
@@ -229,6 +231,7 @@ def compute_umap(
     )
 
     embeddings = reducer.fit_transform(activations)
+    embeddings = to_numpy(embeddings)  # ensure numpy (cuML returns cupy)
 
     print(f"UMAP embeddings: {embeddings.shape}")
     return embeddings, reducer, scaler, pca_reducer
@@ -239,7 +242,7 @@ def save_embeddings(
     metadata_df: pd.DataFrame,
     output_path: Path,
     umap_params: dict,
-    reducer: Optional[UMAP] = None,
+    reducer: Optional[object] = None,
     scaler: Optional[StandardScaler] = None,
     pca_reducer: Optional[PCA] = None,
 ):

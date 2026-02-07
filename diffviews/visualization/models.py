@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
 
 
 @dataclass
@@ -34,7 +33,7 @@ class ModelData:
     umap_scaler: Any = None
     umap_pca: Any = None  # PCA pre-reducer (if used)
     umap_params: Dict = field(default_factory=dict)
-    nn_model: Optional[NearestNeighbors] = None
+    nn_model: Any = None  # NearestNeighbors (sklearn or cuML)
 
     # Lazy-loaded adapter (protected by lock in visualizer)
     adapter: Any = None
@@ -47,5 +46,5 @@ class ModelData:
     default_umap_scaler: Any = None
     default_umap_pca: Any = None
     default_umap_params: Optional[Dict] = None
-    default_nn_model: Optional[NearestNeighbors] = None
+    default_nn_model: Any = None  # NearestNeighbors (sklearn or cuML)
     current_layer: str = "default"
