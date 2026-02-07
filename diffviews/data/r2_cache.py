@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Optional
 
 
-# Extensions we cache on R2 (portable only — no .pkl)
-LAYER_CACHE_EXTENSIONS = (".csv", ".json", ".npy")
+# Extensions we cache on R2 (including cuML-fitted pkl for consistency)
+LAYER_CACHE_EXTENSIONS = (".csv", ".json", ".npy", ".pkl")
 
 
 def _make_r2_client(bucket: Optional[str] = None):
