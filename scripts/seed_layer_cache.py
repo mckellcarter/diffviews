@@ -113,11 +113,21 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
         if layer_filter:
             layers_to_check = [l for l in hookable_layers if l == layer_filter]
 
-        # Check which are cached on R2
+        # Check which are fully cached on R2 (csv + npy required)
+        def layer_complete(model: str, layer: str) -> bool:
+            """Check if layer has all required files on R2."""
+            for ext in [".csv", ".json", ".npy"]:
+                key = f"data/{model}/layer_cache/{layer}{ext}"
+                try:
+                    r2_cache._client.head_object(Bucket=r2_cache._bucket, Key=key)
+                except Exception:
+                    return False
+            return True
+
         cached = []
         missing = []
         for layer in layers_to_check:
-            if r2_cache.layer_exists(model_name, layer):
+            if layer_complete(model_name, layer):
                 cached.append(layer)
             else:
                 missing.append(layer)
