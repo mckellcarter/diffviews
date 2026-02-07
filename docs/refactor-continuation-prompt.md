@@ -44,6 +44,9 @@ diffviews/visualization/
 
 ### What's Next
 
+**Before merging to main:**
+- Revert `@feature/modal-migrate` → `@main` in modal_app.py, modal_gpu.py, modal_web.py
+
 **Remaining tasks:**
 - Pre-seed all layer caches to R2 with cuML-generated embeddings
 - Benchmark cost savings (hybrid vs monolithic)

@@ -29,7 +29,8 @@ cpu_image = (
         "plotly>=5.18.0",
         "boto3>=1.28.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
+    # TODO: revert to @main before merging
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@feature/modal-migrate")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)

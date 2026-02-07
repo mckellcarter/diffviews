@@ -38,7 +38,8 @@ image = (
         extra_index_url="https://pypi.nvidia.com",
     )
     .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
+    # TODO: revert to @main before merging
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@feature/modal-migrate")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
