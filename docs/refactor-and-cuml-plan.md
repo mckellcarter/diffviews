@@ -403,45 +403,59 @@ No changes needed — existing `_umap_pkl_ok()` check handles this.
 
 ---
 
-## M7: Hybrid CPU/GPU Architecture (Future)
-
-After M5 refactoring, the path to hybrid is clear:
+## M7: Hybrid CPU/GPU Architecture (Complete)
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────┐
-│  CPU Container (web)                    │
+│  CPU Container (modal_web.py)           │
 │  - Gradio UI                            │
 │  - UMAP visualization (cached layers)   │
 │  - Hover/click handlers                 │
-│  - Calls GPU container for heavy ops    │
+│  - Computes mask from cached activations│
+│  - Calls GPU container for generation   │
+│  - scaledown_window=1800s (30 min)      │
 └──────────────────┬──────────────────────┘
                    │ Modal remote call
                    ▼
 ┌─────────────────────────────────────────┐
-│  GPU Container (worker)                 │
-│  - _generate_on_gpu()                   │
-│  - _extract_layer_on_gpu()              │
-│  - cuML UMAP fit (cache miss)           │
-│  - Scales to zero when idle             │
+│  GPU Container (modal_gpu.py)           │
+│  - Lightweight: torch, numpy, pillow    │
+│  - Receives pre-computed mask dict      │
+│  - generate_from_mask() only            │
+│  - Cold start: 5-10s (was ~40s)         │
+│  - scaledown_window=120s                │
 └─────────────────────────────────────────┘
 ```
 
+### Key Optimization: Lightweight GPU Worker
+
+The GPU container only needs torch for generation. Heavy deps (pandas, plotly, sklearn, cuML) stay on CPU:
+
+```python
+# modal_gpu.py - minimal deps
+gpu_image = modal.Image.debian_slim(python_version="3.10")
+    .pip_install("torch", "numpy", "pillow", "tqdm")
+    .pip_install("diffviews @ git+...")
+```
+
+Mask computation (`compute_mask_dict()` in masking.py) runs on CPU using cached activations, then sends the mask dict to GPU. This reduces cold start from ~40s to 5-10s.
+
 ### Cost Model
 
-| Scenario | Current (GPU always) | Hybrid |
-|----------|---------------------|--------|
+| Scenario | Monolithic GPU | Hybrid |
+|----------|----------------|--------|
 | User browsing cached layers | $0.59/hr | $0.02/hr (CPU only) |
-| User generates image | $0.59/hr | $0.59/hr + cold start |
+| User generates image | $0.59/hr | $0.02/hr + GPU burst |
 | Idle tab open | $0.59/hr | $0.02/hr (CPU only) |
 
-### Implementation (Post-M6)
+### Deployment
 
-1. Split `modal_app.py` into `modal_web.py` (CPU) and `modal_gpu.py` (GPU)
-2. GPU container exposes `@app.function` for generation/extraction
-3. CPU container calls `gpu_function.remote()` for heavy ops
-4. Handle cold start UX (loading indicators)
+```bash
+modal deploy modal_gpu.py  # GPU worker first
+modal deploy modal_web.py  # CPU web server
+```
 
 ---
 
@@ -449,7 +463,8 @@ After M5 refactoring, the path to hybrid is clear:
 
 ### M4: Cost Optimization ✓
 - [x] Switch GPU A10G → T4
-- [x] Reduce scaledown_window 300s → 120s
+- [x] GPU scaledown_window=120s
+- [x] CPU scaledown_window=1800s (30 min for session persistence)
 - [x] Single-model-at-a-time loading
 - [x] Tests passing (165)
 
@@ -479,31 +494,32 @@ After M5 refactoring, the path to hybrid is clear:
 - [ ] Pre-seed all layer caches to R2
 - [ ] Benchmark and document speedups
 
-### M7: Hybrid Architecture
+### M7: Hybrid Architecture ✓
 - [x] Split modal_app.py into CPU/GPU (modal_web.py + modal_gpu.py)
 - [x] Implement remote GPU function calls (gpu_ops.py set_remote_gpu_worker)
 - [x] Add cold start loading UX (Gradio built-in loading)
-- [ ] Benchmark cost savings (after deployment)
+- [x] Lightweight GPU worker (mask computed on CPU, sent to GPU)
+- [x] GPU cold start reduced ~40s → 5-10s
+- [x] Deployed and tested on main
+- [ ] Benchmark cost savings (after extended use)
 
 ---
 
 ## Key Files
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `diffviews/processing/umap_backend.py` | 65 | cuML/umap-learn auto-detection |
-| `diffviews/visualization/app.py` | 1183 | create_gradio_app + main() + re-exports |
-| `diffviews/visualization/visualizer.py` | 1204 | GradioVisualizer class |
-| `diffviews/visualization/layout.py` | 467 | CUSTOM_CSS, PLOTLY_HANDLER_JS |
-| `diffviews/visualization/gpu_ops.py` | 157 | GPU wrappers + hybrid mode dispatch |
-| `diffviews/visualization/models.py` | 51 | ModelData dataclass |
-| `modal_gpu.py` | 200 | GPU worker (generation/extraction) |
-| `modal_web.py` | 110 | CPU web server (Gradio UI) |
-| `modal_app.py` | 318 | Original monolithic Modal entry (with cuML) |
-| `diffviews/processing/umap.py` | — | UMAP compute using backend |
-| `app.py` (root) | — | HF Spaces entry, injects @spaces.GPU |
-| `tests/test_gradio_visualizer.py` | — | 55 tests for visualizer |
-| `tests/test_r2_cache.py` | — | 37 tests for R2 operations |
+| File | Purpose |
+|------|---------|
+| `modal_web.py` | CPU web server (Gradio UI, hybrid mode) |
+| `modal_gpu.py` | Lightweight GPU worker (generation only) |
+| `modal_app.py` | Monolithic Modal entry (fallback, with cuML) |
+| `diffviews/visualization/app.py` | create_gradio_app + main() + re-exports |
+| `diffviews/visualization/visualizer.py` | GradioVisualizer class |
+| `diffviews/visualization/gpu_ops.py` | GPU wrappers + hybrid mode dispatch |
+| `diffviews/visualization/models.py` | ModelData dataclass |
+| `diffviews/visualization/layout.py` | CUSTOM_CSS, PLOTLY_HANDLER_JS |
+| `diffviews/processing/umap_backend.py` | cuML/umap-learn auto-detection |
+| `diffviews/core/masking.py` | compute_mask_dict() for CPU-side mask |
+| `scripts/check_layer_cache.py` | Check which layers are cached on R2 |
 
 ---
 

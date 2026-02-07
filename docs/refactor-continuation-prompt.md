@@ -1,4 +1,4 @@
-# Continuation Prompt: App Refactoring + cuML Integration
+# Continuation Prompt: DiffViews Hybrid Architecture
 
 Paste this after clearing context to resume work.
 
@@ -6,77 +6,74 @@ Paste this after clearing context to resume work.
 
 ## Prompt
 
-I'm refactoring the diffviews visualizer for better modularity and cuML GPU acceleration. The full plan is in `docs/refactor-and-cuml-plan.md` — read it first.
+I'm working on the diffviews visualizer with hybrid CPU/GPU Modal deployment. The full plan is in `docs/refactor-and-cuml-plan.md`.
 
-### What's Done
+### Current State (Deployed to Main)
 
-**M3 (Modal compute):** Complete, merged to main (PR #76). Modal serverless GPU deployment working.
+**Hybrid Architecture:**
+- `modal_web.py` — CPU container (Gradio UI, 30 min scaledown)
+- `modal_gpu.py` — Lightweight GPU worker (torch only, 5-10s cold start)
+- Mask computed on CPU from cached activations, sent to GPU for generation
 
-**M4 (Cost optimization):** Complete on `feature/modal-migrate` branch:
-- T4 GPU (was A10G) — ~50% cost reduction
-- `scaledown_window=120s` (was 300s)
-- Single-model-at-a-time loading in GradioVisualizer
-- `_ensure_model_loaded()`, `_unload_model()` methods added
+**Completed Milestones:**
+- M3: Modal compute (merged PR #76)
+- M4: Cost optimization (T4 GPU, single-model loading)
+- M5: App refactoring (60% reduction in app.py)
+- M6: cuML integration (auto-detect backend)
+- M7: Hybrid CPU/GPU (deployed, working)
 
-**M5 (App refactoring):** Phases 1-4 complete on `feature/modal-migrate` branch:
+### Architecture
 
 ```
-diffviews/visualization/
-├── models.py      # ModelData dataclass (51 lines)
-├── layout.py      # CUSTOM_CSS, PLOTLY_HANDLER_JS (467 lines)
-├── gpu_ops.py     # GPU wrappers + hybrid dispatch (157 lines)
-├── visualizer.py  # GradioVisualizer class (1204 lines)
-├── callbacks.py   # NOT extracted (tight Gradio coupling)
-└── app.py         # create_gradio_app + main() + re-exports (1183 lines)
+┌─────────────────────────────────────────┐
+│  CPU Container (modal_web.py)           │
+│  - Gradio UI + all visualization        │
+│  - compute_mask_dict() from activations │
+│  - scaledown_window=1800s (30 min)      │
+└──────────────────┬──────────────────────┘
+                   │ Modal remote call
+                   ▼
+┌─────────────────────────────────────────┐
+│  GPU Container (modal_gpu.py)           │
+│  - Lightweight: torch, numpy, pillow    │
+│  - generate_from_mask() only            │
+│  - Cold start: 5-10s                    │
+└─────────────────────────────────────────┘
 ```
 
-**M6 (cuML integration):** Complete on `feature/modal-migrate` branch:
-- `diffviews/processing/umap_backend.py` — auto-detect cuML vs umap-learn/sklearn
-- `umap.py` uses `get_umap_class()` + `to_numpy()` for portable output
-- `visualizer.py` uses `get_knn_class()` for KNN
-- `modal_app.py` has cuML deps (`cuml-cu12>=25.02`, `cupy-cuda12x>=12.0`)
-- `DIFFVIEWS_FORCE_CPU=1` env var for fallback
+### Key Files
 
-**M7 (Hybrid CPU/GPU):** Complete on `feature/modal-migrate` branch:
-- `modal_gpu.py` — GPU worker with `GPUWorker` class (generate, extract_layer, compute_umap)
-- `modal_web.py` — CPU web server, calls GPU worker via `modal.Cls.lookup()`
-- `gpu_ops.py` — `set_remote_gpu_worker()` for hybrid dispatch
+| File | Purpose |
+|------|---------|
+| `modal_web.py` | CPU web server (Gradio UI) |
+| `modal_gpu.py` | Lightweight GPU worker |
+| `diffviews/visualization/gpu_ops.py` | Hybrid dispatch (set_remote_gpu_worker) |
+| `diffviews/core/masking.py` | compute_mask_dict() for CPU-side mask |
+| `scripts/check_layer_cache.py` | Check R2 layer cache status |
 
-### What's Next
+### Remaining Tasks
 
-**Before merging to main:**
-- Revert `@feature/modal-migrate` → `@main` in modal_app.py, modal_gpu.py, modal_web.py
+- [ ] Pre-seed all layer caches to R2 with cuML embeddings
+- [ ] Benchmark cost savings (hybrid vs monolithic)
+- [ ] Investigate multi-tab session corruption (documented in README Known Issues)
 
-**Remaining tasks:**
-- Pre-seed all layer caches to R2 with cuML-generated embeddings
-- Benchmark cost savings (hybrid vs monolithic)
-- Deploy and test hybrid architecture
+### Deployment
 
-### Key Architecture Notes
+```bash
+# Hybrid (recommended)
+modal deploy modal_gpu.py  # GPU worker first
+modal deploy modal_web.py  # CPU web server
 
-- `gpu_ops.py` supports both local and remote GPU execution
-- `set_remote_gpu_worker(worker)` enables hybrid mode
-- `is_hybrid_mode()` checks if remote worker is configured
-- cuML auto-detected at import; `DIFFVIEWS_FORCE_CPU=1` forces CPU backend
-- R2 stores portable artifacts (.csv, .json, .npy); pkl is local-only
+# Force rebuild (pin commit hash in modal_web.py)
+git rev-parse HEAD | head -c 7  # get hash
+# Edit modal_web.py: @main → @<hash>
+modal deploy modal_web.py
+# Revert to @main after deploy
+```
 
-### Current Status
+### Known Issues
 
-**Branch:** `feature/modal-migrate`
-**Tests:** 165 passing
-**Lint:** 8.31/10
-
-**New files (M6/M7):**
-- `diffviews/processing/umap_backend.py` — cuML/sklearn auto-detection
-- `modal_gpu.py` — GPU worker for hybrid architecture
-- `modal_web.py` — CPU web server for hybrid architecture
-
-**Modified files:**
-- `diffviews/processing/umap.py` — uses backend for UMAP
-- `diffviews/visualization/gpu_ops.py` — hybrid dispatch support
-- `diffviews/visualization/models.py` — generic KNN type
-- `diffviews/visualization/visualizer.py` — uses backend for KNN
-- `modal_app.py` — cuML deps added
+**Multi-tab session corruption:** When multiple tabs hit the same Modal deployment, one tab's Gradio session can become stale. Workaround: switch to a different model and back. See README Known Issues.
 
 ### Commands
 
@@ -84,15 +81,9 @@ diffviews/visualization/
 # Run tests
 python -m pytest tests/ -v
 
-# Lint
-pylint diffviews/visualization/*.py diffviews/processing/umap_backend.py --disable=C0114,C0115,C0116,R0913,R0914,R0915,R0912,R0902,W0612,W0611,W0718,W1514,E0401,C0415 --max-line-length=120
+# Check layer cache on R2
+python scripts/check_layer_cache.py
 
-# Deploy monolithic (simpler, uses cuML)
-modal deploy modal_app.py
-
-# Deploy hybrid (cost optimized)
-modal deploy modal_gpu.py  # GPU worker first
-modal deploy modal_web.py  # Then CPU web server
+# Local dev
+diffviews viz --data-dir data
 ```
-
-Please read the plan file and continue with remaining tasks (pre-seed layer caches, benchmark).

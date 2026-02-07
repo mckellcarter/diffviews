@@ -189,13 +189,24 @@ data/
 
 ### Modal (serverless GPU)
 
+**Hybrid architecture (recommended):** CPU container serves UI, GPU container handles generation.
+
 ```bash
 pip install modal
+modal deploy modal_gpu.py  # GPU worker first
+modal deploy modal_web.py  # CPU web server
+```
+
+- CPU container: Gradio UI, visualization, 30 min scaledown
+- GPU container: Lightweight (torch only), 5-10s cold start, T4 GPU
+- Cost optimized: GPU only spins up for generation
+
+**Monolithic (simpler, for dev):**
+
+```bash
 modal serve modal_app.py   # dev
 modal deploy modal_app.py  # prod
 ```
-
-Single A10G container, data from R2, scales to zero when idle.
 
 ### Local
 
@@ -277,6 +288,18 @@ Adapters can register via Python entry points:
 imagenet-64 = "my_package.adapters:ImageNetAdapter"
 sdxl = "my_package.adapters:SDXLAdapter"
 ```
+
+## Known Issues
+
+### Multi-tab session corruption (Modal deployment)
+
+When running multiple browser tabs against the same Modal deployment, one tab's Gradio session can become stale or corrupted. Symptoms include:
+- Hover preview stuck on a single image
+- Point selection not responding
+
+**Workaround**: Switch to a different model in the affected tab, then switch back. This forces a full state reset and restores functionality.
+
+This appears to be a Gradio session edge case rather than a backend state issue. Low priority unless it becomes frequent.
 
 ## License
 
