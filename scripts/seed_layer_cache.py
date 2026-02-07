@@ -33,7 +33,7 @@ gpu_image = (
     )
     .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
     .pip_install("umap-learn>=0.5.0")
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@933a9d6")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@0503860")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
@@ -116,7 +116,7 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
         # Check which are fully cached on R2 (csv + npy required)
         def layer_complete(model: str, layer: str) -> bool:
             """Check if layer has all required files on R2."""
-            for ext in [".csv", ".json", ".npy"]:
+            for ext in [".csv", ".json", ".npy", ".pkl"]:
                 key = f"data/{model}/layer_cache/{layer}{ext}"
                 try:
                     r2_cache._client.head_object(Bucket=r2_cache._bucket, Key=key)
@@ -139,30 +139,58 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
             results[model_name] = {"cached": cached, "missing": missing, "action": "dry_run"}
             continue
 
-        # Seed missing layers using existing method
+        # Seed missing layers with retry until complete
         seeded = []
+        failed = []
         cache_dir = model_data.data_dir / "embeddings" / "layer_cache"
+        max_retries = 3
+
         for layer_name in missing:
             print(f"\n  Seeding {layer_name}...")
-            success = visualizer.recompute_layer_umap(model_name, layer_name)
-            if success:
-                # Sync upload (recompute_layer_umap uses async which may not complete)
+
+            for attempt in range(max_retries):
+                # Check if already complete (from previous attempt)
+                if layer_complete(model_name, layer_name):
+                    print(f"  ✓ {layer_name} verified complete")
+                    seeded.append(layer_name)
+                    break
+
+                if attempt > 0:
+                    print(f"  Retry {attempt + 1}/{max_retries}...")
+
+                # Extract and compute UMAP
+                success = visualizer.recompute_layer_umap(model_name, layer_name)
+                if not success:
+                    print(f"  ✗ Extraction/UMAP failed")
+                    continue
+
+                # Sync upload all files
                 csv_path = cache_dir / f"{layer_name}.csv"
                 if csv_path.exists():
                     print(f"  Uploading to R2 (sync)...")
                     r2_cache.upload_layer(model_name, layer_name, cache_dir)
-                print(f"  ✓ {layer_name} seeded")
-                seeded.append(layer_name)
+
+                # Verify upload complete
+                if layer_complete(model_name, layer_name):
+                    print(f"  ✓ {layer_name} seeded and verified")
+                    seeded.append(layer_name)
+                    break
+                else:
+                    print(f"  ⚠ Upload incomplete, will retry...")
             else:
-                print(f"  ✗ {layer_name} failed")
+                print(f"  ✗ {layer_name} failed after {max_retries} attempts")
+                failed.append(layer_name)
 
         vol.commit()
-        results[model_name] = {"cached": cached, "seeded": seeded}
+        results[model_name] = {"cached": cached, "seeded": seeded, "failed": failed}
 
     print(f"\n{'='*60}")
     print("Summary:")
     for model, info in results.items():
-        print(f"  {model}: cached={info.get('cached', [])}, seeded={info.get('seeded', info.get('missing', []))}")
+        line = f"  {model}: cached={len(info.get('cached', []))}, seeded={len(info.get('seeded', []))}"
+        if info.get('failed'):
+            line += f", FAILED={info['failed']}"
+        print(line)
 
     return results
 
