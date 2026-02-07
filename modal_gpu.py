@@ -167,21 +167,35 @@ class GPUWorker:
             finally:
                 masker.remove_hooks()
 
-        # Convert tensors to numpy for serialization
-        return self._serialize_result(result)
+        # Convert tensors to numpy for serialization (preserve tuple structure)
+        return self._serialize_tuple(result)
 
-    def _serialize_result(self, result: Dict) -> Dict:
-        """Convert torch tensors to numpy for Modal serialization."""
+    def _serialize_tuple(self, result: tuple) -> list:
+        """Convert torch tensors in tuple to numpy for Modal serialization."""
+        import numpy as np
+
+        serialized = []
+        for value in result:
+            if hasattr(value, "cpu"):  # torch tensor
+                serialized.append(value.cpu().numpy())
+            elif isinstance(value, list) and value and hasattr(value[0], "cpu"):
+                serialized.append([v.cpu().numpy() for v in value])
+            elif isinstance(value, dict):
+                serialized.append(self._serialize_dict(value))
+            else:
+                serialized.append(value)
+        return serialized
+
+    def _serialize_dict(self, d: dict) -> dict:
+        """Convert torch tensors in dict to numpy."""
         import numpy as np
 
         serialized = {}
-        for key, value in result.items():
-            if hasattr(value, "cpu"):  # torch tensor
+        for key, value in d.items():
+            if hasattr(value, "cpu"):
                 serialized[key] = value.cpu().numpy()
             elif isinstance(value, list) and value and hasattr(value[0], "cpu"):
                 serialized[key] = [v.cpu().numpy() for v in value]
-            elif isinstance(value, dict):
-                serialized[key] = self._serialize_result(value)
             else:
                 serialized[key] = value
         return serialized

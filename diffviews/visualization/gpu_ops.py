@@ -117,21 +117,48 @@ def _generate_on_gpu(
 
 
 def _deserialize_result(result):
-    """Convert numpy arrays from remote GPU worker back to torch tensors."""
+    """Convert numpy arrays from remote GPU worker back to torch tensors.
+
+    Handles list (serialized tuple) or dict structures.
+    """
     if result is None:
         return None
 
     import torch
     import numpy as np
 
+    # Handle list (serialized tuple from generate)
+    if isinstance(result, list):
+        deserialized = []
+        for value in result:
+            if isinstance(value, np.ndarray):
+                deserialized.append(torch.from_numpy(value))
+            elif isinstance(value, list) and value and isinstance(value[0], np.ndarray):
+                deserialized.append([torch.from_numpy(v) for v in value])
+            elif isinstance(value, dict):
+                deserialized.append(_deserialize_dict(value))
+            else:
+                deserialized.append(value)
+        return tuple(deserialized)
+
+    # Handle dict
+    if isinstance(result, dict):
+        return _deserialize_dict(result)
+
+    return result
+
+
+def _deserialize_dict(d):
+    """Convert numpy arrays in dict back to torch tensors."""
+    import torch
+    import numpy as np
+
     deserialized = {}
-    for key, value in result.items():
+    for key, value in d.items():
         if isinstance(value, np.ndarray):
             deserialized[key] = torch.from_numpy(value)
         elif isinstance(value, list) and value and isinstance(value[0], np.ndarray):
             deserialized[key] = [torch.from_numpy(v) for v in value]
-        elif isinstance(value, dict):
-            deserialized[key] = _deserialize_result(value)
         else:
             deserialized[key] = value
     return deserialized
