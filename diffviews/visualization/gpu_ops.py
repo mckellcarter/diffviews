@@ -7,7 +7,7 @@ that can be overridden by HF Spaces @spaces.GPU decorator or Modal.
 Supports hybrid CPU/GPU mode via remote GPU worker.
 """
 
-from diffviews.core.masking import ActivationMasker
+from diffviews.core.masking import ActivationMasker, compute_mask_dict
 from diffviews.core.generator import generate_with_mask_multistep
 
 
@@ -54,15 +54,47 @@ def _generate_on_gpu(
 ):
     """Run masked generation on GPU.
 
-    In hybrid mode, dispatches to remote GPU worker.
+    In hybrid mode: computes mask on CPU, dispatches to remote GPU worker.
     Otherwise, runs locally with _app_visualizer.
     """
-    # Hybrid mode: dispatch to remote GPU worker
+    # Hybrid mode: compute mask on CPU, send to GPU
     if _remote_gpu_worker is not None:
-        print(f"[gpu_ops] Dispatching generation to remote GPU worker...")
-        result = _remote_gpu_worker.generate.remote(
+        visualizer = _app_visualizer
+        model_data = visualizer.get_model(model_name)
+        if model_data is None or model_data.activations is None:
+            print(f"[gpu_ops] Model {model_name} not loaded or no activations")
+            return None
+
+        # Get layer shapes (needed for mask computation)
+        layers = sorted(model_data.umap_params.get("layers", ["encoder_bottleneck", "midblock"]))
+        if not model_data.layer_shapes:
+            # Fetch from GPU worker if not cached locally
+            print(f"[gpu_ops] Fetching layer shapes from GPU...")
+            model_data.layer_shapes = _remote_gpu_worker.get_layer_shapes.remote(model_name)
+
+        if not model_data.layer_shapes:
+            print(f"[gpu_ops] No layer shapes available")
+            return None
+
+        # Compute mask on CPU (lightweight, ~32KB)
+        print(f"[gpu_ops] Computing mask on CPU...")
+        mask_dict = compute_mask_dict(
+            model_data.activations,
+            list(all_neighbors),
+            model_data.layer_shapes,
+            layers,
+        )
+        if not mask_dict:
+            print(f"[gpu_ops] Failed to compute mask")
+            return None
+
+        # Serialize mask to nested lists for Modal
+        mask_serialized = {k: v.tolist() for k, v in mask_dict.items()}
+
+        print(f"[gpu_ops] Dispatching to GPU worker (mask: {list(mask_dict.keys())})")
+        result = _remote_gpu_worker.generate_from_mask.remote(
             model_name=model_name,
-            neighbor_indices=list(all_neighbors),
+            mask_dict=mask_serialized,
             class_label=int(class_label),
             n_steps=int(n_steps),
             m_steps=int(m_steps),
@@ -71,9 +103,8 @@ def _generate_on_gpu(
             guidance=float(guidance),
             noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
             extract_layers=extract_layers if can_project else None,
-            can_project=can_project,
+            return_trajectory=can_project,
         )
-        # Convert numpy arrays back to torch tensors if needed
         return _deserialize_result(result)
 
     # Local mode: run on this machine's GPU
@@ -167,17 +198,15 @@ def _deserialize_dict(d):
 def _extract_layer_on_gpu(model_name, layer_name, batch_size=32):
     """Extract layer activations on GPU.
 
-    In hybrid mode, dispatches to remote GPU worker.
+    In hybrid mode: not supported (lightweight GPU worker doesn't have extract).
+    Pre-seed all layers to R2 to avoid this.
     Otherwise, runs locally with _app_visualizer.
     """
-    # Hybrid mode: dispatch to remote GPU worker
+    # Hybrid mode: lightweight GPU worker doesn't support extraction
     if _remote_gpu_worker is not None:
-        print(f"[gpu_ops] Dispatching layer extraction to remote GPU worker...")
-        return _remote_gpu_worker.extract_layer.remote(
-            model_name=model_name,
-            layer_name=layer_name,
-            batch_size=batch_size,
-        )
+        print(f"[gpu_ops] Layer extraction not supported in hybrid mode.")
+        print(f"[gpu_ops] Pre-seed layer '{layer_name}' to R2 to use it.")
+        return None
 
     # Local mode: run on this machine's GPU
     return _app_visualizer.extract_layer_activations(model_name, layer_name, batch_size)
