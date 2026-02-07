@@ -34,6 +34,7 @@ gpu_image = (
         "scipy>=1.7.0",
         "plotly>=5.18.0",
         "matplotlib>=3.5.0",
+        "boto3>=1.28.0",
         # cuML GPU acceleration
         extra_index_url="https://pypi.nvidia.com",
     )
