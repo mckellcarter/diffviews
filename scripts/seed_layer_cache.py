@@ -33,7 +33,7 @@ gpu_image = (
     )
     .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
     .pip_install("umap-learn>=0.5.0")
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@0503860")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@ce342f0")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
@@ -149,26 +149,39 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
             print(f"\n  Seeding {layer_name}...")
 
             for attempt in range(max_retries):
-                # Check if already complete (from previous attempt)
+                # Check if already complete on R2 (from previous attempt)
                 if layer_complete(model_name, layer_name):
-                    print(f"  ✓ {layer_name} verified complete")
+                    print(f"  ✓ {layer_name} verified complete on R2")
                     seeded.append(layer_name)
                     break
 
                 if attempt > 0:
                     print(f"  Retry {attempt + 1}/{max_retries}...")
 
-                # Extract and compute UMAP
+                # Check if local cache is incomplete - if so, delete it to force re-extraction
+                local_files = [cache_dir / f"{layer_name}{ext}" for ext in [".csv", ".json", ".npy", ".pkl"]]
+                existing = [f for f in local_files if f.exists()]
+                if existing and len(existing) < 4:
+                    print(f"  Clearing incomplete local cache ({len(existing)}/4 files)...")
+                    for f in existing:
+                        f.unlink()
+
+                # Extract and compute UMAP (will recompute since local cache cleared)
                 success = visualizer.recompute_layer_umap(model_name, layer_name)
                 if not success:
                     print(f"  ✗ Extraction/UMAP failed")
                     continue
 
+                # Verify all local files exist before upload
+                local_complete = all(f.exists() for f in local_files)
+                if not local_complete:
+                    missing_local = [f.name for f in local_files if not f.exists()]
+                    print(f"  ⚠ Missing local files: {missing_local}")
+                    continue
+
                 # Sync upload all files
-                csv_path = cache_dir / f"{layer_name}.csv"
-                if csv_path.exists():
-                    print(f"  Uploading to R2 (sync)...")
-                    r2_cache.upload_layer(model_name, layer_name, cache_dir)
+                print(f"  Uploading to R2 (sync)...")
+                r2_cache.upload_layer(model_name, layer_name, cache_dir)
 
                 # Verify upload complete
                 if layer_complete(model_name, layer_name):
