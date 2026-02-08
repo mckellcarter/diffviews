@@ -33,7 +33,7 @@ gpu_image = (
     )
     .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
     .pip_install("umap-learn>=0.5.0")
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@0b49797")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
