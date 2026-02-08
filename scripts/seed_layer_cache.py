@@ -33,7 +33,7 @@ gpu_image = (
     )
     .pip_install("cuml-cu12>=25.02", "cupy-cuda12x>=12.0")
     .pip_install("umap-learn>=0.5.0")
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@3dc6603")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@0b49797")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
@@ -181,8 +181,7 @@ def seed_layers(model_filter: str = None, layer_filter: str = None, dry_run: boo
                 )
 
                 # Build df with UMAP coords
-                import pandas as pd
-                new_df = pd.read_csv(model_data.data_dir / "metadata" / "activation_metadata.csv")
+                new_df = model_data.metadata_df.copy()
                 new_df["umap_x"] = embeddings[:, 0]
                 new_df["umap_y"] = embeddings[:, 1]
                 umap_params = {"layers": [layer_name], "n_neighbors": 15, "min_dist": 0.1}
