@@ -80,3 +80,22 @@ def move_to_device(model, device: str):
             return model.to('cpu').float()
     else:
         return model.to(device)
+
+
+def clear_cache(device: str = None):
+    """
+    Clear device memory cache and run garbage collection.
+
+    Args:
+        device: Device string ('cuda', 'mps', 'cpu', or None for all)
+    """
+    import gc
+    gc.collect()
+
+    if device is None or device == 'mps' or 'mps' in str(device):
+        if hasattr(torch, 'mps') and hasattr(torch.mps, 'empty_cache'):
+            torch.mps.empty_cache()
+
+    if device is None or device == 'cuda' or 'cuda' in str(device):
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
