@@ -85,6 +85,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         interactive=True,
                         elem_id="layer-dropdown",
                     )
+                with gr.Row(elem_id="view-mode-row"):
+                    gr.Markdown("**View**", elem_id="view-label")
+                    view_mode_radio = gr.Radio(
+                        choices=["2D", "3D"],
+                        value="2D",
+                        show_label=False,
+                        interactive=True,
+                        elem_id="view-mode-radio",
+                    )
                 _default_layer = visualizer.get_default_layer_label(visualizer.default_model) if visualizer.default_model else None
                 status_text = gr.Markdown(
                     f"Showing {initial_sample_count} samples"
@@ -746,6 +755,38 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             ],
         )
 
+        # --- View mode (2D/3D) handler ---
+        def on_view_mode_change(view_mode, model_name):
+            """Handle 2D/3D view mode toggle."""
+            model_data = visualizer.get_model(model_name)
+            if model_data is None:
+                return gr.update(), "No model loaded"
+
+            if view_mode == "3D":
+                # Switch to 3D mode (compute if needed)
+                success = visualizer.compute_and_load_aligned_3d(model_name)
+                if not success:
+                    # Failed to compute/load 3D, stay in 2D
+                    return (
+                        gr.update(),
+                        "3D mode unavailable (need multi-sigma data)"
+                    )
+                mode_str = "3D"
+            else:
+                # Switch back to 2D
+                visualizer.switch_to_2d_mode(model_name)
+                mode_str = "2D"
+
+            fig = visualizer.create_umap_figure(model_name)
+            n = len(model_data.df)
+            return fig, f"Showing {n} samples ({model_name}) — {mode_str} view"
+
+        view_mode_radio.change(
+            on_view_mode_change,
+            inputs=[view_mode_radio, current_model],
+            outputs=[umap_plot, status_text],
+        )
+
         # Note: neighbor display is updated directly in click/suggest handlers
         # No need for state.change() listeners which can cause duplicate events
 
@@ -845,7 +886,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Get layers for trajectory extraction
             extract_layers = sorted(model_data.umap_params.get("layers", []))
-            can_project = model_data.umap_reducer is not None and len(extract_layers) > 0
+            # Can project if we have a UMAP reducer (2D) or aligned embeddings (3D)
+            can_project = (
+                (model_data.umap_reducer is not None or model_data.is_3d_mode)
+                and len(extract_layers) > 0
+            )
 
             # Run generation on GPU
             result = _generate_on_gpu(
@@ -879,25 +924,31 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
                 sigmas.append(sigma)
 
-            # Project trajectory through UMAP
+            # Project trajectory through UMAP (2D or 3D mode)
             traj_coords = []
-            if trajectory_acts and model_data.umap_reducer:
-                # Pin UMAP random_state for deterministic transform
-                model_data.umap_reducer.random_state = 42
-                for i, act in enumerate(trajectory_acts):
-                    try:
-                        # Scale if scaler exists
-                        if model_data.umap_scaler is not None:
-                            act = model_data.umap_scaler.transform(act)
-                        # PCA pre-reduction if used during fitting
-                        if model_data.umap_pca is not None:
-                            act = model_data.umap_pca.transform(act)
-                        # Project to 2D
-                        coords = model_data.umap_reducer.transform(act)
-                        sigma = sigmas[i] if i < len(sigmas) else 0.0
-                        traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
-                    except Exception as e:
-                        print(f"[Trajectory] Failed to project step {i}: {e}")
+            if trajectory_acts:
+                if model_data.is_3d_mode:
+                    # 3D mode: use aligned UMAP projection
+                    traj_coords = visualizer.project_trajectory_3d(
+                        model_name, trajectory_acts, sigmas
+                    )
+                elif model_data.umap_reducer is not None:
+                    # 2D mode: standard UMAP transform
+                    model_data.umap_reducer.random_state = 42
+                    for i, act in enumerate(trajectory_acts):
+                        try:
+                            # Scale if scaler exists
+                            if model_data.umap_scaler is not None:
+                                act = model_data.umap_scaler.transform(act)
+                            # PCA pre-reduction if used during fitting
+                            if model_data.umap_pca is not None:
+                                act = model_data.umap_pca.transform(act)
+                            # Project to 2D
+                            coords = model_data.umap_reducer.transform(act)
+                            sigma = sigmas[i] if i < len(sigmas) else 0.0
+                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
+                        except Exception as e:
+                            print(f"[Trajectory] Failed to project step {i}: {e}")
 
             # Append new trajectory to existing list
             all_trajectories = list(existing_traj)

@@ -48,3 +48,11 @@ class ModelData:
     default_umap_params: Optional[Dict] = None
     default_nn_model: Any = None  # NearestNeighbors (sklearn or cuML)
     current_layer: str = "default"
+
+    # AlignedUMAP 3D mode fields
+    is_3d_mode: bool = False
+    sigma_levels: list = field(default_factory=list)
+    embeddings_per_sigma: Dict[float, np.ndarray] = field(default_factory=dict)
+    nn_models_per_sigma: Dict[float, Any] = field(default_factory=dict)
+    aligned_mapper: Any = None
+    umap_pkl_path: Optional[Path] = None  # For lazy loading

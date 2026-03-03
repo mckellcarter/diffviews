@@ -36,23 +36,29 @@ function sendData(box, data) {
     box.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-// Click handler - immediate
+// Click handler - immediate (supports 2D and 3D plots)
 function handlePlotlyClick(data) {
     if (!data?.points?.length) return;
     const point = data.points[0];
-    sendData(clickBox, {
+    const payload = {
         pointIndex: point.customdata,
         x: point.x,
         y: point.y,
         curveNumber: point.curveNumber
-    });
+    };
+    // Include z for 3D plots
+    if (typeof point.z !== 'undefined') {
+        payload.z = point.z;
+    }
+    sendData(clickBox, payload);
 }
 
-// Hover handler - debounced
+// Hover handler - debounced (supports 2D and 3D plots)
 function handlePlotlyHover(data) {
     if (!data?.points?.length) return;
     const point = data.points[0];
     const traceName = point.data.name || '';
+    const is3D = typeof point.z !== 'undefined';
 
     // Trajectory point hover
     const trajMatch = traceName.match(/^trajectory_(\d+)$/);
@@ -64,32 +70,39 @@ function handlePlotlyHover(data) {
         clearTimeout(hoverTimeout);
         hoverTimeout = setTimeout(() => {
             lastHoverKey = hoverKey;
-            sendData(hoverBox, {
+            const payload = {
                 type: 'trajectory',
                 trajIdx: trajIdx,
                 stepIdx: stepIdx,
                 x: point.x,
                 y: point.y,
                 sigma: point.text
-            });
+            };
+            if (is3D) payload.z = point.z;
+            sendData(hoverBox, payload);
         }, 100);
         return;
     }
 
-    // Only main data trace (curve 0)
-    if (point.curveNumber !== 0) return;
+    // For 3D plots, accept any sigma slice trace (not just curve 0)
+    // In 3D mode, traces are named "σ=X.XX" for data points
+    const is3DDataTrace = is3D && traceName.startsWith('σ=');
+    if (!is3DDataTrace && point.curveNumber !== 0) return;
+
     const idx = point.customdata;
     const hoverKey = `sample_${idx}`;
     if (hoverKey === lastHoverKey) return;
     clearTimeout(hoverTimeout);
     hoverTimeout = setTimeout(() => {
         lastHoverKey = hoverKey;
-        sendData(hoverBox, {
+        const payload = {
             type: 'sample',
             pointIndex: idx,
             x: point.x,
             y: point.y
-        });
+        };
+        if (is3D) payload.z = point.z;
+        sendData(hoverBox, payload);
     }, 100);
 }
 
