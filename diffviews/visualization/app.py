@@ -85,8 +85,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         interactive=True,
                         elem_id="layer-dropdown",
                     )
-                with gr.Row(elem_id="view-mode-row"):
-                    gr.Markdown("**View**", elem_id="view-label")
                     view_mode_radio = gr.Radio(
                         choices=["2D", "3D"],
                         value="2D",
@@ -321,13 +319,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 traj_idx = hover_data.get("trajIdx", 0)
                 sigma = hover_data.get("sigma", "?")
 
-                if traj_idx and step_idx is not None: 
+                if traj_idx and step_idx is not None:
                     step_idx = int(step_idx)
                     traj_idx = int(traj_idx)
 
                 if intermediates is not None:
                     step_idx = int(step_idx)
-                    if 0 <= step_idx-1 < len(intermediates[traj_idx]):
+                    traj_len = len(intermediates[traj_idx])
+                    # Handle special case: -1 means last step
+                    if step_idx == -1:
+                        step_idx = traj_len  # Convert to 1-indexed last step
+                    if 0 <= step_idx-1 < traj_len:
                         img, stored_sigma = intermediates[traj_idx][step_idx-1]
                         details = f"**Trajectory {traj_idx + 1}, Step {step_idx}**\n\n"
                         details += f"σ = {stored_sigma:.1f}\n\n"

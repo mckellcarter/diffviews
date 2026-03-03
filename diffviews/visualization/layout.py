@@ -60,12 +60,15 @@ function handlePlotlyHover(data) {
     const traceName = point.data.name || '';
     const is3D = typeof point.z !== 'undefined';
 
-    // Trajectory point hover
-    const trajMatch = traceName.match(/^trajectory_(\d+)$/);
+    // Trajectory point hover (matches trajectory_N, traj_start_N, traj_end_N)
+    const trajMatch = traceName.match(/^(?:trajectory|traj_start|traj_end)_(\d+)$/);
     if (trajMatch) {
         const trajIdx = parseInt(trajMatch[1]);
-        const stepIdx = point.customdata;
-        const hoverKey = `traj_${trajIdx}_${stepIdx}`;
+        // For start/end markers, stepIdx comes from customdata or infer from name
+        let stepIdx = point.customdata;
+        if (traceName.startsWith('traj_start_')) stepIdx = 1;
+        if (traceName.startsWith('traj_end_')) stepIdx = -1;  // Signal last step
+        const hoverKey = `traj_${trajIdx}_${traceName}_${stepIdx}`;
         if (hoverKey === lastHoverKey) return;
         clearTimeout(hoverTimeout);
         hoverTimeout = setTimeout(() => {
