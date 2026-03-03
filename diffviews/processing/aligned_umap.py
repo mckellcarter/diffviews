@@ -219,7 +219,7 @@ def save_aligned_embeddings(
             # Metadata is assumed to be ordered consistently
             if i < len(metadata_df):
                 meta_row = metadata_df.iloc[i]
-                for col in ['class_label', 'class_name', 'image_path']:
+                for col in ['sample_id', 'class_label', 'class_name', 'image_path', 'conditioning_sigma']:
                     if col in meta_row:
                         row[col] = meta_row[col]
             rows.append(row)
