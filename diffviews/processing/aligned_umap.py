@@ -189,7 +189,6 @@ def save_aligned_embeddings(
     embeddings_per_sigma: Dict[float, np.ndarray],
     metadata_df: pd.DataFrame,
     output_dir: Path,
-    aligned_mapper: Any,
     scaler: Optional[StandardScaler],
     pca_reducer: Optional[PCA],
     nn_models: Dict[float, NearestNeighbors],
@@ -202,7 +201,7 @@ def save_aligned_embeddings(
     Creates:
         - embeddings.csv: Long-form CSV with sigma column
         - embeddings.json: Parameters
-        - embeddings.pkl: Pickled models
+        - embeddings.pkl: Pickled models (scaler, pca, nn_models, embeddings)
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -242,11 +241,10 @@ def save_aligned_embeddings(
         json.dump(params, f, indent=2)
     print(f"Saved parameters to {json_path}")
 
-    # Save models
+    # Save models (skip aligned_mapper - contains unpicklable numba objects)
     pkl_path = output_dir / 'embeddings.pkl'
     with open(pkl_path, 'wb') as f:
         pickle.dump({
-            'aligned_mapper': aligned_mapper,
             'scaler': scaler,
             'pca_reducer': pca_reducer,
             'nn_models': nn_models,

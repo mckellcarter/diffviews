@@ -1442,7 +1442,7 @@ class GradioVisualizer:
 
         # Compute AlignedUMAP
         try:
-            embeddings_per_sigma, aligned_mapper, scaler, pca, nn_models, sigma_levels = \
+            embeddings_per_sigma, _, scaler, pca, nn_models, sigma_levels = \
                 compute_aligned_umap(
                     model_data.activations,
                     sigma_labels,
@@ -1468,7 +1468,7 @@ class GradioVisualizer:
         }
         save_aligned_embeddings(
             embeddings_per_sigma, base_meta, aligned_dir,
-            aligned_mapper, scaler, pca, nn_models, sigma_levels, umap_params
+            scaler, pca, nn_models, sigma_levels, umap_params
         )
 
         # Load into model
@@ -1492,7 +1492,6 @@ class GradioVisualizer:
         model_data.sigma_levels = pkl_data["sigma_levels"]
         model_data.embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
         model_data.nn_models_per_sigma = pkl_data["nn_models"]
-        model_data.aligned_mapper = pkl_data["aligned_mapper"]
         model_data.umap_scaler = pkl_data["scaler"]
         model_data.umap_pca = pkl_data["pca_reducer"]
         model_data.umap_params = params
@@ -1521,7 +1520,6 @@ class GradioVisualizer:
             model_data.sigma_levels = []
             model_data.embeddings_per_sigma = {}
             model_data.nn_models_per_sigma = {}
-            model_data.aligned_mapper = None
             return True
         return False
 
