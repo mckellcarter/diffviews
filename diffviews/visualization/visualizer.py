@@ -1468,13 +1468,17 @@ class GradioVisualizer:
         n_samples = len(embeddings_per_sigma[sigma_levels[0]])
         base_meta = df.iloc[:n_samples].copy()
 
-        # Save to cache
+        # Save to cache - use current_layer for layers, not inherited umap_params
+        if model_data.current_layer and model_data.current_layer != "default":
+            layer_list = [model_data.current_layer]
+        else:
+            layer_list = model_data.umap_params.get("layers", ["encoder_bottleneck", "midblock"])
         umap_params = {
             "n_neighbors": 15,
             "min_dist": 0.1,
             "alignment_regularisation": 0.01,
             "pca_components": 50,
-            "layers": model_data.umap_params.get("layers", []),
+            "layers": layer_list,
         }
         save_aligned_embeddings(
             embeddings_per_sigma, base_meta, aligned_dir,
