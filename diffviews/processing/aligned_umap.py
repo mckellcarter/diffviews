@@ -30,7 +30,7 @@ def compute_aligned_umap(
     normalize: bool = True,
     pca_components: Optional[int] = 50,
     random_state: Optional[int] = 42,
-) -> Tuple[Dict[float, np.ndarray], Any, StandardScaler, Optional[PCA], Dict[float, NearestNeighbors], List[float]]:
+) -> Tuple[Dict[float, np.ndarray], Any, StandardScaler, Optional[PCA], Dict[float, NearestNeighbors], List[float], Dict[float, np.ndarray]]:
     """
     Compute AlignedUMAP across sigma levels.
 
@@ -53,6 +53,7 @@ def compute_aligned_umap(
         pca_reducer: Fitted PCA (or None)
         nn_models: {sigma: NearestNeighbors} for trajectory projection
         sigma_levels: Sorted sigma levels (descending)
+        sigma_indices: {sigma: original_indices} mapping to activation rows
     """
     # Sort sigmas descending (high noise to low noise)
     unique_sigmas = np.unique(sigma_labels)
@@ -124,7 +125,7 @@ def compute_aligned_umap(
         nn.fit(datasets[i])
         nn_models[sigma] = nn
 
-    return embeddings_per_sigma, aligned_mapper, scaler, pca_reducer, nn_models, sigma_levels
+    return embeddings_per_sigma, aligned_mapper, scaler, pca_reducer, nn_models, sigma_levels, sigma_indices
 
 
 def project_aligned_trajectory_point(
@@ -193,13 +194,14 @@ def save_aligned_embeddings(
     pca_reducer: Optional[PCA],
     nn_models: Dict[float, NearestNeighbors],
     sigma_levels: List[float],
+    sigma_indices: Dict[float, np.ndarray],
     umap_params: dict,
 ):
     """
     Save AlignedUMAP results to disk.
 
     Creates:
-        - embeddings.csv: Long-form CSV with sigma column
+        - embeddings.csv: Long-form CSV with sigma column + original_idx
         - embeddings.json: Parameters
         - embeddings.pkl: Pickled models (scaler, pca, nn_models, embeddings)
     """
@@ -207,16 +209,16 @@ def save_aligned_embeddings(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build long-form CSV: one row per sample per sigma
-    # Assumes metadata_df has one row per sample (not per sigma)
     n_samples = len(embeddings_per_sigma[sigma_levels[0]])
 
     rows = []
     for sigma in sigma_levels:
         emb = embeddings_per_sigma[sigma]
+        orig_indices = sigma_indices[sigma]
         for i in range(n_samples):
-            row = {'sigma': sigma, 'umap_x': emb[i, 0], 'umap_y': emb[i, 1]}
-            # Add metadata from the corresponding row
-            # Metadata is assumed to be ordered consistently
+            orig_idx = int(orig_indices[i])
+            row = {'sigma': sigma, 'umap_x': emb[i, 0], 'umap_y': emb[i, 1], 'original_idx': orig_idx}
+            # Add metadata from the corresponding row in original order
             if i < len(metadata_df):
                 meta_row = metadata_df.iloc[i]
                 for col in ['sample_id', 'class_label', 'class_name', 'image_path', 'conditioning_sigma']:

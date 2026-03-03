@@ -875,8 +875,14 @@ class GradioVisualizer:
             if model_data.adapter is None:
                 return None
 
+        # In 3D mode, map neighbor_indices to original activation indices
+        if model_data.is_3d_mode and "original_idx" in model_data.df.columns:
+            activation_indices = model_data.df.iloc[neighbor_indices]["original_idx"].values.astype(int)
+        else:
+            activation_indices = neighbor_indices
+
         # Average neighbor activations in high-D space
-        neighbor_acts = model_data.activations[neighbor_indices]  # (N, D)
+        neighbor_acts = model_data.activations[activation_indices]  # (N, D)
         center_activation = np.mean(neighbor_acts, axis=0, keepdims=True)  # (1, D)
 
         # Split into per-layer activations (MUST be sorted order!)
@@ -1446,7 +1452,7 @@ class GradioVisualizer:
 
         # Compute AlignedUMAP
         try:
-            embeddings_per_sigma, _, scaler, pca, nn_models, sigma_levels = \
+            embeddings_per_sigma, _, scaler, pca, nn_models, sigma_levels, sigma_indices = \
                 compute_aligned_umap(
                     model_data.activations,
                     sigma_labels,
@@ -1472,7 +1478,7 @@ class GradioVisualizer:
         }
         save_aligned_embeddings(
             embeddings_per_sigma, base_meta, aligned_dir,
-            scaler, pca, nn_models, sigma_levels, umap_params
+            scaler, pca, nn_models, sigma_levels, sigma_indices, umap_params
         )
 
         # Load into model
