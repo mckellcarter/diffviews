@@ -312,10 +312,31 @@ CUSTOM_CSS = """
         font-size: 0.9rem !important;
     }
 
-    #model-dropdown, #layer-dropdown {
+    #model-dropdown {
         flex: 1 1 auto !important;
         min-width: 0 !important;
         width: auto !important;
+    }
+
+    #layer-dropdown {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        max-width: 140px !important;
+    }
+
+    /* 2D/3D view toggle - compact inline */
+    #view-mode-radio {
+        flex: 0 0 auto !important;
+        min-width: 70px !important;
+    }
+
+    #view-mode-radio .wrap {
+        gap: 0.25rem !important;
+    }
+
+    #view-mode-radio label {
+        padding: 0.2rem 0.4rem !important;
+        font-size: 0.8rem !important;
     }
 
     /* KNN row styling */
