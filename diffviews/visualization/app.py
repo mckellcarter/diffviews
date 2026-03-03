@@ -367,8 +367,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
-            details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                details += f"σ = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+            else:
+                details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
             return img, details
 
@@ -413,8 +414,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 if "class_label" in sample:
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    details += f"σ = {sample['conditioning_sigma']:.1f}<br>"
-                details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    details += f"σ = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                else:
+                    details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
                 # Build updated Plotly figure with selection (preserve trajectory)
                 fig = visualizer.create_umap_figure(
