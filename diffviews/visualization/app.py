@@ -544,14 +544,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             Single-model-at-a-time: unloads current model, loads new one.
             """
             if new_model_name == cur_model:
-                return (gr.update(),) * 24
+                return (gr.update(),) * 25
 
             if not visualizer.is_valid_model(new_model_name):
-                return (gr.update(),) * 24
+                return (gr.update(),) * 25
 
             # Load new model (unloads current automatically)
             if not visualizer._ensure_model_loaded(new_model_name):
-                return (gr.update(),) * 24
+                return (gr.update(),) * 25
 
             model_data = visualizer.get_model(new_model_name)
             fig = visualizer.create_umap_figure(new_model_name)
@@ -582,6 +582,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 [],                                # neighbor_gallery
                 "No neighbors selected",           # neighbor_info
                 gr.update(choices=visualizer.get_layer_choices(new_model_name), value=visualizer.get_default_layer_label(new_model_name)),  # layer_dropdown
+                "2D",                              # view_mode_radio (reset to 2D)
             )
 
         # Wire up events
@@ -678,6 +679,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     neighbor_gallery,
                     neighbor_info,
                     layer_dropdown,
+                    view_mode_radio,
                 ],
             )
 
