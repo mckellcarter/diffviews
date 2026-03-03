@@ -85,6 +85,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                         interactive=True,
                         elem_id="layer-dropdown",
                     )
+                with gr.Row(elem_id="view-row"):
+                    gr.Markdown("**View**", elem_id="view-label")
                     view_mode_radio = gr.Radio(
                         choices=["2D", "3D"],
                         value="2D",

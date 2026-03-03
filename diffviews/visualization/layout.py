@@ -286,8 +286,8 @@ CUSTOM_CSS = """
         margin: 0.25rem 0 0.5rem 0 !important;
     }
 
-    /* Model selector row: label + dropdown inline */
-    #model-row, #layer-row {
+    /* Model/Layer/View selector rows: label + control inline */
+    #model-row, #layer-row, #view-row {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
@@ -296,47 +296,35 @@ CUSTOM_CSS = """
         margin-bottom: 0 !important;
     }
 
-    #model-row > div, #layer-row > div {
+    #model-row > div, #layer-row > div, #view-row > div {
         flex: 0 0 auto !important;
     }
 
-    #model-label, #layer-label {
+    #model-label, #layer-label, #view-label {
         flex: 0 0 auto !important;
         width: auto !important;
         min-width: 0 !important;
         max-width: 60px !important;
     }
 
-    #model-label p, #layer-label p {
+    #model-label p, #layer-label p, #view-label p {
         margin: 0 !important;
         font-size: 0.9rem !important;
     }
 
-    #model-dropdown {
+    #model-dropdown, #layer-dropdown {
         flex: 1 1 auto !important;
         min-width: 0 !important;
         width: auto !important;
     }
 
-    #layer-dropdown {
-        flex: 1 1 auto !important;
-        min-width: 0 !important;
-        max-width: 140px !important;
-    }
-
-    /* 2D/3D view toggle - compact inline */
+    /* 2D/3D view toggle */
     #view-mode-radio {
-        flex: 0 0 auto !important;
-        min-width: 70px !important;
+        flex: 1 1 auto !important;
     }
 
     #view-mode-radio .wrap {
-        gap: 0.25rem !important;
-    }
-
-    #view-mode-radio label {
-        padding: 0.2rem 0.4rem !important;
-        font-size: 0.8rem !important;
+        gap: 0.5rem !important;
     }
 
     /* KNN row styling */
