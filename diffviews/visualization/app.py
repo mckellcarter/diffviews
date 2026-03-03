@@ -688,7 +688,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             """Handle layer dropdown change: recompute UMAP for selected layer."""
             model_data = visualizer.get_model(model_name)
             if model_data is None or not layer_name:
-                return (gr.update(),) * 16
+                return (gr.update(),) * 17
 
             # If user selected the default label, restore pre-computed embeddings
             default_label = visualizer.get_default_layer_label(model_name)
@@ -703,6 +703,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     None, gr.update(value=[], label="Denoising Steps"),
                     gr.update(choices=[], value=None), [], [],
                     None, "Click a point to select",
+                    "2D",  # Reset view toggle
                 )
 
             success = visualizer.recompute_layer_umap(model_name, layer_name)
@@ -717,6 +718,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     None, gr.update(value=[], label="Denoising Steps"),
                     gr.update(choices=[], value=None), [], [],
                     None, "Click a point to select",
+                    "2D",  # Reset view toggle
                 )
 
             fig = visualizer.create_umap_figure(model_name)
@@ -738,6 +740,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 [],                                                             # generation_infos
                 None,                                                           # selected_image
                 "Click a point to select",                                      # selected_details
+                "2D",                                                           # view_mode_radio
             )
 
         layer_dropdown.change(
@@ -760,6 +763,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 generation_infos,
                 selected_image,
                 selected_details,
+                view_mode_radio,
             ],
         )
 

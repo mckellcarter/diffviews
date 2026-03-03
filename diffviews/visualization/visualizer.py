@@ -1413,8 +1413,9 @@ class GradioVisualizer:
         if model_data is None:
             return False
 
-        # Check for cached aligned embeddings
-        aligned_dir = model_data.data_dir / "embeddings" / "aligned_3d"
+        # Include layer name in cache path
+        layer_name = model_data.current_layer if model_data.current_layer != "default" else "default"
+        aligned_dir = model_data.data_dir / "embeddings" / "aligned_3d" / layer_name
         if aligned_dir.exists():
             print(f"Loading cached aligned embeddings from {aligned_dir}")
             return self._load_aligned_3d(model_name, aligned_dir)
@@ -1486,7 +1487,8 @@ class GradioVisualizer:
             print(f"Error loading aligned embeddings: {e}")
             return False
 
-        # Update model data for 3D mode
+        # Update model data for 3D mode (preserve activations for generation)
+        saved_activations = model_data.activations
         model_data.df = df
         model_data.is_3d_mode = True
         model_data.sigma_levels = pkl_data["sigma_levels"]
@@ -1495,6 +1497,7 @@ class GradioVisualizer:
         model_data.umap_scaler = pkl_data["scaler"]
         model_data.umap_pca = pkl_data["pca_reducer"]
         model_data.umap_params = params
+        model_data.activations = saved_activations  # Keep current layer's activations
 
         # Fit KNN on the full 3D dataset for neighbor finding
         self._fit_knn_model(model_data)
