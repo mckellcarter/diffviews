@@ -555,6 +555,7 @@ class GradioVisualizer:
         model_data.umap_pca = model_data.default_umap_pca
         model_data.umap_params = dict(model_data.default_umap_params) if model_data.default_umap_params else {}
         model_data.nn_model = model_data.default_nn_model
+        model_data.is_3d_mode = False  # Reset to 2D
         model_data.current_layer = "default"
         print(f"[{model_name}] Restored default embeddings")
 
@@ -690,6 +691,7 @@ class GradioVisualizer:
         model_data.umap_scaler = scaler
         model_data.umap_pca = pca_reducer
         model_data.umap_params = umap_params
+        model_data.is_3d_mode = False  # Reset to 2D when layer changes
         self._fit_knn_model(model_data)
         model_data.current_layer = layer_name
         print(f"[{model_name}] Loaded cached layer: {layer_name} ({len(df)} samples)")
@@ -840,6 +842,7 @@ class GradioVisualizer:
         model_data.umap_scaler = scaler
         model_data.umap_pca = pca_reducer
         model_data.umap_params = umap_params
+        model_data.is_3d_mode = False  # Reset to 2D when layer changes
         self._fit_knn_model(model_data)
         model_data.current_layer = layer_name
         return True
