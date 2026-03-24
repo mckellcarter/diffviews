@@ -14,7 +14,7 @@ from diffviews.core.masking import (
     load_activation_from_npz,
     unflatten_activation
 )
-from diffviews.adapters.base import GeneratorAdapter
+from adapt_diff import GeneratorAdapter
 
 
 class MockAdapter(GeneratorAdapter):

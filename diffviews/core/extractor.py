@@ -9,7 +9,7 @@ from typing import Dict, List
 import numpy as np
 import torch
 
-from ..adapters.base import GeneratorAdapter
+from adapt_diff import GeneratorAdapter
 
 
 class ActivationExtractor:

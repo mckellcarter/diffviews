@@ -26,6 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@main",
     "torch>=2.0.0",
     "numpy>=1.21.0",
     "pandas>=1.5.0",
@@ -59,10 +60,6 @@ Repository = "https://github.com/your-org/diffviews"
 
 [project.scripts]
 diffviews = "diffviews.scripts.cli:main"
-
-[project.entry-points."diffviews.adapters"]
-# Adapters register themselves here
-# Example: imagenet-64 = "diffviews_dmd2:DMD2ImageNetAdapter"
 
 [tool.setuptools.packages.find]
 where = ["."]

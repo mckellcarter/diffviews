@@ -2,6 +2,9 @@
 # Requires Python 3.10+
 # Package installed via git clone in app.py (bypasses pip cache)
 
+# Adapter library
+adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@main
+
 # Core dependencies
 torch>=2.0.0
 numpy>=1.21.0
