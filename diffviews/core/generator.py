@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from ..adapters.base import GeneratorAdapter
+from adapt_diff import GeneratorAdapter
 from .extractor import ActivationExtractor
 from .masking import ActivationMasker
 

@@ -18,7 +18,7 @@ from diffviews.core.generator import (
     tensor_to_uint8_image
 )
 from diffviews.core.masking import ActivationMasker
-from diffviews.adapters.base import GeneratorAdapter
+from adapt_diff import GeneratorAdapter
 
 
 class MockAdapter(GeneratorAdapter):

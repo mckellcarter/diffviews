@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from diffviews.adapters import get_adapter, list_adapters
+from adapt_diff import get_adapter, list_adapters
 
 
 # Skip all tests if DMD2 adapter not installed

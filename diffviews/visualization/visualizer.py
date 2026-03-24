@@ -26,9 +26,7 @@ from diffviews.processing.aligned_umap import (
     save_aligned_embeddings,
     load_aligned_embeddings,
 )
-from diffviews.adapters.registry import get_adapter
 from diffviews.core.masking import unflatten_activation
-
 from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
 
