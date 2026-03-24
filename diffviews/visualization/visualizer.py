@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 
 from diffviews.processing.umap import load_dataset_activations
 from diffviews.processing.umap_backend import get_knn_class, to_numpy
-from diffviews.adapters.registry import get_adapter
+from adapt_diff import get_adapter
 from diffviews.core.masking import unflatten_activation
 
 from .models import ModelData

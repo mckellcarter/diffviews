@@ -72,7 +72,7 @@ class GPUWorker:
         if model_name in self._adapters:
             return self._adapters[model_name]
 
-        from diffviews.adapters import get_adapter
+        from adapt_diff import get_adapter
 
         # Find checkpoint
         checkpoint_dir = DATA_DIR / model_name / "checkpoints"

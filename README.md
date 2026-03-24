@@ -37,12 +37,13 @@ pip install diffviews[all]
 ### Using with a model adapter
 
 ```python
-from diffviews import get_adapter
-from diffviews.core import ActivationExtractor, generate_with_mask_multistep
+from adapt_diff import get_adapter
+from diffviews.core.extractor import ActivationExtractor
+from diffviews.core.generator import generate_with_mask_multistep
 
-# Load adapter (registered via entry point)
-AdapterClass = get_adapter('imagenet-64')
-adapter = AdapterClass.from_checkpoint('path/to/model.pth', device='cuda')
+# Load adapter
+AdapterClass = get_adapter('dmd2-imagenet-64')
+adapter = AdapterClass.from_checkpoint('path/to/model.pkl', device='cuda')
 
 # Extract activations
 extractor = ActivationExtractor(adapter, layers=['encoder_bottleneck', 'midblock'])
@@ -51,7 +52,7 @@ with extractor:
     activations = extractor.get_activations()
 
 # Generate with masked activations
-from diffviews.core import ActivationMasker
+from diffviews.core.masking import ActivationMasker
 masker = ActivationMasker(adapter)
 masker.set_mask('encoder_bottleneck', target_activation)
 masker.register_hooks()
@@ -66,64 +67,27 @@ images, labels = generate_with_mask_multistep(
 
 ### Creating a custom adapter
 
+Adapters are defined in the [`adapt_diff`](https://github.com/mckellcarter/adapt_diff) package. See that repository for creating new adapters.
+
 ```python
-from diffviews.adapters import GeneratorAdapter, HookMixin, register_adapter
+from adapt_diff import GeneratorAdapter, HookMixin, register_adapter
 
 @register_adapter('my-model')
 class MyModelAdapter(HookMixin, GeneratorAdapter):
-    def __init__(self, model, device):
-        HookMixin.__init__(self)
-        self._model = model
-        self._device = device
-
-    @property
-    def model_type(self): return 'my-model'
-
-    @property
-    def resolution(self): return 256
-
-    @property
-    def num_classes(self): return 1000
-
-    @property
-    def hookable_layers(self):
-        return ['encoder', 'decoder', 'mid']
-
-    def forward(self, x, sigma, class_labels=None, **kwargs):
-        return self._model(x, sigma, class_labels)
-
-    def register_activation_hooks(self, layer_names, hook_fn):
-        handles = []
-        for name in layer_names:
-            module = self._get_module(name)
-            h = module.register_forward_hook(hook_fn)
-            handles.append(h)
-            self.add_handle(h)
-        return handles
-
-    def get_layer_shapes(self):
-        # Return cached or computed shapes
-        return {'encoder': (512, 16, 16), 'decoder': (256, 32, 32), 'mid': (512, 8, 8)}
-
-    @classmethod
-    def from_checkpoint(cls, checkpoint_path, device='cuda', **kwargs):
-        model = load_my_model(checkpoint_path)
-        model = model.to(device).eval()
-        return cls(model, device)
-
-    @classmethod
-    def get_default_config(cls):
-        return {'resolution': 256, 'channels': 3}
+    # See adapt_diff documentation for full implementation details
+    ...
 ```
 
 ## Supported Models
 
-DiffViews supports multiple diffusion models via the adapter interface:
+DiffViews supports multiple diffusion models via adapters from [`adapt_diff`](https://github.com/mckellcarter/adapt_diff):
 
 | Model | Adapter | Steps | Description |
 |-------|---------|-------|-------------|
 | DMD2 | `dmd2-imagenet-64` | 1-10 | Distribution Matching Distillation (single/few-step) |
 | EDM | `edm-imagenet-64` | 50-256 | Elucidating Diffusion Models (multi-step) |
+| MSCOCO T2I | `mscoco-t2i-128` | — | Text-to-Image 128x128 |
+| Custom SD | `abu-custom-sd14` | — | Custom Stable Diffusion v1.4 |
 
 ## Setup
 
@@ -208,12 +172,12 @@ modal serve modal_app.py   # dev
 modal deploy modal_app.py  # prod
 ```
 
-### Local
+### Local - requires umaps be fitted locally
 
 ```bash
 pip install diffviews[viz]
 diffviews download
-diffviews viz-gradio --data-dir data
+diffviews viz --data-dir data
 ```
 
 ### Gradio Features
@@ -259,10 +223,6 @@ diffviews --help
 
 ```
 diffviews/
-├── adapters/           # Model adapter interface
-│   ├── base.py         # GeneratorAdapter ABC
-│   ├── hooks.py        # HookMixin utilities
-│   └── registry.py     # Adapter registration
 ├── core/               # Core functionality
 │   ├── extractor.py    # Activation extraction + fast format conversion
 │   ├── masking.py      # Activation masking
@@ -274,20 +234,22 @@ diffviews/
 ├── data/               # R2 data cache + store
 ├── visualization/      # Gradio interactive app
 └── utils/              # Utilities
-    ├── device.py
-    └── checkpoint.py
+    └── device.py
 ```
+
+Adapters are provided by the external [`adapt_diff`](https://github.com/mckellcarter/adapt_diff) package.
 
 ## Adapter Registration
 
-Adapters can register via Python entry points:
+Adapters register via the `adapt_diff` entry points system:
 
 ```toml
 # In your package's pyproject.toml
-[project.entry-points."diffviews.adapters"]
-imagenet-64 = "my_package.adapters:ImageNetAdapter"
-sdxl = "my_package.adapters:SDXLAdapter"
+[project.entry-points."adapt_diff.adapters"]
+my-model = "my_package.adapters:MyModelAdapter"
 ```
+
+See the [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) for details.
 
 ## Known Issues
 

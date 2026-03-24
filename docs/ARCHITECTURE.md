@@ -88,7 +88,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 **Lines:** 197
 
 **Imports from local files:**
-- `diffviews.adapters.base` → `GeneratorAdapter`
+- `adapt_diff` → `GeneratorAdapter`
 
 **Called by:**
 - `diffviews/core/generator.py`
@@ -132,7 +132,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 **Lines:** 183
 
 **Imports from local files:**
-- `diffviews.adapters.base` → `GeneratorAdapter`
+- `adapt_diff` → `GeneratorAdapter`
 
 **Called by:**
 - `app.py` → `generate_on_gpu`
@@ -175,7 +175,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 **Lines:** 373
 
 **Imports from local files:**
-- `diffviews.adapters.base` → `GeneratorAdapter`
+- `adapt_diff` → `GeneratorAdapter`
 - `diffviews.core.extractor` → `ActivationExtractor`
 - `diffviews.core.masking` → `ActivationMasker`
 
@@ -198,188 +198,19 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 
 ---
 
-### Adapters Module
+### Adapters Module (External)
 
----
+Adapters are provided by the external [`adapt_diff`](https://github.com/mckellcarter/adapt_diff) package.
 
-#### `diffviews/adapters/base.py`
+```python
+from adapt_diff import GeneratorAdapter, get_adapter, list_adapters, register_adapter
+```
 
-**Purpose:** Abstract base class defining the model-agnostic adapter interface.
-
-**Lines:** 159
-
-**Imports from local files:** None
-
-**Called by:**
-- All adapter implementations
-- `diffviews/core/extractor.py`
-- `diffviews/core/masking.py`
-- `diffviews/core/generator.py`
-
----
-
-##### Classes
-
-###### `GeneratorAdapter` (ABC)
-
-**Summary:** Abstract interface for diffusion generator models. Provides model-agnostic access to forward pass, hook registration, and checkpoint loading.
-
-| Property/Method | Signature | Summary |
-|-----------------|-----------|---------|
-| `model_type` | `@property -> str` | Model identifier string (e.g., 'dmd2-imagenet-64') |
-| `resolution` | `@property -> int` | Output image resolution |
-| `num_classes` | `@property -> int` | Number of classes (0 for unconditional) |
-| `hookable_layers` | `@property -> List[str]` | List of layer names available for hooks |
-| `forward` | `(x, sigma, class_labels, **kwargs) -> torch.Tensor` | Forward pass for denoising |
-| `register_activation_hooks` | `(layer_names, hook_fn) -> List[RemovableHandle]` | Register forward hooks on layers |
-| `get_layer_shapes` | `() -> Dict[str, Tuple[int, ...]]` | Return activation shapes for hookable layers |
-| `from_checkpoint` | `@classmethod (checkpoint_path, device, **kwargs) -> GeneratorAdapter` | Load adapter from checkpoint |
-| `get_default_config` | `@classmethod () -> Dict[str, Any]` | Return default configuration |
-| `to` | `(device: str) -> GeneratorAdapter` | Move model to device |
-| `eval` | `() -> GeneratorAdapter` | Set model to eval mode |
-
----
-
-#### `diffviews/adapters/registry.py`
-
-**Purpose:** Adapter registration, discovery, and lookup by name.
-
-**Lines:** 99
-
-**Imports from local files:**
-- `diffviews.adapters.base` → `GeneratorAdapter`
-
-**Called by:**
-- Adapter implementations (via `@register_adapter` decorator)
-- `diffviews/visualization/visualizer.py`
-- `diffviews/__init__.py`
-
----
-
-##### Functions
-
-| Function | Signature | Summary | Calls | Called By |
-|----------|-----------|---------|-------|-----------|
-| `register_adapter` | `(name: str) -> Callable` | Decorator to register an adapter class | — | `DMD2ImageNetAdapter`, `EDMImageNetAdapter` |
-| `get_adapter` | `(name: str) -> Type[GeneratorAdapter]` | Get adapter class by registered name | `discover_adapters` | `GradioVisualizer.load_adapter` |
-| `list_adapters` | `() -> list` | List all registered adapter names | `discover_adapters` | External usage |
-| `discover_adapters` | `() -> None` | Auto-discover adapters from entry points | `importlib.metadata.entry_points` | `get_adapter`, `list_adapters` |
-| `register_adapter_class` | `(name: str, cls: Type) -> None` | Manually register an adapter class | — | External usage |
-| `unregister_adapter` | `(name: str) -> Optional[Type]` | Remove adapter from registry | — | Testing |
-
----
-
-#### `diffviews/adapters/hooks.py`
-
-**Purpose:** Reusable hook management utilities for adapters.
-
-**Lines:** 111
-
-**Imports from local files:** None
-
-**Called by:**
-- `DMD2ImageNetAdapter`
-- `EDMImageNetAdapter`
-
----
-
-##### Classes
-
-###### `HookMixin`
-
-**Summary:** Mixin providing reusable forward hook management for extraction and masking.
-
-| Method | Signature | Summary | Calls | Called By |
-|--------|-----------|---------|-------|-----------|
-| `__init__` | `() -> None` | Initialize activation/mask/handle storage | — | Adapter `__init__` |
-| `make_extraction_hook` | `(layer_name: str) -> Callable` | Create hook that extracts layer output | — | — |
-| `make_mask_hook` | `(layer_name: str, mask: torch.Tensor) -> Callable` | Create hook that replaces output with mask | — | — |
-| `set_mask` | `(layer_name: str, value: torch.Tensor) -> None` | Store activation mask | — | — |
-| `get_mask` | `(layer_name: str) -> Optional[torch.Tensor]` | Get stored mask | — | — |
-| `clear_mask` | `(layer_name: str) -> None` | Remove mask for layer | — | — |
-| `clear_masks` | `() -> None` | Remove all masks | — | — |
-| `get_activations` | `() -> Dict[str, torch.Tensor]` | Return extracted activations | — | — |
-| `get_activation` | `(layer_name: str) -> Optional[torch.Tensor]` | Get single activation | — | — |
-| `clear_activations` | `() -> None` | Clear all extracted activations | — | — |
-| `remove_hooks` | `() -> None` | Remove all registered hooks | — | — |
-| `add_handle` | `(handle: RemovableHandle) -> None` | Track hook handle | — | `register_activation_hooks` |
-| `num_hooks` | `@property -> int` | Number of active hooks | — | — |
-
----
-
-#### `diffviews/adapters/dmd2_imagenet.py`
-
-**Purpose:** DMD2 ImageNet 64x64 adapter (single-step distilled model).
-
-**Lines:** 202
-
-**Imports from local files:**
-- `diffviews.adapters.base` → `GeneratorAdapter`
-- `diffviews.adapters.hooks` → `HookMixin`
-- `diffviews.adapters.registry` → `register_adapter`
-
-**Called by:**
-- `diffviews/adapters/registry.py` (via decorator registration)
-
----
-
-##### Classes
-
-###### `DMD2ImageNetAdapter(HookMixin, GeneratorAdapter)`
-
-**Summary:** Adapter for DMD2 ImageNet 64x64 model (EDMPrecond + DhariwalUNet).
-
-Layer naming:
-- `encoder_block_N`: N-th encoder block (0-indexed)
-- `encoder_bottleneck`: Last encoder block
-- `midblock`: First decoder block
-- `decoder_block_N`: N-th decoder block
-
-| Method | Signature | Summary |
-|--------|-----------|---------|
-| `__init__` | `(model, device: str = 'cuda')` | Initialize with loaded model |
-| `hookable_layers` | `@property -> List[str]` | Return available layer names |
-| `_get_layer_module` | `(layer_name: str) -> nn.Module` | Get PyTorch module for layer name |
-| `forward` | `(x, sigma, class_labels, **kwargs) -> torch.Tensor` | Forward pass for denoising |
-| `register_activation_hooks` | `(layer_names, hook_fn) -> List[Handle]` | Register hooks on layers |
-| `get_layer_shapes` | `() -> Dict[str, Tuple]` | Return activation shapes (runs dummy forward on first call) |
-| `from_checkpoint` | `@classmethod (checkpoint_path, device, label_dropout) -> Adapter` | Load from pickle checkpoint |
-| `get_default_config` | `@classmethod () -> Dict` | Return default ImageNet 64x64 config |
-
----
-
-#### `diffviews/adapters/edm_imagenet.py`
-
-**Purpose:** Original EDM ImageNet 64x64 adapter (multi-step iterative sampling).
-
-**Lines:** 316
-
-**Imports from local files:**
-- `diffviews.adapters.base` → `GeneratorAdapter`
-- `diffviews.adapters.hooks` → `HookMixin`
-- `diffviews.adapters.registry` → `register_adapter`
-
-**Called by:**
-- `diffviews/adapters/registry.py` (via decorator registration)
-
----
-
-##### Classes
-
-###### `EDMImageNetAdapter(HookMixin, GeneratorAdapter)`
-
-**Summary:** Adapter for original EDM ImageNet 64x64 model. Unlike DMD2, requires multi-step sampling.
-
-| Method | Signature | Summary |
-|--------|-----------|---------|
-| `__init__` | `(model, device: str = 'cuda')` | Initialize with loaded model |
-| `hookable_layers` | `@property -> List[str]` | Return available layer names |
-| `_get_layer_module` | `(layer_name: str) -> nn.Module` | Get PyTorch module for layer name |
-| `forward` | `(x, sigma, class_labels, **kwargs) -> torch.Tensor` | Single denoising step |
-| `sample` | `(num_samples, class_label, num_steps, sigma_max, sigma_min, rho, S_churn, S_min, S_max, S_noise, device) -> Tuple` | Full EDM sampling with stochastic sampler |
-| `register_activation_hooks` | `(layer_names, hook_fn) -> List[Handle]` | Register hooks on layers |
-| `get_layer_shapes` | `() -> Dict[str, Tuple]` | Return activation shapes |
-| `from_checkpoint` | `@classmethod (checkpoint_path, device, label_dropout) -> Adapter` | Load from pickle checkpoint |
+See the adapt_diff repository for adapter documentation and available implementations:
+- `dmd2-imagenet-64` - DMD2 ImageNet 64x64
+- `edm-imagenet-64` - EDM ImageNet 64x64
+- `mscoco-t2i-128` - MSCOCO Text-to-Image 128x128
+- `abu-custom-sd14` - Custom SD 512x512
 
 ---
 
@@ -396,7 +227,7 @@ Layer naming:
 **Imports from local files:**
 - `diffviews.processing.umap` → `load_dataset_activations`
 - `diffviews.processing.umap_backend` → `get_knn_class`, `to_numpy`
-- `diffviews.adapters.registry` → `get_adapter`
+- `adapt_diff` → `get_adapter`
 - `diffviews.core.masking` → `unflatten_activation`
 - `diffviews.visualization.models` → `ModelData`
 - `diffviews.visualization.gpu_ops` → `_extract_layer_on_gpu`
@@ -787,7 +618,7 @@ app.py (entry point)
 │   ├── GradioVisualizer
 │   │   ├── diffviews.processing.umap
 │   │   ├── diffviews.processing.umap_backend
-│   │   ├── diffviews.adapters.registry
+│   │   ├── adapt_diff (get_adapter)
 │   │   ├── diffviews.core.masking
 │   │   └── diffviews.visualization.models
 │   │       └── ModelData
@@ -798,30 +629,20 @@ app.py (entry point)
 │       └── CUSTOM_CSS, PLOTLY_HANDLER_JS
 ├── diffviews.core.masking
 │   ├── ActivationMasker
-│   └── diffviews.adapters.base
+│   └── adapt_diff (GeneratorAdapter)
 └── diffviews.core.generator
     ├── generate_with_mask_multistep
-    ├── diffviews.adapters.base
+    ├── adapt_diff (GeneratorAdapter)
     ├── diffviews.core.extractor
     └── diffviews.core.masking
 
-diffviews.adapters.registry
-├── register_adapter (decorator)
-├── get_adapter
-├── list_adapters
-└── diffviews.adapters.base
-
-diffviews.adapters.dmd2_imagenet
-├── @register_adapter('dmd2-imagenet-64')
-├── diffviews.adapters.base
-├── diffviews.adapters.hooks
-└── diffviews.adapters.registry
-
-diffviews.adapters.edm_imagenet
-├── @register_adapter('edm-imagenet-64')
-├── diffviews.adapters.base
-├── diffviews.adapters.hooks
-└── diffviews.adapters.registry
+adapt_diff (external package)
+├── GeneratorAdapter (ABC)
+├── HookMixin
+├── get_adapter()
+├── list_adapters()
+├── register_adapter()
+└── Adapters: dmd2-imagenet-64, edm-imagenet-64, mscoco-t2i-128, abu-custom-sd14
 ```
 
 ---
@@ -830,15 +651,12 @@ diffviews.adapters.edm_imagenet
 
 ### Adding a New Model Adapter
 
-1. Create `diffviews/adapters/my_model.py`
-2. Inherit from `HookMixin` and `GeneratorAdapter`
-3. Decorate with `@register_adapter('my-model-name')`
-4. Implement required abstract methods
+See the [adapt_diff repository](https://github.com/mckellcarter/adapt_diff) for creating new adapters.
 
 ### Using the Visualizer Programmatically
 
 ```python
-from diffviews import get_adapter
+from adapt_diff import get_adapter
 
 # Get adapter class
 AdapterClass = get_adapter('dmd2-imagenet-64')
