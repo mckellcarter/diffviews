@@ -20,9 +20,13 @@ import plotly.graph_objects as go
 
 from diffviews.processing.umap import load_dataset_activations
 from diffviews.processing.umap_backend import get_knn_class, to_numpy
-from adapt_diff import get_adapter
+from diffviews.processing.aligned_umap import (
+    compute_aligned_umap,
+    project_aligned_trajectory_point,
+    save_aligned_embeddings,
+    load_aligned_embeddings,
+)
 from diffviews.core.masking import unflatten_activation
-
 from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
 
@@ -549,6 +553,7 @@ class GradioVisualizer:
         model_data.umap_pca = model_data.default_umap_pca
         model_data.umap_params = dict(model_data.default_umap_params) if model_data.default_umap_params else {}
         model_data.nn_model = model_data.default_nn_model
+        model_data.is_3d_mode = False  # Reset to 2D
         model_data.current_layer = "default"
         print(f"[{model_name}] Restored default embeddings")
 
@@ -684,6 +689,7 @@ class GradioVisualizer:
         model_data.umap_scaler = scaler
         model_data.umap_pca = pca_reducer
         model_data.umap_params = umap_params
+        model_data.is_3d_mode = False  # Reset to 2D when layer changes
         self._fit_knn_model(model_data)
         model_data.current_layer = layer_name
         print(f"[{model_name}] Loaded cached layer: {layer_name} ({len(df)} samples)")
@@ -834,6 +840,7 @@ class GradioVisualizer:
         model_data.umap_scaler = scaler
         model_data.umap_pca = pca_reducer
         model_data.umap_params = umap_params
+        model_data.is_3d_mode = False  # Reset to 2D when layer changes
         self._fit_knn_model(model_data)
         model_data.current_layer = layer_name
         return True
@@ -866,8 +873,14 @@ class GradioVisualizer:
             if model_data.adapter is None:
                 return None
 
+        # In 3D mode, map neighbor_indices to original activation indices
+        if model_data.is_3d_mode and "original_idx" in model_data.df.columns:
+            activation_indices = model_data.df.iloc[neighbor_indices]["original_idx"].values.astype(int)
+        else:
+            activation_indices = neighbor_indices
+
         # Average neighbor activations in high-D space
-        neighbor_acts = model_data.activations[neighbor_indices]  # (N, D)
+        neighbor_acts = model_data.activations[activation_indices]  # (N, D)
         center_activation = np.mean(neighbor_acts, axis=0, keepdims=True)  # (1, D)
 
         # Split into per-layer activations (MUST be sorted order!)
@@ -997,7 +1010,7 @@ class GradioVisualizer:
         highlighted_class: Optional[int] = None,
         trajectory: Optional[List[Tuple[float, float, float]]] = None,
     ) -> go.Figure:
-        """Create Plotly figure for UMAP scatter plot.
+        """Create Plotly figure for UMAP scatter plot (2D or 3D).
 
         Args:
             model_name: Name of the model to use
@@ -1006,6 +1019,7 @@ class GradioVisualizer:
             knn_neighbors: List of KNN neighbor indices
             highlighted_class: Class ID to highlight
             trajectory: List of (x, y, sigma) tuples for denoising trajectory
+                       In 3D mode, these are projected to aligned embeddings
 
         Returns:
             Plotly Figure object
@@ -1015,6 +1029,13 @@ class GradioVisualizer:
             fig = go.Figure()
             fig.update_layout(title="No data loaded")
             return fig
+
+        # Dispatch to 3D if in 3D mode
+        if model_data.is_3d_mode:
+            return self._create_3d_figure(
+                model_name, selected_idx, manual_neighbors,
+                knn_neighbors, highlighted_class, trajectory
+            )
 
         df = model_data.df
         manual_neighbors = manual_neighbors or []
@@ -1207,3 +1228,346 @@ class GradioVisualizer:
         )
 
         return fig
+
+    def _create_3d_figure(
+        self,
+        model_name: str,
+        selected_idx: Optional[int] = None,
+        manual_neighbors: Optional[List[int]] = None,
+        knn_neighbors: Optional[List[int]] = None,
+        highlighted_class: Optional[int] = None,
+        trajectory: Optional[List[Tuple[float, float, float]]] = None,
+    ) -> go.Figure:
+        """Create 3D Plotly figure with sigma as Z-axis.
+
+        Uses AlignedUMAP embeddings where X, Y are UMAP coords and Z = log(sigma).
+        """
+        model_data = self.get_model(model_name)
+        df = model_data.df
+        manual_neighbors = manual_neighbors or []
+        knn_neighbors = knn_neighbors or []
+
+        # Get color map for classes
+        color_map = self.get_color_map(model_name)
+
+        fig = go.Figure()
+
+        # Plot each sigma slice as a separate trace
+        for sigma in model_data.sigma_levels:
+            slice_mask = df["sigma"] == sigma
+            slice_df = df[slice_mask]
+
+            if slice_df.empty:
+                continue
+
+            z_val = np.log(sigma + 1e-8)  # Log-scale for Z
+
+            # Colors by class
+            if "class_label" in slice_df.columns:
+                colors = [color_map.get(str(int(c)), "#888888") for c in slice_df["class_label"]]
+            else:
+                colors = ["#1f77b4"] * len(slice_df)
+
+            # Opacity based on sigma (high sigma = more transparent)
+            opacity = 0.4 + 0.5 * (1 - (np.log(sigma) - np.log(min(model_data.sigma_levels))) /
+                                   (np.log(max(model_data.sigma_levels)) - np.log(min(model_data.sigma_levels)) + 1e-8))
+
+            # Store original df indices for click handling
+            slice_indices = slice_df.index.tolist()
+
+            fig.add_trace(go.Scatter3d(
+                x=slice_df["umap_x"].tolist(),
+                y=slice_df["umap_y"].tolist(),
+                z=[z_val] * len(slice_df),
+                mode="markers",
+                marker=dict(size=4, color=colors, opacity=opacity),
+                customdata=slice_indices,
+                hovertemplate=f"σ={sigma:.2f}<br>%{{customdata}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
+                name=f"σ={sigma:.2f}",
+                showlegend=True,
+            ))
+
+        # Highlight class if specified
+        if highlighted_class is not None and "class_label" in df.columns:
+            class_mask = df["class_label"] == highlighted_class
+            class_df = df[class_mask]
+            if not class_df.empty:
+                class_color = color_map.get(str(int(highlighted_class)), "#888888")
+                z_vals = [np.log(s + 1e-8) for s in class_df["sigma"]]
+                fig.add_trace(go.Scatter3d(
+                    x=class_df["umap_x"].tolist(),
+                    y=class_df["umap_y"].tolist(),
+                    z=z_vals,
+                    mode="markers",
+                    marker=dict(size=8, color=class_color, opacity=0.9,
+                               line=dict(width=1, color="black")),
+                    customdata=class_df.index.tolist(),
+                    hoverinfo="skip",
+                    name="class_highlight",
+                    showlegend=False,
+                ))
+
+        # Selected point highlight
+        if selected_idx is not None and selected_idx < len(df):
+            sel_row = df.iloc[selected_idx]
+            z_val = np.log(sel_row.get("sigma", 1.0) + 1e-8)
+            fig.add_trace(go.Scatter3d(
+                x=[float(sel_row["umap_x"])],
+                y=[float(sel_row["umap_y"])],
+                z=[z_val],
+                mode="markers",
+                marker=dict(size=12, color="red", symbol="diamond"),
+                hoverinfo="skip",
+                name="selected",
+                showlegend=False,
+            ))
+
+        # Trajectories in 3D
+        trajectories = trajectory if trajectory else []
+        if trajectories and isinstance(trajectories[0], tuple):
+            trajectories = [trajectories]
+
+        for traj_idx, traj in enumerate(trajectories):
+            if len(traj) < 2:
+                continue
+
+            traj_x = [t[0] for t in traj]
+            traj_y = [t[1] for t in traj]
+            traj_z = [np.log(t[2] + 1e-8) for t in traj]  # sigma -> log(sigma)
+            traj_sigma = [t[2] for t in traj]
+
+            # Line trace
+            fig.add_trace(go.Scatter3d(
+                x=traj_x,
+                y=traj_y,
+                z=traj_z,
+                mode="lines",
+                line=dict(color="lime", width=4),
+                hoverinfo="skip",
+                name=f"trajectory_line_{traj_idx}",
+                showlegend=False,
+            ))
+
+            # Markers with gradient
+            fig.add_trace(go.Scatter3d(
+                x=traj_x,
+                y=traj_y,
+                z=traj_z,
+                mode="markers",
+                marker=dict(
+                    size=6,
+                    color=list(range(len(traj))),
+                    colorscale=[[0, "#90EE90"], [1, "#228B22"]],
+                ),
+                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>σ=%{{text:.2f}}<extra></extra>",
+                text=traj_sigma,
+                customdata=list(range(1, len(traj) + 1)),
+                name=f"trajectory_{traj_idx}",
+                showlegend=False,
+            ))
+
+            # Start marker
+            fig.add_trace(go.Scatter3d(
+                x=[traj_x[0]],
+                y=[traj_y[0]],
+                z=[traj_z[0]],
+                mode="markers",
+                marker=dict(symbol="diamond", size=10, color="lime"),
+                hovertemplate=f"Traj {traj_idx + 1} Start (σ={traj_sigma[0]:.2f})<extra></extra>",
+                name=f"traj_start_{traj_idx}",
+                showlegend=False,
+            ))
+
+            # End marker
+            fig.add_trace(go.Scatter3d(
+                x=[traj_x[-1]],
+                y=[traj_y[-1]],
+                z=[traj_z[-1]],
+                mode="markers",
+                marker=dict(symbol="diamond", size=12, color="#228B22"),
+                hovertemplate=f"Traj {traj_idx + 1} End (σ={traj_sigma[-1]:.2f})<extra></extra>",
+                name=f"traj_end_{traj_idx}",
+                showlegend=False,
+            ))
+
+        fig.update_layout(
+            title="AlignedUMAP 3D (σ as Z-axis)",
+            scene=dict(
+                xaxis_title="UMAP 1",
+                yaxis_title="UMAP 2",
+                zaxis_title="log(σ)",
+                camera=dict(eye=dict(x=1.5, y=1.5, z=1.0)),
+            ),
+            hovermode="closest",
+            template="plotly_white",
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98),
+            margin=dict(l=0, r=0, t=35, b=0),
+        )
+
+        return fig
+
+    def compute_and_load_aligned_3d(self, model_name: str) -> bool:
+        """Compute AlignedUMAP embeddings and switch to 3D mode.
+
+        Groups existing activations by sigma, computes AlignedUMAP,
+        caches results, and switches model to 3D visualization mode.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return False
+
+        # Include layer name in cache path
+        layer_name = model_data.current_layer if model_data.current_layer != "default" else "default"
+        aligned_dir = model_data.data_dir / "embeddings" / "aligned_3d" / layer_name
+        if aligned_dir.exists():
+            print(f"Loading cached aligned embeddings from {aligned_dir}")
+            return self._load_aligned_3d(model_name, aligned_dir)
+
+        # Need to compute from scratch
+        if model_data.activations is None:
+            print("Error: No activations loaded for AlignedUMAP computation")
+            return False
+
+        df = model_data.default_df if model_data.default_df is not None else model_data.df
+        if "conditioning_sigma" not in df.columns:
+            print("Error: No conditioning_sigma column in data")
+            return False
+
+        # Get sigma labels matching activation order
+        sigma_labels = df["conditioning_sigma"].values
+
+        # Check for multiple sigma levels
+        unique_sigmas = np.unique(sigma_labels)
+        if len(unique_sigmas) < 2:
+            print(f"Error: Need multiple sigma levels for AlignedUMAP, found {len(unique_sigmas)}")
+            return False
+
+        print(f"Computing AlignedUMAP across {len(unique_sigmas)} sigma levels...")
+
+        # Compute AlignedUMAP
+        try:
+            embeddings_per_sigma, _, scaler, pca, nn_models, sigma_levels, sigma_indices = \
+                compute_aligned_umap(
+                    model_data.activations,
+                    sigma_labels,
+                    n_neighbors=15,
+                    min_dist=0.1,
+                    pca_components=50,
+                )
+        except Exception as e:
+            print(f"Error computing AlignedUMAP: {e}")
+            return False
+
+        # Build metadata for first sigma slice (base samples)
+        n_samples = len(embeddings_per_sigma[sigma_levels[0]])
+        base_meta = df.iloc[:n_samples].copy()
+
+        # Save to cache - use current_layer for layers, not inherited umap_params
+        if model_data.current_layer and model_data.current_layer != "default":
+            layer_list = [model_data.current_layer]
+        else:
+            layer_list = model_data.umap_params.get("layers", ["encoder_bottleneck", "midblock"])
+        umap_params = {
+            "n_neighbors": 15,
+            "min_dist": 0.1,
+            "alignment_regularisation": 0.01,
+            "pca_components": 50,
+            "layers": layer_list,
+        }
+        save_aligned_embeddings(
+            embeddings_per_sigma, base_meta, aligned_dir,
+            scaler, pca, nn_models, sigma_levels, sigma_indices, umap_params
+        )
+
+        # Load into model
+        return self._load_aligned_3d(model_name, aligned_dir)
+
+    def _load_aligned_3d(self, model_name: str, aligned_dir: Path) -> bool:
+        """Load aligned 3D embeddings from cache directory."""
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return False
+
+        try:
+            df, params, pkl_data = load_aligned_embeddings(aligned_dir)
+        except Exception as e:
+            print(f"Error loading aligned embeddings: {e}")
+            return False
+
+        # Update model data for 3D mode (preserve activations for generation)
+        saved_activations = model_data.activations
+        model_data.df = df
+        model_data.is_3d_mode = True
+        model_data.sigma_levels = pkl_data["sigma_levels"]
+        model_data.embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
+        model_data.nn_models_per_sigma = pkl_data["nn_models"]
+        model_data.umap_scaler = pkl_data["scaler"]
+        model_data.umap_pca = pkl_data["pca_reducer"]
+        model_data.umap_params = params
+        model_data.activations = saved_activations  # Keep current layer's activations
+
+        # Fit KNN on the full 3D dataset for neighbor finding
+        self._fit_knn_model(model_data)
+
+        print(f"Loaded 3D mode: {len(model_data.sigma_levels)} sigma levels, "
+              f"{len(df)} total points")
+        return True
+
+    def switch_to_2d_mode(self, model_name: str) -> bool:
+        """Switch back to 2D visualization using default embeddings."""
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return False
+
+        if model_data.default_df is not None:
+            model_data.df = model_data.default_df.copy()
+            model_data.umap_reducer = model_data.default_umap_reducer
+            model_data.umap_scaler = model_data.default_umap_scaler
+            model_data.umap_pca = model_data.default_umap_pca
+            model_data.umap_params = dict(model_data.default_umap_params) if model_data.default_umap_params else {}
+            model_data.nn_model = model_data.default_nn_model
+            model_data.is_3d_mode = False
+            model_data.sigma_levels = []
+            model_data.embeddings_per_sigma = {}
+            model_data.nn_models_per_sigma = {}
+            return True
+        return False
+
+    def project_trajectory_3d(
+        self,
+        model_name: str,
+        trajectory_activations: List[np.ndarray],
+        sigmas: List[float],
+    ) -> List[Tuple[float, float, float]]:
+        """Project trajectory activations to 3D coordinates using aligned UMAP.
+
+        Args:
+            model_name: Model name
+            trajectory_activations: List of (1, D) activation arrays per step
+            sigmas: List of sigma values per step
+
+        Returns:
+            List of (x, y, sigma) tuples for 3D trajectory
+        """
+        model_data = self.get_model(model_name)
+        if not model_data or not model_data.is_3d_mode:
+            return []
+
+        coords = []
+        for act, sigma in zip(trajectory_activations, sigmas):
+            x, y = project_aligned_trajectory_point(
+                act,
+                sigma,
+                model_data.umap_scaler,
+                model_data.umap_pca,
+                model_data.nn_models_per_sigma,
+                model_data.embeddings_per_sigma,
+                model_data.sigma_levels,
+            )
+            coords.append((x, y, sigma))
+
+        return coords

@@ -36,60 +36,76 @@ function sendData(box, data) {
     box.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-// Click handler - immediate
+// Click handler - immediate (supports 2D and 3D plots)
 function handlePlotlyClick(data) {
     if (!data?.points?.length) return;
     const point = data.points[0];
-    sendData(clickBox, {
+    const payload = {
         pointIndex: point.customdata,
         x: point.x,
         y: point.y,
         curveNumber: point.curveNumber
-    });
+    };
+    // Include z for 3D plots
+    if (typeof point.z !== 'undefined') {
+        payload.z = point.z;
+    }
+    sendData(clickBox, payload);
 }
 
-// Hover handler - debounced
+// Hover handler - debounced (supports 2D and 3D plots)
 function handlePlotlyHover(data) {
     if (!data?.points?.length) return;
     const point = data.points[0];
     const traceName = point.data.name || '';
+    const is3D = typeof point.z !== 'undefined';
 
-    // Trajectory point hover
-    const trajMatch = traceName.match(/^trajectory_(\d+)$/);
+    // Trajectory point hover (matches trajectory_N, traj_start_N, traj_end_N)
+    const trajMatch = traceName.match(/^(?:trajectory|traj_start|traj_end)_(\d+)$/);
     if (trajMatch) {
         const trajIdx = parseInt(trajMatch[1]);
-        const stepIdx = point.customdata;
-        const hoverKey = `traj_${trajIdx}_${stepIdx}`;
+        // For start/end markers, stepIdx comes from customdata or infer from name
+        let stepIdx = point.customdata;
+        if (traceName.startsWith('traj_start_')) stepIdx = 1;
+        if (traceName.startsWith('traj_end_')) stepIdx = -1;  // Signal last step
+        const hoverKey = `traj_${trajIdx}_${traceName}_${stepIdx}`;
         if (hoverKey === lastHoverKey) return;
         clearTimeout(hoverTimeout);
         hoverTimeout = setTimeout(() => {
             lastHoverKey = hoverKey;
-            sendData(hoverBox, {
+            const payload = {
                 type: 'trajectory',
                 trajIdx: trajIdx,
                 stepIdx: stepIdx,
                 x: point.x,
                 y: point.y,
                 sigma: point.text
-            });
+            };
+            if (is3D) payload.z = point.z;
+            sendData(hoverBox, payload);
         }, 100);
         return;
     }
 
-    // Only main data trace (curve 0)
-    if (point.curveNumber !== 0) return;
+    // For 3D plots, accept any sigma slice trace (not just curve 0)
+    // In 3D mode, traces are named "σ=X.XX" for data points
+    const is3DDataTrace = is3D && traceName.startsWith('σ=');
+    if (!is3DDataTrace && point.curveNumber !== 0) return;
+
     const idx = point.customdata;
     const hoverKey = `sample_${idx}`;
     if (hoverKey === lastHoverKey) return;
     clearTimeout(hoverTimeout);
     hoverTimeout = setTimeout(() => {
         lastHoverKey = hoverKey;
-        sendData(hoverBox, {
+        const payload = {
             type: 'sample',
             pointIndex: idx,
             x: point.x,
             y: point.y
-        });
+        };
+        if (is3D) payload.z = point.z;
+        sendData(hoverBox, payload);
     }, 100);
 }
 
@@ -270,8 +286,8 @@ CUSTOM_CSS = """
         margin: 0.25rem 0 0.5rem 0 !important;
     }
 
-    /* Model selector row: label + dropdown inline */
-    #model-row, #layer-row {
+    /* Model/Layer/View selector rows: label + control inline */
+    #model-row, #layer-row, #view-row {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
@@ -280,18 +296,18 @@ CUSTOM_CSS = """
         margin-bottom: 0 !important;
     }
 
-    #model-row > div, #layer-row > div {
+    #model-row > div, #layer-row > div, #view-row > div {
         flex: 0 0 auto !important;
     }
 
-    #model-label, #layer-label {
+    #model-label, #layer-label, #view-label {
         flex: 0 0 auto !important;
         width: auto !important;
         min-width: 0 !important;
         max-width: 60px !important;
     }
 
-    #model-label p, #layer-label p {
+    #model-label p, #layer-label p, #view-label p {
         margin: 0 !important;
         font-size: 0.9rem !important;
     }
@@ -300,6 +316,15 @@ CUSTOM_CSS = """
         flex: 1 1 auto !important;
         min-width: 0 !important;
         width: auto !important;
+    }
+
+    /* 2D/3D view toggle */
+    #view-mode-radio {
+        flex: 1 1 auto !important;
+    }
+
+    #view-mode-radio .wrap {
+        gap: 0.5rem !important;
     }
 
     /* KNN row styling */

@@ -29,6 +29,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 - **Single-model-at-a-time memory pattern** (~3GB freed on model switch)
 - **Hybrid CPU/GPU mode** via Modal remote workers
 - **R2/S3 cloud caching** for layer-specific UMAP embeddings
+- **AlignedUMAP 3D visualization** across sigma levels (X,Y = UMAP, Z = log(σ))
 
 ---
 
@@ -227,6 +228,7 @@ See the adapt_diff repository for adapter documentation and available implementa
 **Imports from local files:**
 - `diffviews.processing.umap` → `load_dataset_activations`
 - `diffviews.processing.umap_backend` → `get_knn_class`, `to_numpy`
+- `diffviews.processing.aligned_umap` → `compute_aligned_umap`, `load_aligned_embeddings`, `save_aligned_embeddings`, `project_aligned_trajectory_point`
 - `adapt_diff` → `get_adapter`
 - `diffviews.core.masking` → `unflatten_activation`
 - `diffviews.visualization.models` → `ModelData`
@@ -276,7 +278,11 @@ See the adapt_diff repository for adapter documentation and available implementa
 | `get_plot_dataframe` | `(model_name, selected_idx, manual_neighbors, knn_neighbors, highlighted_class) -> pd.DataFrame` | Get DataFrame for plot with highlight column | — | — |
 | `get_class_options` | `(model_name) -> List[Tuple]` | Get class options for dropdown | — | Callbacks |
 | `get_color_map` | `(model_name) -> dict` | Generate color map for classes | `matplotlib.pyplot.cm.plasma` | `create_umap_figure` |
-| `create_umap_figure` | `(model_name, selected_idx, manual_neighbors, knn_neighbors, highlighted_class, trajectory) -> go.Figure` | Create Plotly UMAP scatter plot | `go.Figure`, `go.Scatter` | Many callbacks |
+| `create_umap_figure` | `(model_name, selected_idx, manual_neighbors, knn_neighbors, highlighted_class, trajectory) -> go.Figure` | Create Plotly UMAP scatter plot (2D or 3D) | `go.Figure`, `go.Scatter`, `go.Scatter3d` | Many callbacks |
+| `compute_and_load_aligned_3d` | `(model_name) -> bool` | Compute or load cached AlignedUMAP embeddings | `compute_aligned_umap`, `save_aligned_embeddings`, `_load_aligned_3d` | `on_view_mode_change` |
+| `_load_aligned_3d` | `(model_name) -> bool` | Load AlignedUMAP cache from disk | `load_aligned_embeddings` | `compute_and_load_aligned_3d` |
+| `_create_3d_figure` | `(model_data, selected_idx, manual_neighbors, knn_neighbors, trajectory) -> go.Figure` | Create Plotly 3D scatter plot with sigma slices | `go.Figure`, `go.Scatter3d` | `create_umap_figure` |
+| `project_trajectory_to_3d` | `(model_data, trajectory) -> List[dict]` | Project trajectory points to 3D using k-NN interpolation | `project_aligned_trajectory_point` | `_create_3d_figure` |
 
 ---
 
@@ -308,7 +314,7 @@ See the adapt_diff repository for adapter documentation and available implementa
 **Key callbacks defined inside `create_gradio_app`:**
 - `on_load`, `build_neighbor_gallery`, `on_hover_data`, `on_click_data`
 - `on_clear_selection`, `on_class_filter`, `on_clear_class`, `on_model_switch`
-- `on_layer_change`, `on_suggest_neighbors`, `on_clear_neighbors`
+- `on_layer_change`, `on_view_mode_change`, `on_suggest_neighbors`, `on_clear_neighbors`
 - `on_generate`, `on_clear_generated`, `on_next_frame`, `on_prev_frame`
 - `on_gallery_select`, `on_traj_select`
 
@@ -356,6 +362,10 @@ See the adapt_diff repository for adapter documentation and available implementa
 | `layer_shapes` | `Dict[str, tuple]` | Layer activation shapes |
 | `default_*` | Various | Backups for restore after layer change |
 | `current_layer` | `str` | Currently active layer |
+| `is_3d_mode` | `bool` | Whether in AlignedUMAP 3D mode |
+| `sigma_levels` | `List[float]` | Sorted sigma levels (descending) |
+| `embeddings_per_sigma` | `Dict[float, np.ndarray]` | Per-sigma UMAP embeddings |
+| `nn_models_per_sigma` | `Dict[float, NearestNeighbors]` | Per-sigma KNN models for projection |
 
 ---
 
@@ -408,7 +418,7 @@ See the adapt_diff repository for adapter documentation and available implementa
 
 | Constant | Description |
 |----------|-------------|
-| `PLOTLY_HANDLER_JS` | JavaScript for Plotly click/hover event bridge to Gradio textboxes |
+| `PLOTLY_HANDLER_JS` | JavaScript for Plotly click/hover event bridge to Gradio textboxes (supports 2D and 3D plots, trajectory hover) |
 | `CUSTOM_CSS` | CSS for layout, plot sizing, sidebar width, compact elements |
 
 ---
@@ -465,10 +475,36 @@ See the adapt_diff repository for adapter documentation and available implementa
 |----------|-----------|---------|-------|-----------|
 | `_gpu_available` | `() -> bool` | Check if cuML GPU backend is available | `cuml`, `cupy` imports | Module initialization |
 | `get_umap_class` | `() -> type` | Return UMAP class (cuML or umap-learn) | — | `compute_umap` |
+| `get_aligned_umap_class` | `() -> type` | Return AlignedUMAP class (umap-learn only) | — | `compute_aligned_umap` |
 | `get_knn_class` | `() -> type` | Return NearestNeighbors class | — | `_fit_knn_model` |
 | `to_gpu_array` | `(data) -> Any` | Convert to cupy array if GPU available | `cp.asarray` | — |
 | `to_numpy` | `(data) -> np.ndarray` | Ensure numpy (convert from cupy) | `data.get` | `find_knn_neighbors`, `compute_umap` |
 | `get_backend_name` | `() -> str` | Return current backend name for logging | — | `compute_umap` |
+
+---
+
+#### `diffviews/processing/aligned_umap.py`
+
+**Purpose:** AlignedUMAP computation for 3D sigma-varying activation visualization. Creates aligned embeddings across sigma levels where Z = log(sigma).
+
+**Lines:** 284
+
+**Imports from local files:**
+- `diffviews.processing.umap_backend` → `get_aligned_umap_class`, `to_numpy`
+
+**Called by:**
+- `diffviews/visualization/visualizer.py`
+
+---
+
+##### Functions
+
+| Function | Signature | Summary | Calls | Called By |
+|----------|-----------|---------|-------|-----------|
+| `compute_aligned_umap` | `(activations, sigma_labels, n_neighbors, min_dist, alignment_regularisation, alignment_window_size, n_components, normalize, pca_components, random_state) -> Tuple[Dict, AlignedUMAP, StandardScaler, PCA, Dict, List, Dict]` | Compute AlignedUMAP across sigma levels with identity relations | `get_aligned_umap_class`, `StandardScaler.fit_transform`, `PCA.fit_transform`, `AlignedUMAP.fit`, `NearestNeighbors.fit` | `GradioVisualizer.compute_and_load_aligned_3d` |
+| `project_aligned_trajectory_point` | `(activation, sigma, scaler, pca_reducer, nn_models, embeddings_per_sigma, sigma_levels, k) -> Tuple[float, float]` | Project trajectory point using k-NN interpolation (AlignedUMAP lacks transform) | `nn_model.kneighbors`, `np.average` | `GradioVisualizer.project_trajectory_to_3d` |
+| `save_aligned_embeddings` | `(embeddings_per_sigma, metadata_df, output_dir, scaler, pca_reducer, nn_models, sigma_levels, sigma_indices, umap_params) -> None` | Save AlignedUMAP results to disk (CSV, JSON, pkl) | `df.to_csv`, `json.dump`, `pickle.dump` | `compute_and_load_aligned_3d` |
+| `load_aligned_embeddings` | `(embeddings_dir) -> Tuple[pd.DataFrame, dict, dict]` | Load AlignedUMAP data from disk | `pd.read_csv`, `json.load`, `pickle.load` | `_load_aligned_3d` |
 
 ---
 
@@ -613,20 +649,27 @@ app.py (entry point)
 │   └── save_embeddings
 │       └── diffviews.processing.umap_backend
 │       └── diffviews.core.extractor
+├── diffviews.processing.aligned_umap
+│   ├── compute_aligned_umap
+│   ├── project_aligned_trajectory_point
+│   ├── save_aligned_embeddings
+│   └── load_aligned_embeddings
+│       └── diffviews.processing.umap_backend
 ├── diffviews.visualization.app
 │   ├── create_gradio_app
 │   ├── GradioVisualizer
 │   │   ├── diffviews.processing.umap
 │   │   ├── diffviews.processing.umap_backend
+│   │   ├── diffviews.processing.aligned_umap
 │   │   ├── adapt_diff (get_adapter)
 │   │   ├── diffviews.core.masking
 │   │   └── diffviews.visualization.models
-│   │       └── ModelData
+│   │       └── ModelData (includes 3D mode fields)
 │   ├── diffviews.visualization.gpu_ops
 │   │   ├── diffviews.core.masking
 │   │   └── diffviews.core.generator
 │   └── diffviews.visualization.layout
-│       └── CUSTOM_CSS, PLOTLY_HANDLER_JS
+│       └── CUSTOM_CSS, PLOTLY_HANDLER_JS (3D support)
 ├── diffviews.core.masking
 │   ├── ActivationMasker
 │   └── adapt_diff (GeneratorAdapter)

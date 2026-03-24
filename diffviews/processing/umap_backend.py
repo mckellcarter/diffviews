@@ -65,3 +65,9 @@ def to_numpy(data: Any) -> np.ndarray:
 def get_backend_name() -> str:
     """Return current backend name for logging."""
     return "cuML (GPU)" if CUML_AVAILABLE else "umap-learn (CPU)"
+
+
+def get_aligned_umap_class() -> type:
+    """Return AlignedUMAP class (umap-learn only, no cuML support)."""
+    from umap import AlignedUMAP
+    return AlignedUMAP
