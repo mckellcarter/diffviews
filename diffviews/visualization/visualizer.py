@@ -187,6 +187,10 @@ class GradioVisualizer:
                         break
             checkpoint_path = ckpt
 
+        # Determine conditioning type and dataset type from config
+        conditioning_type = config.get("conditioning_type", "class")
+        dataset_type = config.get("dataset_type", "imagenet_real")
+
         # Create ModelData instance
         model_data = ModelData(
             name=model_name,
@@ -196,6 +200,7 @@ class GradioVisualizer:
             sigma_max=config.get("sigma_max", self._default_sigma_max),
             sigma_min=config.get("sigma_min", self._default_sigma_min),
             default_steps=config.get("default_steps", self._default_num_steps),
+            conditioning_type=conditioning_type,
         )
 
         # Load embeddings
@@ -235,7 +240,7 @@ class GradioVisualizer:
 
             # Load activations for generation
             model_data.activations, model_data.metadata_df = self._load_activations(
-                data_dir, "imagenet_real"
+                data_dir, dataset_type
             )
 
             # Fit KNN model
@@ -513,6 +518,42 @@ class GradioVisualizer:
         model_data.layer_shapes = model_data.adapter.get_layer_shapes()
         print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
         return model_data.adapter
+
+    def encode_text(self, model_name: str, caption: str) -> Optional["torch.Tensor"]:
+        """Encode text caption for T2I models using CLIP.
+
+        Args:
+            model_name: Name of the model
+            caption: Text caption to encode
+
+        Returns:
+            Text embedding tensor (1, 1024) or None if not text-conditioned
+        """
+        import torch
+
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return None
+        if model_data.conditioning_type != "text":
+            return None
+
+        # Lazy load CLIP encoder
+        if model_data.text_encoder is None:
+            import open_clip
+            print(f"Loading CLIP ViT-H/14 for text encoding...")
+            model, _, _ = open_clip.create_model_and_transforms(
+                "ViT-H-14", pretrained="laion2b_s32b_b79k"
+            )
+            model_data.text_encoder = model.eval().to(self.device)
+            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-H-14")
+            print(f"CLIP encoder loaded on {self.device}")
+
+        # Encode caption
+        with torch.no_grad():
+            tokens = model_data.text_tokenizer([caption]).to(self.device)
+            text_features = model_data.text_encoder.encode_text(tokens)
+            # Return as (1, 1024) for single sample
+            return text_features
 
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""

@@ -405,13 +405,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 sample = model_data.df.iloc[point_idx]
                 img = visualizer.get_image(model_name, sample["image_path"])
 
-                # Format details
-                if "class_label" in sample:
-                    class_name = visualizer.get_class_name(int(sample["class_label"]))
-                else:
-                    class_name = "N/A"
+                # Format details based on conditioning type
                 details = f"**{sample['sample_id']}**<br>"
-                if "class_label" in sample:
+                if model_data.conditioning_type == "text" and "caption" in sample:
+                    caption = sample["caption"]
+                    caption_display = caption[:60] + "..." if len(caption) > 60 else caption
+                    details += f"Caption: {caption_display}<br>"
+                elif "class_label" in sample:
+                    class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
                     details += f"σ = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
@@ -889,12 +890,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if not all_neighbors:
                 return None, gr.update(), gr.update(), gr.update(), existing_traj, [], gen_infos_state, -1
 
-            # Get class label from selected point (or first neighbor)
+            # Get conditioning from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
-            if "class_label" in model_data.df.columns:
+            class_label = None
+            text_embedding = None
+            caption = None
+
+            if model_data.conditioning_type == "text":
+                # Text-conditioned model: get caption and encode
+                if "caption" in model_data.df.columns:
+                    caption = model_data.df.iloc[ref_idx]["caption"]
+                    text_embedding = visualizer.encode_text(model_name, caption)
+            elif "class_label" in model_data.df.columns:
                 class_label = int(model_data.df.iloc[ref_idx]["class_label"])
-            else:
-                class_label = None
 
             # Get layers for trajectory extraction
             extract_layers = sorted(model_data.umap_params.get("layers", []))
@@ -908,7 +916,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             result = _generate_on_gpu(
                 model_name, all_neighbors, class_label,
                 n_steps, m_steps, s_max, s_min, guidance, noise_mode,
-                extract_layers, can_project
+                extract_layers, can_project, text_embedding
             )
             if result is None:
                 return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
@@ -979,8 +987,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Convert to numpy for gr.Image
             gen_img_raw = images[0].numpy()
-            class_name = visualizer.get_class_name(class_label) if class_label else "random"
             n_steps = len(intermediate_imgs)
+
+            # Get display label based on conditioning type
+            if model_data.conditioning_type == "text" and caption:
+                display_label = caption[:50] + "..." if len(caption) > 50 else caption
+                cond_id = None
+            else:
+                display_label = visualizer.get_class_name(class_label) if class_label else "random"
+                cond_id = class_label
 
             # Create composite for final image (output + last noised input as inset)
             if noised_inputs and len(noised_inputs) > 0:
@@ -991,8 +1006,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             # Build generation info for this trajectory
             gen_info = {
-                "class_id": class_label,
-                "class_name": class_name,
+                "class_id": cond_id,
+                "class_name": display_label,
+                "caption": caption,
                 "n_steps": n_steps,
                 "final_image": gen_img,
             }
@@ -1014,20 +1030,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 else:
                     composite_img = img_np
 
-                caption = f"{class_label}: {class_name} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
-                step_gallery.append((composite_img, caption))
+                step_caption = f"{display_label} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                step_gallery.append((composite_img, step_caption))
                 intermediates_state[-1].append((composite_img, sigma))
 
             # Gallery label
-            gallery_label = f"{class_label}: {class_name} | {n_steps} steps"
+            gallery_label = f"{display_label} | {n_steps} steps"
             gallery_update = gr.update(value=step_gallery, label=gallery_label)
 
             # Build dropdown choices: (label, index) for each trajectory
             traj_choices = []
             for i, info in enumerate(gen_infos_state):
-                cid = info.get("class_id", "?")
+                cid = info.get("class_id")
                 cname = info.get("class_name", "")
-                traj_choices.append((f"Traj {i+1} Class {cid}: {cname}", i))
+                if cid is not None:
+                    traj_choices.append((f"Traj {i+1} Class {cid}: {cname}", i))
+                else:
+                    traj_choices.append((f"Traj {i+1}: {cname}", i))
             new_traj_idx = len(gen_infos_state) - 1
             dropdown_update = gr.update(choices=traj_choices, value=new_traj_idx)
 
@@ -1078,14 +1097,16 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         # --- Frame navigation for intermediate images ---
         def format_frame_info(gen_info, frame_idx, n_frames, sigma):
-            """Format frame info string with class, step, sigma (compact)."""
+            """Format frame info string with class/caption, step, sigma (compact)."""
             if not gen_info:
                 return f"Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
 
-            class_id = gen_info.get("class_id", "?")
+            class_id = gen_info.get("class_id")
             class_name = gen_info.get("class_name", "")
 
-            return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+            if class_id is not None:
+                return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+            return f"{class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
 
         def _get_traj_idx(traj_sel, intermediates):
             """Resolve selected trajectory index, default to last."""
@@ -1177,14 +1198,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Rebuild gallery for this trajectory
             steps = intermediates[ti]
             step_gallery = []
-            cid = info.get("class_id", "?")
+            cid = info.get("class_id")
             cname = info.get("class_name", "")
             n_steps = len(steps)
             for i, (img, sigma) in enumerate(steps):
-                caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
-                step_gallery.append((img, caption))
+                if cid is not None:
+                    step_caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                else:
+                    step_caption = f"{cname} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                step_gallery.append((img, step_caption))
 
-            gallery_label = f"{cid}: {cname} | {n_steps} steps"
+            if cid is not None:
+                gallery_label = f"{cid}: {cname} | {n_steps} steps"
+            else:
+                gallery_label = f"{cname} | {n_steps} steps"
             gallery_update = gr.update(value=step_gallery, label=gallery_label)
 
             return final_img, gallery_update, -1

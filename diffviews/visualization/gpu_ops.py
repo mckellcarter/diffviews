@@ -50,7 +50,7 @@ def is_hybrid_mode() -> bool:
 def _generate_on_gpu(
     model_name, all_neighbors, class_label,
     n_steps, m_steps, s_max, s_min, guidance, noise_mode,
-    extract_layers, can_project
+    extract_layers, can_project, text_embedding=None
 ):
     """Run masked generation on GPU.
 
@@ -128,6 +128,7 @@ def _generate_on_gpu(
                 adapter,
                 masker,
                 class_label=class_label,
+                text_embedding=text_embedding,
                 num_steps=int(n_steps),
                 mask_steps=int(m_steps),
                 sigma_max=float(s_max),

@@ -103,6 +103,7 @@ def generate_with_mask_multistep(
     adapter: GeneratorAdapter,
     masker: Optional[ActivationMasker] = None,
     class_label: Optional[int] = None,
+    text_embedding: Optional[torch.Tensor] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
     sigma_max: float = 80.0,
@@ -126,6 +127,7 @@ def generate_with_mask_multistep(
         adapter: GeneratorAdapter instance
         masker: ActivationMasker with masks set (hooks should be registered)
         class_label: Class label (0-999), random if None, -1 for uniform
+        text_embedding: Text embedding for T2I models (B, seq_len, dim), overrides class_label
         num_steps: Number of denoising steps
         mask_steps: Steps to apply mask (default=num_steps, 1=first-only)
         sigma_max: Maximum sigma
@@ -215,8 +217,18 @@ def generate_with_mask_multistep(
 
         sigma_tensor = torch.ones(num_samples, device=device) * sigma
 
-        if guidance_scale != 1.0:
-            # Classifier-free guidance
+        if text_embedding is not None:
+            # Text-conditioned generation (T2I models)
+            if guidance_scale != 1.0:
+                # CFG with null text embedding
+                null_emb = torch.zeros_like(text_embedding)
+                pred_cond = adapter.forward(x, sigma_tensor, encoder_hidden_states=text_embedding)
+                pred_uncond = adapter.forward(x, sigma_tensor, encoder_hidden_states=null_emb)
+                pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+            else:
+                pred = adapter.forward(x, sigma_tensor, encoder_hidden_states=text_embedding)
+        elif guidance_scale != 1.0:
+            # Classifier-free guidance (class-conditioned)
             pred_cond = adapter.forward(x, sigma_tensor, one_hot)
             pred_uncond = adapter.forward(x, sigma_tensor, uncond)
             pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)

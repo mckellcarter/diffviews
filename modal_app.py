@@ -14,10 +14,14 @@ from pathlib import Path
 
 import modal
 
+# Bump to force image rebuild
+IMAGE_VERSION = "0.2.0"
+
 app = modal.App("diffviews")
 
 image = (
     modal.Image.debian_slim(python_version="3.10")
+    .env({"IMAGE_VERSION": IMAGE_VERSION})
     .apt_install("git")
     .pip_install(
         "torch>=2.0.0",
@@ -184,6 +188,74 @@ def regenerate_umap(data_dir: Path, model: str) -> bool:
         return False
 
 
+def compute_initial_umap(data_dir: Path, model: str) -> bool:
+    """Compute UMAP embeddings from scratch for a model without existing embeddings.
+
+    Used for new models like mscoco where no CSV exists yet.
+    """
+    from diffviews.processing.umap import (
+        load_dataset_activations,
+        compute_umap,
+        save_embeddings,
+    )
+    import json
+
+    model_dir = data_dir / model
+    config_path = model_dir / "config.json"
+
+    if not config_path.exists():
+        print(f"  Skipping initial UMAP for {model}: no config.json")
+        return False
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    dataset_type = config.get("dataset_type", "imagenet_real")
+    activation_dir = model_dir / "activations" / dataset_type
+    metadata_path = model_dir / "metadata" / dataset_type / "dataset_info.json"
+    embeddings_dir = model_dir / "embeddings"
+    embeddings_dir.mkdir(exist_ok=True)
+
+    if not activation_dir.exists() or not metadata_path.exists():
+        print(f"  Skipping initial UMAP for {model}: missing activations or metadata")
+        return False
+
+    # Check if embeddings already exist
+    csv_files = list(embeddings_dir.glob("*.csv"))
+    if csv_files:
+        print(f"  Skipping initial UMAP for {model}: embeddings already exist")
+        return False
+
+    csv_path = embeddings_dir / "embeddings.csv"
+    umap_params = {"n_neighbors": 15, "min_dist": 0.1, "layers": ["mid_block"]}
+
+    pca_components = get_pca_components()
+    print(f"  Computing initial UMAP for {model} (dataset={dataset_type}, pca={pca_components})...")
+
+    try:
+        activations, metadata_df = load_dataset_activations(activation_dir, metadata_path)
+        print(f"    {activations.shape[0]} samples x {activations.shape[1]} dims")
+
+        embeddings, reducer, scaler, pca_reducer = compute_umap(
+            activations,
+            n_neighbors=umap_params.get("n_neighbors", 15),
+            min_dist=umap_params.get("min_dist", 0.1),
+            normalize=True,
+            pca_components=pca_components,
+        )
+
+        save_embeddings(
+            embeddings, metadata_df, csv_path, umap_params, reducer, scaler, pca_reducer
+        )
+        print(f"    Initial UMAP complete: {csv_path}")
+        return True
+    except Exception as e:
+        print(f"    Error computing initial UMAP: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _umap_pkl_ok(pkl_path: Path) -> bool:
     """Check if UMAP pkl loads and transforms without numba errors."""
     try:
@@ -241,15 +313,32 @@ def ensure_data_ready(data_dir: Path) -> None:
     for model in CHECKPOINT_URLS:
         download_checkpoint(data_dir, model)
 
+    # Find all model directories with config.json
+    all_models = []
+    for model_dir in data_dir.iterdir():
+        if model_dir.is_dir() and (model_dir / "config.json").exists():
+            all_models.append(model_dir.name)
+
+    print(f"\nFound models: {all_models}")
+
     print("\nChecking UMAP pkls...")
-    for model in ["dmd2", "edm"]:
+    for model in all_models:
         emb_dir = data_dir / model / "embeddings"
-        if not emb_dir.exists() or not list(emb_dir.glob("*.csv")):
+
+        # Check if embeddings exist
+        csv_files = list(emb_dir.glob("*.csv")) if emb_dir.exists() else []
+
+        if not csv_files:
+            # No embeddings - try to compute initial UMAP
+            compute_initial_umap(data_dir, model)
             continue
+
+        # Check if pkl is valid
         pkl_files = list(emb_dir.glob("*.pkl"))
         if pkl_files and _umap_pkl_ok(pkl_files[0]):
             print(f"  {model}: pkl valid, skipping refit")
             continue
+
         regenerate_umap(data_dir, model)
 
 
