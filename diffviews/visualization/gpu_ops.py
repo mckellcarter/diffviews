@@ -92,10 +92,16 @@ def _generate_on_gpu(
         mask_serialized = {k: v.tolist() for k, v in mask_dict.items()}
 
         print(f"[gpu_ops] Dispatching to GPU worker (mask: {list(mask_dict.keys())})")
+
+        # Serialize text_embedding for T2I models
+        text_emb_list = None
+        if text_embedding is not None:
+            text_emb_list = text_embedding.cpu().tolist()
+
         result = _remote_gpu_worker.generate_from_mask.remote(
             model_name=model_name,
             mask_dict=mask_serialized,
-            class_label=int(class_label),
+            class_label=int(class_label) if class_label is not None else None,
             n_steps=int(n_steps),
             m_steps=int(m_steps),
             s_max=float(s_max),
@@ -104,6 +110,7 @@ def _generate_on_gpu(
             noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
             extract_layers=extract_layers if can_project else None,
             return_trajectory=can_project,
+            text_embedding=text_emb_list,
         )
         return _deserialize_result(result)
 

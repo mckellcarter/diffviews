@@ -107,7 +107,7 @@ class GPUWorker:
         self,
         model_name: str,
         mask_dict: Dict[str, List],  # Serialized numpy arrays as lists
-        class_label: int,
+        class_label: Optional[int] = None,
         n_steps: int = 10,
         m_steps: int = 8,
         s_max: float = 80.0,
@@ -116,13 +116,15 @@ class GPUWorker:
         noise_mode: str = "stochastic",
         extract_layers: Optional[List[str]] = None,
         return_trajectory: bool = True,
+        text_embedding: Optional[List] = None,
     ) -> Optional[List]:
         """Generate with pre-computed mask from CPU.
 
         Args:
             model_name: Model to use
             mask_dict: {layer_name: [[values]]} — numpy arrays as nested lists
-            class_label: Class for generation
+            class_label: Class for generation (class-conditioned models)
+            text_embedding: Text embedding as list (T2I models)
             ... generation params ...
 
         Returns:
@@ -143,6 +145,11 @@ class GPUWorker:
         for layer_name, arr in mask_dict.items():
             activation_dict[layer_name] = torch.tensor(arr, dtype=torch.float32)
 
+        # Reconstruct text_embedding tensor if provided
+        text_emb_tensor = None
+        if text_embedding is not None:
+            text_emb_tensor = torch.tensor(text_embedding, dtype=torch.float32, device=self.device)
+
         # Run generation
         masker = ActivationMasker(adapter)
         for layer_name, activation in activation_dict.items():
@@ -154,6 +161,7 @@ class GPUWorker:
                 adapter,
                 masker,
                 class_label=class_label,
+                text_embedding=text_emb_tensor,
                 num_steps=n_steps,
                 mask_steps=m_steps,
                 sigma_max=s_max,
