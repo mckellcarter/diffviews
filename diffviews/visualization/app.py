@@ -896,11 +896,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             text_embedding = None
             caption = None
 
+            print(f"[on_generate] conditioning_type={model_data.conditioning_type}, df_cols={list(model_data.df.columns)[:5]}")
             if model_data.conditioning_type == "text":
                 # Text-conditioned model: get caption and encode
                 if "caption" in model_data.df.columns:
                     caption = model_data.df.iloc[ref_idx]["caption"]
+                    print(f"[on_generate] caption={caption[:50] if caption else None}")
                     text_embedding = visualizer.encode_text(model_name, caption)
+                    print(f"[on_generate] text_embedding={text_embedding.shape if text_embedding is not None else None}")
             elif "class_label" in model_data.df.columns:
                 class_label = int(model_data.df.iloc[ref_idx]["class_label"])
 
