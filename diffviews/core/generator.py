@@ -158,7 +158,15 @@ def generate_with_mask_multistep(
         torch.manual_seed(seed if seed is not None else 42)
         torch.use_deterministic_algorithms(True, warn_only=True)
 
+    # Get resolution - use latent resolution for latent diffusion models
     resolution = adapter.resolution
+    if hasattr(adapter, 'latent_resolution'):
+        resolution = adapter.latent_resolution
+    elif hasattr(adapter, 'vae_scale_factor'):
+        resolution = resolution // adapter.vae_scale_factor
+    elif hasattr(adapter, 'encode_images'):
+        # Default VAE scale factor is 8 for SD-style models
+        resolution = resolution // 8
     num_classes = adapter.num_classes
 
     trajectory_activations = []
