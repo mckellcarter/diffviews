@@ -43,6 +43,20 @@ def get_denoising_sigmas(num_steps: int, sigma_max: float, sigma_min: float, rho
     return sigmas
 
 
+def sigma_to_timestep(sigma: float, alphas_cumprod: torch.Tensor) -> int:
+    """
+    Convert sigma to nearest DDPM timestep using alpha_cumprod schedule.
+
+    sigma = sqrt((1 - alpha_cumprod) / alpha_cumprod)
+    alpha_cumprod = 1 / (1 + sigma^2)
+    """
+    target_alpha = 1.0 / (1.0 + sigma ** 2)
+    # Find closest timestep
+    diffs = (alphas_cumprod - target_alpha).abs()
+    timestep = diffs.argmin().item()
+    return int(timestep)
+
+
 @torch.no_grad()
 def generate_with_mask(
     adapter: GeneratorAdapter,
@@ -103,6 +117,7 @@ def generate_with_mask_multistep(
     adapter: GeneratorAdapter,
     masker: Optional[ActivationMasker] = None,
     class_label: Optional[int] = None,
+    text_embedding: Optional[torch.Tensor] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
     sigma_max: float = 80.0,
@@ -126,6 +141,7 @@ def generate_with_mask_multistep(
         adapter: GeneratorAdapter instance
         masker: ActivationMasker with masks set (hooks should be registered)
         class_label: Class label (0-999), random if None, -1 for uniform
+        text_embedding: Text embedding for T2I models (B, seq_len, dim), overrides class_label
         num_steps: Number of denoising steps
         mask_steps: Steps to apply mask (default=num_steps, 1=first-only)
         sigma_max: Maximum sigma
@@ -156,7 +172,15 @@ def generate_with_mask_multistep(
         torch.manual_seed(seed if seed is not None else 42)
         torch.use_deterministic_algorithms(True, warn_only=True)
 
+    # Get resolution - use latent resolution for latent diffusion models
     resolution = adapter.resolution
+    if hasattr(adapter, 'latent_resolution'):
+        resolution = adapter.latent_resolution
+    elif hasattr(adapter, 'vae_scale_factor'):
+        resolution = resolution // adapter.vae_scale_factor
+    elif hasattr(adapter, 'encode_images'):
+        # Default VAE scale factor is 8 for SD-style models
+        resolution = resolution // 8
     num_classes = adapter.num_classes
 
     trajectory_activations = []
@@ -168,16 +192,23 @@ def generate_with_mask_multistep(
         extractor = ActivationExtractor(adapter, extract_layers)
         extractor.register_hooks()
 
-    # Generate labels
-    if class_label is not None and class_label < 0:
+    # Generate labels (skip for text-conditioned models)
+    one_hot = None
+    uncond = None
+    random_labels = torch.zeros(num_samples, device=device, dtype=torch.long)
+
+    if text_embedding is not None:
+        # T2I model - no class labels needed
+        pass
+    elif class_label is not None and class_label < 0:
         random_labels = torch.tensor([-1], device=device).repeat(num_samples)
         one_hot = torch.ones((num_samples, num_classes), device=device) / num_classes
         uncond = one_hot.clone()
-    elif class_label is None:
+    elif class_label is None and num_classes > 0:
         random_labels = torch.randint(0, num_classes, (num_samples,), device=device)
         one_hot = torch.eye(num_classes, device=device)[random_labels]
         uncond = torch.zeros_like(one_hot)
-    else:
+    elif class_label is not None:
         random_labels = torch.full((num_samples,), class_label, device=device, dtype=torch.long)
         one_hot = torch.eye(num_classes, device=device)[random_labels]
         uncond = torch.zeros_like(one_hot)
@@ -186,7 +217,15 @@ def generate_with_mask_multistep(
     sigmas = get_denoising_sigmas(num_steps, sigma_max, sigma_min, rho).to(device)
 
     # Pre-generate noise based on mode
-    noise_shape = (num_samples, 3, resolution, resolution)
+    # Get input channels from adapter (4 for latent diffusion, 3 for pixel-space)
+    # Check multiple possible attribute names
+    in_channels = getattr(adapter, 'in_channels', None)
+    if in_channels is None:
+        in_channels = getattr(adapter, 'latent_channels', None)
+    if in_channels is None:
+        # Latent diffusion models have encode_images method
+        in_channels = 4 if hasattr(adapter, 'encode_images') else 3
+    noise_shape = (num_samples, in_channels, resolution, resolution)
     if noise_mode == "zero":
         initial_noise = torch.zeros(noise_shape, device=device)
         step_noises = [torch.zeros(noise_shape, device=device)] * (num_steps - 1)
@@ -213,15 +252,34 @@ def generate_with_mask_multistep(
         if i == mask_steps and masker is not None:
             masker.remove_hooks()
 
-        sigma_tensor = torch.ones(num_samples, device=device) * sigma
+        # Convert sigma to timestep for DDPM-style models, or use sigma directly
+        if hasattr(adapter, 'scheduler') and hasattr(adapter.scheduler, 'alphas_cumprod'):
+            timestep = sigma_to_timestep(float(sigma), adapter.scheduler.alphas_cumprod)
+            t_input = torch.tensor([timestep], device=device, dtype=torch.long).expand(num_samples)
+            if i == 0:
+                print(f"[generator] Using DDPM timesteps: sigma={float(sigma):.2f} -> t={timestep}")
+        else:
+            t_input = torch.ones(num_samples, device=device) * sigma
+            if i == 0:
+                print(f"[generator] Using sigma directly: {float(sigma):.2f} (no scheduler.alphas_cumprod)")
 
-        if guidance_scale != 1.0:
-            # Classifier-free guidance
-            pred_cond = adapter.forward(x, sigma_tensor, one_hot)
-            pred_uncond = adapter.forward(x, sigma_tensor, uncond)
+        if text_embedding is not None:
+            # Text-conditioned generation (T2I models)
+            if guidance_scale != 1.0:
+                # CFG with null text embedding
+                null_emb = torch.zeros_like(text_embedding)
+                pred_cond = adapter.forward(x, t_input, encoder_hidden_states=text_embedding)
+                pred_uncond = adapter.forward(x, t_input, encoder_hidden_states=null_emb)
+                pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+            else:
+                pred = adapter.forward(x, t_input, encoder_hidden_states=text_embedding)
+        elif guidance_scale != 1.0:
+            # Classifier-free guidance (class-conditioned)
+            pred_cond = adapter.forward(x, t_input, one_hot)
+            pred_uncond = adapter.forward(x, t_input, uncond)
             pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
         else:
-            pred = adapter.forward(x, sigma_tensor, one_hot)
+            pred = adapter.forward(x, t_input, one_hot)
 
         # Extract trajectory activations
         if extractor is not None:

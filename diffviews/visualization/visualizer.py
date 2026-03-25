@@ -133,24 +133,37 @@ class GradioVisualizer:
             if not subdir.is_dir():
                 continue
             config_path = subdir / "config.json"
+            if not config_path.exists():
+                continue
+
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+
+            # Check for embeddings (optional - can compute on demand)
             embeddings_dir = subdir / "embeddings"
-            if config_path.exists() and embeddings_dir.exists():
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                embeddings_files = list(embeddings_dir.glob("*.csv"))
-                if not embeddings_files:
-                    continue
-                model_name = subdir.name
-                self.model_configs[model_name] = {
-                    "data_dir": subdir,
-                    "adapter": config.get("adapter", "dmd2-imagenet-64"),
-                    "checkpoint": config.get("checkpoint"),
-                    "sigma_max": config.get("sigma_max", 80.0),
-                    "sigma_min": config.get("sigma_min", 0.5),
-                    "default_steps": config.get("default_steps", 5),
-                    "embeddings_path": embeddings_files[0],
-                }
-                print(f"Discovered model: {model_name} (adapter={config.get('adapter')})")
+            embeddings_files = list(embeddings_dir.glob("*.csv")) if embeddings_dir.exists() else []
+            embeddings_path = embeddings_files[0] if embeddings_files else None
+
+            # Require either embeddings or activations to be useful
+            dataset_type = config.get("dataset_type", "imagenet_real")
+            activations_dir = subdir / "activations" / dataset_type
+            if not embeddings_path and not activations_dir.exists():
+                continue
+
+            model_name = subdir.name
+            self.model_configs[model_name] = {
+                "data_dir": subdir,
+                "adapter": config.get("adapter", "dmd2-imagenet-64"),
+                "checkpoint": config.get("checkpoint"),
+                "sigma_max": config.get("sigma_max", 80.0),
+                "sigma_min": config.get("sigma_min", 0.5),
+                "default_steps": config.get("default_steps", 5),
+                "embeddings_path": embeddings_path,
+                "conditioning_type": config.get("conditioning_type", "class"),
+                "dataset_type": dataset_type,
+            }
+            status = "ready" if embeddings_path else "needs UMAP"
+            print(f"Discovered model: {model_name} (adapter={config.get('adapter')}, {status})")
 
     def _load_all_models(self):
         """Load ONLY the initial/default model to minimize memory.
@@ -187,6 +200,10 @@ class GradioVisualizer:
                         break
             checkpoint_path = ckpt
 
+        # Determine conditioning type and dataset type from config
+        conditioning_type = config.get("conditioning_type", "class")
+        dataset_type = config.get("dataset_type", "imagenet_real")
+
         # Create ModelData instance
         model_data = ModelData(
             name=model_name,
@@ -196,9 +213,15 @@ class GradioVisualizer:
             sigma_max=config.get("sigma_max", self._default_sigma_max),
             sigma_min=config.get("sigma_min", self._default_sigma_min),
             default_steps=config.get("default_steps", self._default_num_steps),
+            conditioning_type=conditioning_type,
         )
 
-        # Load embeddings
+        # Load activations for generation (always needed)
+        model_data.activations, model_data.metadata_df = self._load_activations(
+            data_dir, dataset_type
+        )
+
+        # Load embeddings if available
         if embeddings_path and Path(embeddings_path).exists():
             print(f"  Loading embeddings from {embeddings_path}")
             model_data.df = pd.read_csv(embeddings_path)
@@ -233,11 +256,6 @@ class GradioVisualizer:
                         f"{original_count} -> {len(model_data.df)} samples"
                     )
 
-            # Load activations for generation
-            model_data.activations, model_data.metadata_df = self._load_activations(
-                data_dir, "imagenet_real"
-            )
-
             # Fit KNN model
             self._fit_knn_model(model_data)
 
@@ -251,6 +269,11 @@ class GradioVisualizer:
             model_data.default_nn_model = model_data.nn_model
 
             print(f"  Loaded {len(model_data.df)} samples")
+
+        elif model_data.activations is not None:
+            # No embeddings but have activations - compute UMAP on demand
+            print(f"  No embeddings found, computing UMAP...")
+            self._compute_initial_umap(model_data, data_dir, dataset_type)
         else:
             print(f"  Warning: No embeddings found for {model_name}")
             model_data.df = pd.DataFrame()
@@ -285,6 +308,63 @@ class GradioVisualizer:
         NearestNeighbors = get_knn_class()
         model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
         model_data.nn_model.fit(umap_coords)
+
+    def _compute_initial_umap(self, model_data: ModelData, data_dir: Path, dataset_type: str):
+        """Compute UMAP embeddings for a model without pre-computed embeddings."""
+        from diffviews.processing.umap import compute_umap, save_embeddings
+
+        if model_data.activations is None or model_data.metadata_df is None:
+            print(f"  Cannot compute UMAP: missing activations or metadata")
+            return
+
+        print(f"  Computing UMAP for {model_data.name} ({len(model_data.activations)} samples)...")
+
+        # Compute UMAP with PCA pre-reduction for speed
+        umap_params = {"n_neighbors": 15, "min_dist": 0.1, "layers": ["mid_block"]}
+        pca_components = 50 if model_data.activations.shape[1] > 50 else None
+
+        try:
+            embeddings, reducer, scaler, pca_reducer = compute_umap(
+                model_data.activations,
+                n_neighbors=umap_params["n_neighbors"],
+                min_dist=umap_params["min_dist"],
+                normalize=True,
+                pca_components=pca_components,
+            )
+
+            # Build df with UMAP coords + metadata
+            model_data.df = model_data.metadata_df.copy()
+            model_data.df["umap_x"] = embeddings[:, 0]
+            model_data.df["umap_y"] = embeddings[:, 1]
+            model_data.umap_reducer = reducer
+            model_data.umap_scaler = scaler
+            model_data.umap_pca = pca_reducer
+            model_data.umap_params = umap_params
+
+            # Fit KNN model
+            self._fit_knn_model(model_data)
+
+            # Backup for layer restore
+            model_data.default_df = model_data.df.copy()
+            model_data.default_activations = model_data.activations
+            model_data.default_umap_reducer = reducer
+            model_data.default_umap_scaler = scaler
+            model_data.default_umap_pca = pca_reducer
+            model_data.default_umap_params = dict(umap_params)
+            model_data.default_nn_model = model_data.nn_model
+
+            # Save embeddings for future loads
+            embeddings_dir = data_dir / "embeddings"
+            embeddings_dir.mkdir(exist_ok=True)
+            csv_path = embeddings_dir / "embeddings.csv"
+            save_embeddings(embeddings, model_data.metadata_df, csv_path, umap_params, reducer, scaler, pca_reducer)
+            print(f"  UMAP complete: {len(model_data.df)} samples, saved to {csv_path}")
+
+        except Exception as e:
+            print(f"  Error computing UMAP: {e}")
+            import traceback
+            traceback.print_exc()
+            model_data.df = pd.DataFrame()
 
     def get_model(self, model_name: str) -> Optional[ModelData]:
         """Get ModelData for a model name, or None if not loaded."""
@@ -513,6 +593,42 @@ class GradioVisualizer:
         model_data.layer_shapes = model_data.adapter.get_layer_shapes()
         print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
         return model_data.adapter
+
+    def encode_text(self, model_name: str, caption: str) -> Optional["torch.Tensor"]:
+        """Encode text caption for T2I models using CLIP.
+
+        Args:
+            model_name: Name of the model
+            caption: Text caption to encode
+
+        Returns:
+            Text embedding tensor (1, 1024) or None if not text-conditioned
+        """
+        import torch
+
+        model_data = self.get_model(model_name)
+        if model_data is None:
+            return None
+        if model_data.conditioning_type != "text":
+            return None
+
+        # Lazy load CLIP encoder
+        if model_data.text_encoder is None:
+            import open_clip
+            print(f"Loading CLIP ViT-H/14 for text encoding...")
+            model, _, _ = open_clip.create_model_and_transforms(
+                "ViT-H-14", pretrained="laion2b_s32b_b79k"
+            )
+            model_data.text_encoder = model.eval().to(self.device)
+            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-H-14")
+            print(f"CLIP encoder loaded on {self.device}")
+
+        # Encode caption
+        with torch.no_grad():
+            tokens = model_data.text_tokenizer([caption]).to(self.device)
+            text_features = model_data.text_encoder.encode_text(tokens)
+            # Return as (1, 1, 1024) for cross-attention: (batch, seq_len, dim)
+            return text_features.unsqueeze(1)
 
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""

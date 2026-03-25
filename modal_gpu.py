@@ -16,7 +16,7 @@ import modal
 
 app = modal.App("diffviews-gpu")
 
-# Minimal GPU image — only what's needed for generation
+# GPU image with T2I dependencies
 gpu_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
@@ -25,6 +25,8 @@ gpu_image = (
         "numpy>=1.21.0",
         "pillow>=9.0.0",
         "tqdm>=4.60.0",
+        "diffusers>=0.25.0",
+        "transformers>=4.30.0",
     )
     .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
 )
@@ -72,26 +74,36 @@ class GPUWorker:
         if model_name in self._adapters:
             return self._adapters[model_name]
 
+        import json
         from adapt_diff import get_adapter
 
-        # Find checkpoint
+        # Load config to get adapter type
+        config_path = DATA_DIR / model_name / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = json.load(f)
+            adapter_type = config.get("adapter", "dmd2-imagenet-64")
+        else:
+            # Fallback for legacy models
+            adapter_type = "dmd2-imagenet-64" if "dmd2" in model_name else "edm-imagenet-64"
+
+        # Find checkpoint (support .pkl, .bin, .pt, .pth)
         checkpoint_dir = DATA_DIR / model_name / "checkpoints"
         if not checkpoint_dir.exists():
             print(f"[GPU] No checkpoint dir for {model_name}")
             return None
 
-        checkpoints = list(checkpoint_dir.glob("*.pkl"))
+        checkpoints = []
+        for ext in ["*.pkl", "*.bin", "*.pt", "*.pth"]:
+            checkpoints.extend(checkpoint_dir.glob(ext))
         if not checkpoints:
             print(f"[GPU] No checkpoint files for {model_name}")
             return None
 
         checkpoint_path = checkpoints[0]
-        print(f"[GPU] Loading adapter from {checkpoint_path}")
+        print(f"[GPU] Loading adapter {adapter_type} from {checkpoint_path}")
 
-        # Determine adapter type from model name
-        adapter_type = "dmd2-imagenet-64" if "dmd2" in model_name else "edm-imagenet-64"
         AdapterClass = get_adapter(adapter_type)
-
         adapter = AdapterClass.from_checkpoint(str(checkpoint_path), device=self.device)
         adapter.eval()
 
@@ -107,7 +119,7 @@ class GPUWorker:
         self,
         model_name: str,
         mask_dict: Dict[str, List],  # Serialized numpy arrays as lists
-        class_label: int,
+        class_label: Optional[int] = None,
         n_steps: int = 10,
         m_steps: int = 8,
         s_max: float = 80.0,
@@ -116,13 +128,15 @@ class GPUWorker:
         noise_mode: str = "stochastic",
         extract_layers: Optional[List[str]] = None,
         return_trajectory: bool = True,
+        text_embedding: Optional[List] = None,
     ) -> Optional[List]:
         """Generate with pre-computed mask from CPU.
 
         Args:
             model_name: Model to use
             mask_dict: {layer_name: [[values]]} — numpy arrays as nested lists
-            class_label: Class for generation
+            class_label: Class for generation (class-conditioned models)
+            text_embedding: Text embedding as list (T2I models)
             ... generation params ...
 
         Returns:
@@ -132,7 +146,7 @@ class GPUWorker:
         from diffviews.core.masking import ActivationMasker
         from diffviews.core.generator import generate_with_mask_multistep
 
-        print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}")
+        print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}, text_emb: {text_embedding is not None}")
 
         adapter = self._get_or_load_adapter(model_name)
         if adapter is None:
@@ -142,6 +156,11 @@ class GPUWorker:
         activation_dict = {}
         for layer_name, arr in mask_dict.items():
             activation_dict[layer_name] = torch.tensor(arr, dtype=torch.float32)
+
+        # Reconstruct text_embedding tensor if provided
+        text_emb_tensor = None
+        if text_embedding is not None:
+            text_emb_tensor = torch.tensor(text_embedding, dtype=torch.float32, device=self.device)
 
         # Run generation
         masker = ActivationMasker(adapter)
@@ -154,6 +173,7 @@ class GPUWorker:
                 adapter,
                 masker,
                 class_label=class_label,
+                text_embedding=text_emb_tensor,
                 num_steps=n_steps,
                 mask_steps=m_steps,
                 sigma_max=s_max,

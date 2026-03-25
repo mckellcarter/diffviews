@@ -50,7 +50,7 @@ def is_hybrid_mode() -> bool:
 def _generate_on_gpu(
     model_name, all_neighbors, class_label,
     n_steps, m_steps, s_max, s_min, guidance, noise_mode,
-    extract_layers, can_project
+    extract_layers, can_project, text_embedding=None
 ):
     """Run masked generation on GPU.
 
@@ -91,11 +91,18 @@ def _generate_on_gpu(
         # Serialize mask to nested lists for Modal
         mask_serialized = {k: v.tolist() for k, v in mask_dict.items()}
 
-        print(f"[gpu_ops] Dispatching to GPU worker (mask: {list(mask_dict.keys())})")
+        # Serialize text_embedding for T2I models
+        text_emb_list = None
+        if text_embedding is not None:
+            text_emb_list = text_embedding.cpu().tolist()
+            print(f"[gpu_ops] text_embedding shape: {text_embedding.shape}")
+
+        print(f"[gpu_ops] Dispatching to GPU worker (mask: {list(mask_dict.keys())}, text_emb: {text_emb_list is not None})")
+
         result = _remote_gpu_worker.generate_from_mask.remote(
             model_name=model_name,
             mask_dict=mask_serialized,
-            class_label=int(class_label),
+            class_label=int(class_label) if class_label is not None else None,
             n_steps=int(n_steps),
             m_steps=int(m_steps),
             s_max=float(s_max),
@@ -104,6 +111,7 @@ def _generate_on_gpu(
             noise_mode=(noise_mode or "stochastic noise").replace(" noise", ""),
             extract_layers=extract_layers if can_project else None,
             return_trajectory=can_project,
+            text_embedding=text_emb_list,
         )
         return _deserialize_result(result)
 
@@ -128,6 +136,7 @@ def _generate_on_gpu(
                 adapter,
                 masker,
                 class_label=class_label,
+                text_embedding=text_embedding,
                 num_steps=int(n_steps),
                 mask_steps=int(m_steps),
                 sigma_max=float(s_max),
