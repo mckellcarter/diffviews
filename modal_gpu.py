@@ -26,7 +26,7 @@ gpu_image = (
         "pillow>=9.0.0",
         "tqdm>=4.60.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@6ed958b")
 )
 
 # Volume for checkpoints only
@@ -72,26 +72,36 @@ class GPUWorker:
         if model_name in self._adapters:
             return self._adapters[model_name]
 
+        import json
         from adapt_diff import get_adapter
 
-        # Find checkpoint
+        # Load config to get adapter type
+        config_path = DATA_DIR / model_name / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = json.load(f)
+            adapter_type = config.get("adapter", "dmd2-imagenet-64")
+        else:
+            # Fallback for legacy models
+            adapter_type = "dmd2-imagenet-64" if "dmd2" in model_name else "edm-imagenet-64"
+
+        # Find checkpoint (support .pkl, .bin, .pt, .pth)
         checkpoint_dir = DATA_DIR / model_name / "checkpoints"
         if not checkpoint_dir.exists():
             print(f"[GPU] No checkpoint dir for {model_name}")
             return None
 
-        checkpoints = list(checkpoint_dir.glob("*.pkl"))
+        checkpoints = []
+        for ext in ["*.pkl", "*.bin", "*.pt", "*.pth"]:
+            checkpoints.extend(checkpoint_dir.glob(ext))
         if not checkpoints:
             print(f"[GPU] No checkpoint files for {model_name}")
             return None
 
         checkpoint_path = checkpoints[0]
-        print(f"[GPU] Loading adapter from {checkpoint_path}")
+        print(f"[GPU] Loading adapter {adapter_type} from {checkpoint_path}")
 
-        # Determine adapter type from model name
-        adapter_type = "dmd2-imagenet-64" if "dmd2" in model_name else "edm-imagenet-64"
         AdapterClass = get_adapter(adapter_type)
-
         adapter = AdapterClass.from_checkpoint(str(checkpoint_path), device=self.device)
         adapter.eval()
 
