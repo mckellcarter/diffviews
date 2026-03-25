@@ -91,12 +91,13 @@ def _generate_on_gpu(
         # Serialize mask to nested lists for Modal
         mask_serialized = {k: v.tolist() for k, v in mask_dict.items()}
 
-        print(f"[gpu_ops] Dispatching to GPU worker (mask: {list(mask_dict.keys())})")
-
         # Serialize text_embedding for T2I models
         text_emb_list = None
         if text_embedding is not None:
             text_emb_list = text_embedding.cpu().tolist()
+            print(f"[gpu_ops] text_embedding shape: {text_embedding.shape}")
+
+        print(f"[gpu_ops] Dispatching to GPU worker (mask: {list(mask_dict.keys())}, text_emb: {text_emb_list is not None})")
 
         result = _remote_gpu_worker.generate_from_mask.remote(
             model_name=model_name,

@@ -28,7 +28,7 @@ gpu_image = (
         "diffusers>=0.25.0",
         "transformers>=4.30.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@cf92d8c")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@1d0fed0")
 )
 
 # Volume for checkpoints only
@@ -146,7 +146,7 @@ class GPUWorker:
         from diffviews.core.masking import ActivationMasker
         from diffviews.core.generator import generate_with_mask_multistep
 
-        print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}")
+        print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}, text_emb: {text_embedding is not None}")
 
         adapter = self._get_or_load_adapter(model_name)
         if adapter is None:
