@@ -627,8 +627,8 @@ class GradioVisualizer:
         with torch.no_grad():
             tokens = model_data.text_tokenizer([caption]).to(self.device)
             text_features = model_data.text_encoder.encode_text(tokens)
-            # Return as (1, 1024) for single sample
-            return text_features
+            # Return as (1, 1, 1024) for cross-attention: (batch, seq_len, dim)
+            return text_features.unsqueeze(1)
 
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""
