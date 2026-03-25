@@ -253,6 +253,24 @@ See the [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) f
 
 ## Known Issues
 
+### Latent diffusion models (MSCOCO, SD-style) - generation quality
+
+DDPM-style latent diffusion models (e.g., `mscoco-t2i-128`) have partial support. Current limitations:
+
+1. **Sigma→timestep conversion**: DDPM models expect discrete timesteps (0-999), not continuous sigma values. Auto-detection via `adapter.scheduler.alphas_cumprod` is implemented but may not work for all adapters.
+
+2. **Prediction type mismatch**: The generator assumes models predict clean samples (x0), but DDPM models predict noise (ε). The adapter should handle this conversion internally.
+
+3. **VAE decoding**: Latent diffusion outputs need decoding to pixel space. Currently not implemented in the generation pipeline.
+
+**Planned fix**: Extend the `adapt_diff` adapter interface with:
+- `get_timesteps(num_steps)` - return appropriate schedule
+- `step(x_t, t, pred)` - handle ε→x0 conversion and stepping
+- `decode(latent)` - VAE decode for latent models
+- Metadata: `prediction_type`, `uses_latent`, `latent_scale_factor`
+
+See [adapt_diff#architecture](https://github.com/mckellcarter/adapt_diff) for updates.
+
 ### Multi-tab session corruption (Modal deployment)
 
 When running multiple browser tabs against the same Modal deployment, one tab's Gradio session can become stale or corrupted. Symptoms include:

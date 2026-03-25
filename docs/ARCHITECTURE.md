@@ -208,10 +208,66 @@ from adapt_diff import GeneratorAdapter, get_adapter, list_adapters, register_ad
 ```
 
 See the adapt_diff repository for adapter documentation and available implementations:
-- `dmd2-imagenet-64` - DMD2 ImageNet 64x64
-- `edm-imagenet-64` - EDM ImageNet 64x64
-- `mscoco-t2i-128` - MSCOCO Text-to-Image 128x128
-- `abu-custom-sd14` - Custom SD 512x512
+- `dmd2-imagenet-64` - DMD2 ImageNet 64x64 (pixel-space, predicts x0)
+- `edm-imagenet-64` - EDM ImageNet 64x64 (pixel-space, predicts x0)
+- `mscoco-t2i-128` - MSCOCO Text-to-Image 128x128 (latent-space, predicts ε) *partial support*
+- `abu-custom-sd14` - Custom SD 512x512 (latent-space) *partial support*
+
+#### Planned Adapter Interface Extensions
+
+To properly support both pixel-space (EDM/DMD2) and latent-space (SD-style) models, the adapter interface needs:
+
+```python
+class GeneratorAdapter:
+    # Existing
+    resolution: int
+    num_classes: int
+    hookable_layers: List[str]
+
+    def forward(self, x, t, conditioning) -> Tensor
+    def get_layer_shapes(self) -> Dict[str, Tuple]
+
+    # Planned additions
+
+    # Diffusion schedule
+    def get_timesteps(self, num_steps: int) -> List[int]:
+        """Return timestep/sigma schedule appropriate for this model."""
+
+    # Denoising step (handles prediction type internally)
+    def step(self, x_t: Tensor, t: int, model_output: Tensor) -> Tensor:
+        """One denoising step. Converts ε→x0 if needed, adds noise for next step."""
+
+    # Latent space transforms
+    def encode(self, images: Tensor) -> Tensor:
+        """Encode images to model's internal space. Identity for pixel-space models."""
+
+    def decode(self, latent: Tensor) -> Tensor:
+        """Decode from internal space to images. Identity for pixel-space models."""
+
+    # Conditioning
+    def prepare_conditioning(self, text: str = None, class_label: int = None) -> Any:
+        """Prepare conditioning input appropriate for this model."""
+
+    # Metadata properties
+    prediction_type: str      # "epsilon", "sample", "v_prediction"
+    uses_latent: bool         # True for VAE-based models
+    latent_scale_factor: int  # Spatial downscale (8 for SD-style)
+    in_channels: int          # 3 for pixel, 4 for latent
+    conditioning_type: str    # "class", "text", "unconditional"
+```
+
+This allows diffviews generator to simplify to:
+```python
+cond = adapter.prepare_conditioning(text=caption)
+timesteps = adapter.get_timesteps(num_steps)
+x = adapter.get_initial_noise(batch_size, device)
+
+for t in timesteps:
+    pred = adapter.forward(x, t, cond)
+    x = adapter.step(x, t, pred)
+
+images = adapter.decode(x)
+```
 
 ---
 
