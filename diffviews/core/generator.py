@@ -195,7 +195,9 @@ def generate_with_mask_multistep(
     sigmas = get_denoising_sigmas(num_steps, sigma_max, sigma_min, rho).to(device)
 
     # Pre-generate noise based on mode
-    noise_shape = (num_samples, 3, resolution, resolution)
+    # Get input channels from adapter (4 for latent diffusion, 3 for pixel-space)
+    in_channels = getattr(adapter, 'in_channels', 3)
+    noise_shape = (num_samples, in_channels, resolution, resolution)
     if noise_mode == "zero":
         initial_noise = torch.zeros(noise_shape, device=device)
         step_noises = [torch.zeros(noise_shape, device=device)] * (num_steps - 1)
