@@ -16,7 +16,7 @@ import modal
 
 app = modal.App("diffviews-gpu")
 
-# Minimal GPU image — only what's needed for generation
+# GPU image with T2I dependencies
 gpu_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
@@ -25,8 +25,10 @@ gpu_image = (
         "numpy>=1.21.0",
         "pillow>=9.0.0",
         "tqdm>=4.60.0",
+        "diffusers>=0.25.0",
+        "transformers>=4.30.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@6ed958b")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@cf92d8c")
 )
 
 # Volume for checkpoints only
