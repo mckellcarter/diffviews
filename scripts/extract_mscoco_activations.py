@@ -341,6 +341,8 @@ def extract_activations(
         "default_steps": 20,
         "sigma_max": 80.0,
         "sigma_min": 0.62,
+        "dataset_type": "train2017",
+        "conditioning_type": "text",
     }
     config_path = output_dir / "config.json"
     with open(config_path, "w") as f:
