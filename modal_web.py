@@ -16,11 +16,12 @@ import modal
 
 app = modal.App("diffviews-web")
 
-# CPU-only image (no torch/cuML needed for UI)
+# CPU image with torch for adapter loading (needed for T2I models)
 cpu_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
     .pip_install(
+        "torch>=2.0.0",
         "numpy>=1.21.0",
         "pandas>=1.5.0",
         "pillow>=9.0.0",
@@ -29,8 +30,11 @@ cpu_image = (
         "plotly>=5.18.0",
         "matplotlib>=3.5.0",
         "boto3>=1.28.0",
+        "diffusers>=0.25.0",
+        "transformers>=4.30.0",
+        "open_clip_torch>=2.20.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@main")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@25512c7")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
