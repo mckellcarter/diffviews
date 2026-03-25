@@ -170,16 +170,23 @@ def generate_with_mask_multistep(
         extractor = ActivationExtractor(adapter, extract_layers)
         extractor.register_hooks()
 
-    # Generate labels
-    if class_label is not None and class_label < 0:
+    # Generate labels (skip for text-conditioned models)
+    one_hot = None
+    uncond = None
+    random_labels = torch.zeros(num_samples, device=device, dtype=torch.long)
+
+    if text_embedding is not None:
+        # T2I model - no class labels needed
+        pass
+    elif class_label is not None and class_label < 0:
         random_labels = torch.tensor([-1], device=device).repeat(num_samples)
         one_hot = torch.ones((num_samples, num_classes), device=device) / num_classes
         uncond = one_hot.clone()
-    elif class_label is None:
+    elif class_label is None and num_classes > 0:
         random_labels = torch.randint(0, num_classes, (num_samples,), device=device)
         one_hot = torch.eye(num_classes, device=device)[random_labels]
         uncond = torch.zeros_like(one_hot)
-    else:
+    elif class_label is not None:
         random_labels = torch.full((num_samples,), class_label, device=device, dtype=torch.long)
         one_hot = torch.eye(num_classes, device=device)[random_labels]
         uncond = torch.zeros_like(one_hot)
