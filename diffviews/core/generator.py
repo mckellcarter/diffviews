@@ -43,6 +43,20 @@ def get_denoising_sigmas(num_steps: int, sigma_max: float, sigma_min: float, rho
     return sigmas
 
 
+def sigma_to_timestep(sigma: float, alphas_cumprod: torch.Tensor) -> int:
+    """
+    Convert sigma to nearest DDPM timestep using alpha_cumprod schedule.
+
+    sigma = sqrt((1 - alpha_cumprod) / alpha_cumprod)
+    alpha_cumprod = 1 / (1 + sigma^2)
+    """
+    target_alpha = 1.0 / (1.0 + sigma ** 2)
+    # Find closest timestep
+    diffs = (alphas_cumprod - target_alpha).abs()
+    timestep = diffs.argmin().item()
+    return int(timestep)
+
+
 @torch.no_grad()
 def generate_with_mask(
     adapter: GeneratorAdapter,
@@ -238,25 +252,30 @@ def generate_with_mask_multistep(
         if i == mask_steps and masker is not None:
             masker.remove_hooks()
 
-        sigma_tensor = torch.ones(num_samples, device=device) * sigma
+        # Convert sigma to timestep for DDPM-style models, or use sigma directly
+        if hasattr(adapter, 'scheduler') and hasattr(adapter.scheduler, 'alphas_cumprod'):
+            timestep = sigma_to_timestep(float(sigma), adapter.scheduler.alphas_cumprod)
+            t_input = torch.tensor([timestep], device=device, dtype=torch.long).expand(num_samples)
+        else:
+            t_input = torch.ones(num_samples, device=device) * sigma
 
         if text_embedding is not None:
             # Text-conditioned generation (T2I models)
             if guidance_scale != 1.0:
                 # CFG with null text embedding
                 null_emb = torch.zeros_like(text_embedding)
-                pred_cond = adapter.forward(x, sigma_tensor, encoder_hidden_states=text_embedding)
-                pred_uncond = adapter.forward(x, sigma_tensor, encoder_hidden_states=null_emb)
+                pred_cond = adapter.forward(x, t_input, encoder_hidden_states=text_embedding)
+                pred_uncond = adapter.forward(x, t_input, encoder_hidden_states=null_emb)
                 pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
             else:
-                pred = adapter.forward(x, sigma_tensor, encoder_hidden_states=text_embedding)
+                pred = adapter.forward(x, t_input, encoder_hidden_states=text_embedding)
         elif guidance_scale != 1.0:
             # Classifier-free guidance (class-conditioned)
-            pred_cond = adapter.forward(x, sigma_tensor, one_hot)
-            pred_uncond = adapter.forward(x, sigma_tensor, uncond)
+            pred_cond = adapter.forward(x, t_input, one_hot)
+            pred_uncond = adapter.forward(x, t_input, uncond)
             pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
         else:
-            pred = adapter.forward(x, sigma_tensor, one_hot)
+            pred = adapter.forward(x, t_input, one_hot)
 
         # Extract trajectory activations
         if extractor is not None:
