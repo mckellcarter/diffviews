@@ -256,8 +256,12 @@ def generate_with_mask_multistep(
         if hasattr(adapter, 'scheduler') and hasattr(adapter.scheduler, 'alphas_cumprod'):
             timestep = sigma_to_timestep(float(sigma), adapter.scheduler.alphas_cumprod)
             t_input = torch.tensor([timestep], device=device, dtype=torch.long).expand(num_samples)
+            if i == 0:
+                print(f"[generator] Using DDPM timesteps: sigma={float(sigma):.2f} -> t={timestep}")
         else:
             t_input = torch.ones(num_samples, device=device) * sigma
+            if i == 0:
+                print(f"[generator] Using sigma directly: {float(sigma):.2f} (no scheduler.alphas_cumprod)")
 
         if text_embedding is not None:
             # Text-conditioned generation (T2I models)
