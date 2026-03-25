@@ -196,7 +196,13 @@ def generate_with_mask_multistep(
 
     # Pre-generate noise based on mode
     # Get input channels from adapter (4 for latent diffusion, 3 for pixel-space)
-    in_channels = getattr(adapter, 'in_channels', 3)
+    # Check multiple possible attribute names
+    in_channels = getattr(adapter, 'in_channels', None)
+    if in_channels is None:
+        in_channels = getattr(adapter, 'latent_channels', None)
+    if in_channels is None:
+        # Latent diffusion models have encode_images method
+        in_channels = 4 if hasattr(adapter, 'encode_images') else 3
     noise_shape = (num_samples, in_channels, resolution, resolution)
     if noise_mode == "zero":
         initial_noise = torch.zeros(noise_shape, device=device)
