@@ -159,6 +159,8 @@ class GradioVisualizer:
                 "sigma_min": config.get("sigma_min", 0.5),
                 "default_steps": config.get("default_steps", 5),
                 "embeddings_path": embeddings_path,
+                "conditioning_type": config.get("conditioning_type", "class"),
+                "dataset_type": dataset_type,
             }
             status = "ready" if embeddings_path else "needs UMAP"
             print(f"Discovered model: {model_name} (adapter={config.get('adapter')}, {status})")
