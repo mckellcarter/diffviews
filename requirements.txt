@@ -2,8 +2,8 @@
 # Requires Python 3.10+
 # Package installed via git clone in app.py (bypasses pip cache)
 
-# Adapter library (pinned to unified-sampling-interface merge)
-adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@29ba3b5
+# Adapter library (pinned to kwargs get_timesteps)
+adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@b216366
 
 # Core dependencies
 torch>=2.0.0

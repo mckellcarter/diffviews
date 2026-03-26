@@ -475,5 +475,63 @@ def step(
 
 ---
 
+## Future adapt_diff Work (Phase 6)
+
+### Noise Scheduler Abstraction
+
+Current state: `get_timesteps()` accepts `**kwargs` allowing callers to pass sigma_max/sigma_min/rho consistently, but:
+- Sigma params don't make sense for DDPM models
+- `rho` is Karras-specific
+- UI exposes EDM-centric parameters
+
+**Proposed architecture:**
+
+```python
+# Scheduler registry with model-specific defaults
+class NoiseScheduler(ABC):
+    @abstractmethod
+    def get_schedule(self, num_steps: int, device: str) -> torch.Tensor:
+        """Return timesteps/sigmas for num_steps."""
+        pass
+
+class KarrasScheduler(NoiseScheduler):
+    def __init__(self, sigma_max=80.0, sigma_min=0.002, rho=7.0):
+        ...
+
+class DDPMScheduler(NoiseScheduler):
+    def __init__(self, num_train_timesteps=1000):
+        ...
+
+class LogSpacedScheduler(NoiseScheduler):  # For DMD2
+    def __init__(self, sigma_max=80.0, sigma_min=0.5):
+        ...
+
+# Adapters declare compatible schedulers + defaults
+class GeneratorAdapter:
+    @property
+    def default_scheduler(self) -> NoiseScheduler:
+        """Return model's default scheduler."""
+        pass
+
+    @property
+    def compatible_schedulers(self) -> List[Type[NoiseScheduler]]:
+        """Return list of compatible scheduler classes."""
+        pass
+```
+
+**Benefits:**
+- UI shows normalized noise level (0→100%) instead of raw sigma/timesteps
+- Each model uses appropriate scheduler internally
+- Power users can select scheduler type in advanced settings
+- New schedulers (cosine, linear, etc.) added without adapter changes
+
+**Migration path:**
+1. Add scheduler classes to adapt_diff
+2. Update adapters to use schedulers internally
+3. Update diffviews UI to show normalized controls
+4. Deprecate raw sigma params in UI
+
+---
+
 *Created: 2024-03-25*
-*Updated: 2024-03-26 - Phase 4 complete, docs updated*
+*Updated: 2024-03-26 - Phase 4 complete, kwargs fix for get_timesteps(), Phase 6 scheduler abstraction added*
