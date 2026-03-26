@@ -30,33 +30,6 @@ def tensor_to_uint8_image(tensor: torch.Tensor) -> torch.Tensor:
     return images
 
 
-def get_denoising_sigmas(num_steps: int, sigma_max: float, sigma_min: float, rho: float = 7.0) -> torch.Tensor:
-    """
-    Generate Karras sigma schedule for multi-step denoising.
-
-    Returns sigmas in descending order (large to small).
-    """
-    ramp = torch.linspace(0, 1, num_steps)
-    min_inv_rho = sigma_min ** (1 / rho)
-    max_inv_rho = sigma_max ** (1 / rho)
-    sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
-    return sigmas
-
-
-def sigma_to_timestep(sigma: float, alphas_cumprod: torch.Tensor) -> int:
-    """
-    Convert sigma to nearest DDPM timestep using alpha_cumprod schedule.
-
-    sigma = sqrt((1 - alpha_cumprod) / alpha_cumprod)
-    alpha_cumprod = 1 / (1 + sigma^2)
-    """
-    target_alpha = 1.0 / (1.0 + sigma ** 2)
-    # Find closest timestep
-    diffs = (alphas_cumprod - target_alpha).abs()
-    timestep = diffs.argmin().item()
-    return int(timestep)
-
-
 @torch.no_grad()
 def generate_with_mask(
     adapter: GeneratorAdapter,
@@ -112,6 +85,51 @@ def generate_with_mask(
     return images, random_labels.cpu()
 
 
+def _prepare_conditioning(
+    adapter: GeneratorAdapter,
+    class_label: Optional[int],
+    text_embedding: Optional[torch.Tensor],
+    num_samples: int,
+    device: str
+) -> Tuple[any, any, torch.Tensor]:
+    """
+    Prepare conditioning and unconditioning for CFG.
+
+    Returns:
+        (cond, uncond, random_labels) - cond/uncond format depends on model type
+    """
+    num_classes = adapter.num_classes
+    random_labels = torch.zeros(num_samples, device=device, dtype=torch.long)
+
+    if text_embedding is not None:
+        # T2I model - use text embeddings in dict format for forward_with_cfg
+        cond = {"encoder_hidden_states": text_embedding}
+        uncond = {"encoder_hidden_states": torch.zeros_like(text_embedding)}
+        return cond, uncond, random_labels
+
+    # Class-conditioned model
+    if class_label is not None and class_label < 0:
+        # Uniform distribution (unconditional)
+        random_labels = torch.tensor([-1], device=device).repeat(num_samples)
+        one_hot = torch.ones((num_samples, num_classes), device=device) / num_classes
+        uncond = one_hot.clone()
+    elif class_label is None and num_classes > 0:
+        # Random class
+        random_labels = torch.randint(0, num_classes, (num_samples,), device=device)
+        one_hot = torch.eye(num_classes, device=device)[random_labels]
+        uncond = torch.zeros_like(one_hot)
+    elif class_label is not None:
+        # Specific class
+        random_labels = torch.full((num_samples,), class_label, device=device, dtype=torch.long)
+        one_hot = torch.eye(num_classes, device=device)[random_labels]
+        uncond = torch.zeros_like(one_hot)
+    else:
+        one_hot = None
+        uncond = None
+
+    return one_hot, uncond, random_labels
+
+
 @torch.no_grad()
 def generate_with_mask_multistep(
     adapter: GeneratorAdapter,
@@ -124,8 +142,8 @@ def generate_with_mask_multistep(
     sigma_min: float = 0.002,
     rho: float = 7.0,
     guidance_scale: float = 1.0,
-    stochastic: bool = True,
-    noise_mode: str = "stochastic",
+    stochastic: bool = True,  # Deprecated, ignored
+    noise_mode: str = "stochastic",  # Only stochastic supported; see Phase 5
     num_samples: int = 1,
     device: str = 'cuda',
     seed: Optional[int] = None,
@@ -144,9 +162,9 @@ def generate_with_mask_multistep(
         text_embedding: Text embedding for T2I models (B, seq_len, dim), overrides class_label
         num_steps: Number of denoising steps
         mask_steps: Steps to apply mask (default=num_steps, 1=first-only)
-        sigma_max: Maximum sigma
-        sigma_min: Minimum sigma
-        rho: Karras schedule parameter
+        sigma_max: Maximum sigma (passed to adapter.get_timesteps for sigma-based models)
+        sigma_min: Minimum sigma (passed to adapter.get_timesteps for sigma-based models)
+        rho: Karras schedule parameter (passed to adapter.get_timesteps)
         guidance_scale: CFG scale (0=uncond, 1=class, >1=amplify)
         stochastic: Legacy param, ignored when noise_mode is set
         noise_mode: Noise injection mode:
@@ -172,17 +190,22 @@ def generate_with_mask_multistep(
         torch.manual_seed(seed if seed is not None else 42)
         torch.use_deterministic_algorithms(True, warn_only=True)
 
-    # Get resolution - use latent resolution for latent diffusion models
-    resolution = adapter.resolution
-    if hasattr(adapter, 'latent_resolution'):
-        resolution = adapter.latent_resolution
-    elif hasattr(adapter, 'vae_scale_factor'):
-        resolution = resolution // adapter.vae_scale_factor
-    elif hasattr(adapter, 'encode_images'):
-        # Default VAE scale factor is 8 for SD-style models
-        resolution = resolution // 8
-    num_classes = adapter.num_classes
+    # Get timesteps/sigmas from adapter
+    # Pass sigma params for sigma-based models (EDM/DMD2), ignored by timestep models (MSCOCO)
+    timesteps = adapter.get_timesteps(
+        num_steps,
+        device=device,
+        sigma_max=sigma_max,
+        sigma_min=sigma_min,
+        rho=rho
+    )
 
+    # Prepare conditioning using helper
+    cond, uncond, random_labels = _prepare_conditioning(
+        adapter, class_label, text_embedding, num_samples, device
+    )
+
+    # Setup trajectory extraction (diffviews-specific)
     trajectory_activations = []
     intermediate_images = []
     noised_input_images = []
@@ -192,58 +215,17 @@ def generate_with_mask_multistep(
         extractor = ActivationExtractor(adapter, extract_layers)
         extractor.register_hooks()
 
-    # Generate labels (skip for text-conditioned models)
-    one_hot = None
-    uncond = None
-    random_labels = torch.zeros(num_samples, device=device, dtype=torch.long)
-
-    if text_embedding is not None:
-        # T2I model - no class labels needed
-        pass
-    elif class_label is not None and class_label < 0:
-        random_labels = torch.tensor([-1], device=device).repeat(num_samples)
-        one_hot = torch.ones((num_samples, num_classes), device=device) / num_classes
-        uncond = one_hot.clone()
-    elif class_label is None and num_classes > 0:
-        random_labels = torch.randint(0, num_classes, (num_samples,), device=device)
-        one_hot = torch.eye(num_classes, device=device)[random_labels]
-        uncond = torch.zeros_like(one_hot)
-    elif class_label is not None:
-        random_labels = torch.full((num_samples,), class_label, device=device, dtype=torch.long)
-        one_hot = torch.eye(num_classes, device=device)[random_labels]
-        uncond = torch.zeros_like(one_hot)
-
-    # Generate sigma schedule
-    sigmas = get_denoising_sigmas(num_steps, sigma_max, sigma_min, rho).to(device)
-
-    # Pre-generate noise based on mode
-    # Get input channels from adapter (4 for latent diffusion, 3 for pixel-space)
-    # Check multiple possible attribute names
-    in_channels = getattr(adapter, 'in_channels', None)
-    if in_channels is None:
-        in_channels = getattr(adapter, 'latent_channels', None)
-    if in_channels is None:
-        # Latent diffusion models have encode_images method
-        in_channels = 4 if hasattr(adapter, 'encode_images') else 3
+    # Get resolution and channels from adapter
+    resolution = getattr(adapter, 'latent_resolution', adapter.resolution)
+    in_channels = adapter.in_channels
     noise_shape = (num_samples, in_channels, resolution, resolution)
-    if noise_mode == "zero":
-        initial_noise = torch.zeros(noise_shape, device=device)
-        step_noises = [torch.zeros(noise_shape, device=device)] * (num_steps - 1)
-    elif noise_mode == "fixed":
-        # Use seed (or 0) to generate reproducible noise for all steps
-        rng = torch.Generator(device=device)
-        rng.manual_seed(seed if seed is not None else 42)
-        initial_noise = torch.randn(noise_shape, device=device, generator=rng)
-        step_noises = [torch.randn(noise_shape, device=device, generator=rng) for _ in range(num_steps - 1)]
-    else:
-        # "stochastic" (default) - fresh random noise
-        initial_noise = torch.randn(noise_shape, device=device)
-        step_noises = None  # generated inline
 
+    # Generate initial noise (stochastic mode only; fixed/zero require adapt_diff changes)
+    initial_noise = torch.randn(noise_shape, device=device)
     x = initial_noise * sigma_max
 
     # Iterative denoising
-    for i, sigma in enumerate(sigmas):
+    for i, t in enumerate(timesteps[:-1]):
         # Capture noised input before denoising
         if return_noised_inputs:
             noised_input_images.append(tensor_to_uint8_image(x))
@@ -252,34 +234,8 @@ def generate_with_mask_multistep(
         if i == mask_steps and masker is not None:
             masker.remove_hooks()
 
-        # Convert sigma to timestep for DDPM-style models, or use sigma directly
-        if hasattr(adapter, 'scheduler') and hasattr(adapter.scheduler, 'alphas_cumprod'):
-            timestep = sigma_to_timestep(float(sigma), adapter.scheduler.alphas_cumprod)
-            t_input = torch.tensor([timestep], device=device, dtype=torch.long).expand(num_samples)
-            if i == 0:
-                print(f"[generator] Using DDPM timesteps: sigma={float(sigma):.2f} -> t={timestep}")
-        else:
-            t_input = torch.ones(num_samples, device=device) * sigma
-            if i == 0:
-                print(f"[generator] Using sigma directly: {float(sigma):.2f} (no scheduler.alphas_cumprod)")
-
-        if text_embedding is not None:
-            # Text-conditioned generation (T2I models)
-            if guidance_scale != 1.0:
-                # CFG with null text embedding
-                null_emb = torch.zeros_like(text_embedding)
-                pred_cond = adapter.forward(x, t_input, encoder_hidden_states=text_embedding)
-                pred_uncond = adapter.forward(x, t_input, encoder_hidden_states=null_emb)
-                pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
-            else:
-                pred = adapter.forward(x, t_input, encoder_hidden_states=text_embedding)
-        elif guidance_scale != 1.0:
-            # Classifier-free guidance (class-conditioned)
-            pred_cond = adapter.forward(x, t_input, one_hot)
-            pred_uncond = adapter.forward(x, t_input, uncond)
-            pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
-        else:
-            pred = adapter.forward(x, t_input, one_hot)
+        # Forward with CFG using adapter interface
+        pred = adapter.forward_with_cfg(x, t, cond, uncond, guidance_scale)
 
         # Extract trajectory activations
         if extractor is not None:
@@ -301,17 +257,9 @@ def generate_with_mask_multistep(
         if return_intermediates:
             intermediate_images.append(tensor_to_uint8_image(pred))
 
-        # Transition to next step
-        if i < len(sigmas) - 1:
-            next_sigma = sigmas[i + 1]
-            if step_noises is not None:
-                x = pred + next_sigma * step_noises[i]
-            elif noise_mode == "stochastic":
-                x = pred + next_sigma * torch.randn_like(pred)
-            else:
-                x = pred
-        else:
-            x = pred
+        # Model-appropriate step via adapter interface
+        t_next = timesteps[i + 1]
+        x = adapter.step(x, t, pred, t_next=t_next)
 
     if extractor is not None:
         extractor.remove_hooks()
@@ -391,7 +339,9 @@ def save_generated_sample(
     }
 
 
-def infer_layer_shape(adapter: GeneratorAdapter, layer_name: str, device: str = 'cuda') -> Tuple[int, ...]:
+def infer_layer_shape(
+    adapter: GeneratorAdapter, layer_name: str, device: str = 'cuda'
+) -> Tuple[int, ...]:
     """
     Infer activation shape for a layer by running dummy forward pass.
 
