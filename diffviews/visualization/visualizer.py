@@ -150,20 +150,28 @@ class GradioVisualizer:
             if not embeddings_path and not activations_dir.exists():
                 continue
 
+            # Get adapter defaults for fallback values
+            adapter_name = config.get("adapter", "dmd2-imagenet-64")
+            try:
+                AdapterClass = get_adapter(adapter_name)
+                adapter_defaults = AdapterClass.get_default_config()
+            except Exception:
+                adapter_defaults = {}
+
             model_name = subdir.name
             self.model_configs[model_name] = {
                 "data_dir": subdir,
-                "adapter": config.get("adapter", "dmd2-imagenet-64"),
+                "adapter": adapter_name,
                 "checkpoint": config.get("checkpoint"),
-                "sigma_max": config.get("sigma_max", 80.0),
-                "sigma_min": config.get("sigma_min", 0.5),
-                "default_steps": config.get("default_steps", 5),
+                "sigma_max": config.get("sigma_max", adapter_defaults.get("sigma_max", 80.0)),
+                "sigma_min": config.get("sigma_min", adapter_defaults.get("sigma_min", 0.002)),
+                "default_steps": config.get("default_steps", adapter_defaults.get("default_steps", 5)),
                 "embeddings_path": embeddings_path,
                 "conditioning_type": config.get("conditioning_type", "class"),
                 "dataset_type": dataset_type,
             }
             status = "ready" if embeddings_path else "needs UMAP"
-            print(f"Discovered model: {model_name} (adapter={config.get('adapter')}, {status})")
+            print(f"Discovered model: {model_name} (adapter={adapter_name}, {status})")
 
     def _load_all_models(self):
         """Load ONLY the initial/default model to minimize memory.

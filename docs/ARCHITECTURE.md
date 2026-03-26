@@ -191,9 +191,8 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 | Function | Signature | Summary | Calls | Called By |
 |----------|-----------|---------|-------|-----------|
 | `tensor_to_uint8_image` | `(tensor: torch.Tensor) -> torch.Tensor` | Convert tensor [-1,1] to uint8 [0,255] | `torch.clamp`, `torch.permute` | `generate_with_mask`, `generate_with_mask_multistep` |
-| `get_denoising_sigmas` | `(num_steps: int, sigma_max: float, sigma_min: float, rho: float = 7.0) -> torch.Tensor` | Generate Karras sigma schedule | `torch.linspace` | `generate_with_mask_multistep` |
-| `generate_with_mask` | `(adapter, masker, class_label, conditioning_sigma, num_samples, device, seed) -> Tuple[torch.Tensor, torch.Tensor]` | Generate images with fixed activations (single-step) | `adapter.forward`, `tensor_to_uint8_image` | — |
-| `generate_with_mask_multistep` | `(adapter, masker, class_label, num_steps, mask_steps, sigma_max, sigma_min, rho, guidance_scale, stochastic, noise_mode, num_samples, device, seed, extract_layers, return_trajectory, return_intermediates, return_noised_inputs) -> Tuple` | Generate images using multi-step denoising with optional masking | `get_denoising_sigmas`, `ActivationExtractor`, `adapter.forward`, `masker.remove_hooks`, `tensor_to_uint8_image` | `generate_on_gpu`, `_generate_on_gpu` |
+| `generate_with_mask` | `(adapter, masker, class_label, conditioning_sigma, num_samples, device, seed) -> Tuple` | Generate images with fixed activations (single-step) | `adapter.forward`, `tensor_to_uint8_image` | — |
+| `generate_with_mask_multistep` | `(adapter, masker, class_label, num_steps, mask_steps, guidance_scale, num_samples, device, seed, extract_layers, return_trajectory, return_intermediates, return_noised_inputs) -> Tuple` | Multi-step denoising with optional masking | `adapter.get_timesteps`, `adapter.forward_with_cfg`, `adapter.step`, `adapter.decode`, `ActivationExtractor`, `tensor_to_uint8_image` | `generate_on_gpu`, `_generate_on_gpu` |
 | `save_generated_sample` | `(image, activations, metadata, output_dir, sample_id) -> Dict` | Save generated image, activations, and metadata | `Image.save`, `np.savez_compressed` | External scripts |
 | `infer_layer_shape` | `(adapter: GeneratorAdapter, layer_name: str, device: str = 'cuda') -> Tuple[int, ...]` | Infer activation shape by running dummy forward pass | `adapter.get_layer_shapes`, `ActivationExtractor`, `adapter.forward` | External usage |
 
@@ -210,61 +209,54 @@ from adapt_diff import GeneratorAdapter, get_adapter, list_adapters, register_ad
 See the adapt_diff repository for adapter documentation and available implementations:
 - `dmd2-imagenet-64` - DMD2 ImageNet 64x64 (pixel-space, predicts x0)
 - `edm-imagenet-64` - EDM ImageNet 64x64 (pixel-space, predicts x0)
-- `mscoco-t2i-128` - MSCOCO Text-to-Image 128x128 (latent-space, predicts ε) *partial support*
-- `abu-custom-sd14` - Custom SD 512x512 (latent-space) *partial support*
+- `mscoco-t2i-128` - MSCOCO Text-to-Image 128x128 (latent-space, predicts ε)
+- `abu-custom-sd14` - Custom SD 512x512 (latent-space)
 
-#### Planned Adapter Interface Extensions
+#### Adapter Interface
 
-To properly support both pixel-space (EDM/DMD2) and latent-space (SD-style) models, the adapter interface needs:
+The unified adapter interface supports both pixel-space (EDM/DMD2) and latent-space (SD-style) models:
 
 ```python
 class GeneratorAdapter:
-    # Existing
+    # Model properties
     resolution: int
     num_classes: int
     hookable_layers: List[str]
-
-    def forward(self, x, t, conditioning) -> Tensor
-    def get_layer_shapes(self) -> Dict[str, Tuple]
-
-    # Planned additions
-
-    # Diffusion schedule
-    def get_timesteps(self, num_steps: int) -> List[int]:
-        """Return timestep/sigma schedule appropriate for this model."""
-
-    # Denoising step (handles prediction type internally)
-    def step(self, x_t: Tensor, t: int, model_output: Tensor) -> Tensor:
-        """One denoising step. Converts ε→x0 if needed, adds noise for next step."""
-
-    # Latent space transforms
-    def encode(self, images: Tensor) -> Tensor:
-        """Encode images to model's internal space. Identity for pixel-space models."""
-
-    def decode(self, latent: Tensor) -> Tensor:
-        """Decode from internal space to images. Identity for pixel-space models."""
-
-    # Conditioning
-    def prepare_conditioning(self, text: str = None, class_label: int = None) -> Any:
-        """Prepare conditioning input appropriate for this model."""
-
-    # Metadata properties
     prediction_type: str      # "epsilon", "sample", "v_prediction"
     uses_latent: bool         # True for VAE-based models
-    latent_scale_factor: int  # Spatial downscale (8 for SD-style)
     in_channels: int          # 3 for pixel, 4 for latent
     conditioning_type: str    # "class", "text", "unconditional"
+
+    # Core forward pass
+    def forward(self, x, t, conditioning) -> Tensor
+    def forward_with_cfg(self, x, t, cond, uncond, scale) -> Tensor
+
+    # Diffusion schedule and stepping
+    def get_timesteps(self, num_steps: int) -> List[Tensor]
+    def step(self, x_t, t, pred, t_next=None) -> Tensor
+    def get_initial_noise(self, batch_size, device, generator=None) -> Tensor
+
+    # Latent space transforms (identity for pixel-space)
+    def encode(self, images: Tensor) -> Tensor
+    def decode(self, latent: Tensor) -> Tensor
+
+    # Conditioning
+    def prepare_conditioning(self, text=None, class_label=None, ...) -> Any
+
+    # Config and hooks
+    def get_default_config(self) -> Dict
+    def get_layer_shapes(self) -> Dict[str, Tuple]
 ```
 
-This allows diffviews generator to simplify to:
+The generator uses this unified interface:
 ```python
 cond = adapter.prepare_conditioning(text=caption)
 timesteps = adapter.get_timesteps(num_steps)
 x = adapter.get_initial_noise(batch_size, device)
 
-for t in timesteps:
-    pred = adapter.forward(x, t, cond)
-    x = adapter.step(x, t, pred)
+for i, t in enumerate(timesteps[:-1]):
+    pred = adapter.forward_with_cfg(x, t, cond, uncond, guidance_scale)
+    x = adapter.step(x, t, pred, t_next=timesteps[i+1])
 
 images = adapter.decode(x)
 ```
