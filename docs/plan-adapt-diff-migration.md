@@ -342,9 +342,9 @@ def generate_with_mask_multistep(...):
    - [x] Skip noise mode tests pending Phase 5 (fixed/zero modes broken)
    - [x] Add Phase 5 with preserved noise logic for future adapt_diff work
 
-3. **diffviews Phase 3**
-   - [ ] Update model loading to use adapter defaults
-   - [ ] Simplify config.json files (optional overrides only)
+3. **diffviews Phase 3** ✅ COMPLETE
+   - [x] Update model loading to use adapter defaults (`discover_models()` calls `get_default_config()`)
+   - [x] Simplify config.json files (dmd2/mscoco now minimal, edm keeps intentional overrides)
 
 4. **Phase 4**
    - [ ] Delete dead code
@@ -370,15 +370,15 @@ def generate_with_mask_multistep(...):
 |-------|--------|-------|
 | Phase 1 (adapt_diff) | ✅ Complete | Merged to main (29ba3b5) |
 | Phase 2 (generator) | ✅ Complete | Uses adapter.step(), adapter.forward_with_cfg() |
-| Phase 3 (config) | Pending | |
+| Phase 3 (config) | ✅ Complete | discover_models() uses adapter.get_default_config() |
 | Phase 4 (cleanup) | Pending | |
 | Phase 5 (stochastic) | Pending | adapt_diff step() with noise injection |
 
 ---
 
-## Current State (Post Phase 2)
+## Current State (Post Phase 3)
 
-**Updated 2024-03-26:** Phase 2 generator simplification complete.
+**Updated 2024-03-26:** Phase 3 config consolidation complete.
 
 ### Completed Changes
 
@@ -391,6 +391,9 @@ def generate_with_mask_multistep(...):
 | `test_generator.py` | Removed `TestDenoisingSigmas` class |
 | `test_generator.py` | Added required adapter methods to mock classes |
 | `test_generator.py` | Skipped 7 tests requiring fixed/zero noise modes |
+| `visualizer.py` | `discover_models()` uses `adapter.get_default_config()` for fallbacks |
+| `data/dmd2/config.json` | Simplified to adapter+checkpoint only (uses adapter defaults) |
+| `data/mscoco/config.json` | Removed redundant sigma/steps (uses adapter defaults) |
 
 ### Breaking Changes
 
@@ -472,4 +475,4 @@ def step(
 ---
 
 *Created: 2024-03-25*
-*Updated: 2024-03-26 - Phase 1 merged, Phase 2 complete, Phase 5 added for stochastic step()*
+*Updated: 2024-03-26 - Phase 3 complete, config consolidation using adapter.get_default_config()*
