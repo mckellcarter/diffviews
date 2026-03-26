@@ -232,7 +232,7 @@ class GeneratorAdapter:
     def forward_with_cfg(self, x, t, cond, uncond, scale) -> Tensor
 
     # Diffusion schedule and stepping
-    def get_timesteps(self, num_steps: int) -> List[Tensor]
+    def get_timesteps(self, num_steps: int, **kwargs) -> List[Tensor]
     def step(self, x_t, t, pred, t_next=None) -> Tensor
     def get_initial_noise(self, batch_size, device, generator=None) -> Tensor
 
