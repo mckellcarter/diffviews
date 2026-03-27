@@ -159,6 +159,9 @@ class GradioVisualizer:
                 adapter_defaults = {}
 
             model_name = subdir.name
+            conditioning_type = config.get("conditioning_type", "class")
+            # Text-conditioned models default to CFG=7.5, class-conditioned to 1.0
+            guidance_fallback = 7.5 if conditioning_type == "text" else 1.0
             self.model_configs[model_name] = {
                 "data_dir": subdir,
                 "adapter": adapter_name,
@@ -166,9 +169,9 @@ class GradioVisualizer:
                 "sigma_max": config.get("sigma_max", adapter_defaults.get("sigma_max", 80.0)),
                 "sigma_min": config.get("sigma_min", adapter_defaults.get("sigma_min", 0.002)),
                 "default_steps": config.get("default_steps", adapter_defaults.get("default_steps", 5)),
-                "default_guidance": config.get("default_guidance", adapter_defaults.get("default_guidance", 1.0)),
+                "default_guidance": config.get("default_guidance", adapter_defaults.get("default_guidance", guidance_fallback)),
                 "embeddings_path": embeddings_path,
-                "conditioning_type": config.get("conditioning_type", "class"),
+                "conditioning_type": conditioning_type,
                 "dataset_type": dataset_type,
             }
             status = "ready" if embeddings_path else "needs UMAP"
