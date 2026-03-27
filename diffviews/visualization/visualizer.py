@@ -610,12 +610,14 @@ class GradioVisualizer:
     def encode_text(self, model_name: str, caption: str) -> Optional["torch.Tensor"]:
         """Encode text caption for T2I models using CLIP.
 
+        Returns full 77-token sequence of hidden states for cross-attention.
+
         Args:
             model_name: Name of the model
             caption: Text caption to encode
 
         Returns:
-            Text embedding tensor (1, 1024) or None if not text-conditioned
+            Text embedding tensor (1, 77, 1024) or None if not text-conditioned
         """
         import torch
 
@@ -628,21 +630,26 @@ class GradioVisualizer:
         # Lazy load CLIP encoder
         if model_data.text_encoder is None:
             import open_clip
-            # SD v1.4 style models use ViT-L-14 (768-dim), not ViT-H-14 (1024-dim)
-            print(f"Loading CLIP ViT-L/14 (openai) for text encoding...")
+            # mscoco model uses 1024-dim cross-attention (ViT-H-14)
+            print(f"Loading CLIP ViT-H/14 for text encoding...")
             model, _, _ = open_clip.create_model_and_transforms(
-                "ViT-L-14", pretrained="openai"
+                "ViT-H-14", pretrained="laion2b_s32b_b79k"
             )
             model_data.text_encoder = model.eval().to(self.device)
-            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-L-14")
+            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-H-14")
             print(f"CLIP encoder loaded on {self.device}")
 
-        # Encode caption
+        # Encode caption - get full 77-token sequence for cross-attention
         with torch.no_grad():
             tokens = model_data.text_tokenizer([caption]).to(self.device)
-            text_features = model_data.text_encoder.encode_text(tokens)
-            # Return as (1, 1, 768) for cross-attention: (batch, seq_len, dim)
-            return text_features.unsqueeze(1)
+            # Get token embeddings + positional embeddings
+            x = model_data.text_encoder.token_embedding(tokens)  # (1, 77, 1024)
+            x = x + model_data.text_encoder.positional_embedding
+            x = x.permute(1, 0, 2)  # (77, 1, 1024) for transformer
+            x = model_data.text_encoder.transformer(x)
+            x = x.permute(1, 0, 2)  # (1, 77, 1024)
+            x = model_data.text_encoder.ln_final(x)
+            return x  # (1, 77, 1024)
 
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""
