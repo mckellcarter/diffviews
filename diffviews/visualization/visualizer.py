@@ -607,66 +607,6 @@ class GradioVisualizer:
         print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
         return model_data.adapter
 
-    def encode_text(self, model_name: str, caption: str) -> Optional["torch.Tensor"]:
-        """Encode text caption for T2I models using CLIP.
-
-        Returns full 77-token sequence of hidden states for cross-attention.
-
-        Args:
-            model_name: Name of the model
-            caption: Text caption to encode
-
-        Returns:
-            Text embedding tensor (1, 77, 1024) or None if not text-conditioned
-        """
-        import torch
-
-        model_data = self.get_model(model_name)
-        if model_data is None:
-            return None
-        if model_data.conditioning_type != "text":
-            return None
-
-        # Lazy load CLIP encoder
-        if model_data.text_encoder is None:
-            import open_clip
-            # mscoco model uses 1024-dim cross-attention (ViT-H-14)
-            print(f"Loading CLIP ViT-H/14 for text encoding...")
-            model, _, _ = open_clip.create_model_and_transforms(
-                "ViT-H-14", pretrained="laion2b_s32b_b79k"
-            )
-            model_data.text_encoder = model.eval().to(self.device)
-            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-H-14")
-            print(f"CLIP encoder loaded on {self.device}")
-
-        # Encode caption - get full 77-token sequence for cross-attention
-        with torch.no_grad():
-            tokens = model_data.text_tokenizer([caption]).to(self.device)
-            # Get token embeddings + positional embeddings
-            x = model_data.text_encoder.token_embedding(tokens)  # (1, 77, 1024)
-            x = x + model_data.text_encoder.positional_embedding
-            x = x.permute(1, 0, 2)  # (77, 1, 1024) for transformer
-            x = model_data.text_encoder.transformer(x)
-            x = x.permute(1, 0, 2)  # (1, 77, 1024)
-            x = model_data.text_encoder.ln_final(x)
-            return x  # (1, 77, 1024)
-
-    def get_uncond_text_embedding(self, model_name: str) -> Optional["torch.Tensor"]:
-        """Get cached unconditional text embedding (empty string encoded).
-
-        For CFG, we need proper uncond embedding, not zeros.
-        """
-        model_data = self.get_model(model_name)
-        if model_data is None or model_data.conditioning_type != "text":
-            return None
-
-        # Cache on first call
-        if not hasattr(model_data, '_uncond_embedding') or model_data._uncond_embedding is None:
-            model_data._uncond_embedding = self.encode_text(model_name, "")
-            print(f"[encode_text] Cached uncond embedding: {model_data._uncond_embedding.shape}")
-
-        return model_data._uncond_embedding
-
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""
         model_data = self.get_model(model_name)

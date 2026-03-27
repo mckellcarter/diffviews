@@ -900,7 +900,6 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Get conditioning from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
             class_label = None
-            text_embedding = None
             caption = None
 
             print(f"[on_generate] conditioning_type={model_data.conditioning_type}, df_cols={list(model_data.df.columns)[:5]}")

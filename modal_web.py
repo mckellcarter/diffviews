@@ -32,7 +32,6 @@ cpu_image = (
         "boto3>=1.28.0",
         "diffusers>=0.25.0",
         "transformers>=4.30.0",
-        "open_clip_torch>=2.20.0",
     )
     .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@f26b17d")
 )

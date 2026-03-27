@@ -25,12 +25,11 @@
 
 ## Text Encoding Should Live in Adapter
 
-**Issue:** Text encoding for T2I models is currently handled in both diffviews and adapt_diff. Should be fully encapsulated in adapter.
+**Status:** ✅ Resolved
 
-**Current state:**
-- Adapter has `prepare_conditioning(text=...)` which loads and runs CLIP encoder
-- diffviews passes caption string through to adapter (correct)
-- SD2 text encoder requires HF authentication (gated model)
-- OpenCLIP ViT-H-14 doesn't produce text-reflective images (different weights?)
-
-**Goal:** All text encoding lives in adapter, diffviews just passes caption strings. Adapter handles encoder loading, tokenization, and any model-specific quirks.
+**Solution:**
+- Adapter's `prepare_conditioning(text=...)` handles all text encoding
+- Uses `sd2-community/stable-diffusion-2-1` text encoder (community fork after SD2 deprecation)
+- diffviews passes caption string only, no CLIP/encoding code
+- Removed unused `encode_text()`, `get_uncond_text_embedding()` from visualizer
+- Removed `text_encoder`, `text_tokenizer` fields from ModelData
