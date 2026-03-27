@@ -22,3 +22,15 @@
 **Current state:** Generator explicitly calls `adapter.decode()` which is identity for pixel-space models.
 
 **Consideration:** Could make this more implicit but current explicit approach is clear and works.
+
+## Text Encoding Should Live in Adapter
+
+**Issue:** Text encoding for T2I models is currently handled in both diffviews and adapt_diff. Should be fully encapsulated in adapter.
+
+**Current state:**
+- Adapter has `prepare_conditioning(text=...)` which loads and runs CLIP encoder
+- diffviews passes caption string through to adapter (correct)
+- SD2 text encoder requires HF authentication (gated model)
+- OpenCLIP ViT-H-14 doesn't produce text-reflective images (different weights?)
+
+**Goal:** All text encoding lives in adapter, diffviews just passes caption strings. Adapter handles encoder loading, tokenization, and any model-specific quirks.
