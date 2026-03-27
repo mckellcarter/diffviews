@@ -628,19 +628,20 @@ class GradioVisualizer:
         # Lazy load CLIP encoder
         if model_data.text_encoder is None:
             import open_clip
-            print(f"Loading CLIP ViT-H/14 for text encoding...")
+            # SD v1.4 style models use ViT-L-14 (768-dim), not ViT-H-14 (1024-dim)
+            print(f"Loading CLIP ViT-L/14 (openai) for text encoding...")
             model, _, _ = open_clip.create_model_and_transforms(
-                "ViT-H-14", pretrained="laion2b_s32b_b79k"
+                "ViT-L-14", pretrained="openai"
             )
             model_data.text_encoder = model.eval().to(self.device)
-            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-H-14")
+            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-L-14")
             print(f"CLIP encoder loaded on {self.device}")
 
         # Encode caption
         with torch.no_grad():
             tokens = model_data.text_tokenizer([caption]).to(self.device)
             text_features = model_data.text_encoder.encode_text(tokens)
-            # Return as (1, 1, 1024) for cross-attention: (batch, seq_len, dim)
+            # Return as (1, 1, 768) for cross-attention: (batch, seq_len, dim)
             return text_features.unsqueeze(1)
 
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
