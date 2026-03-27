@@ -651,6 +651,22 @@ class GradioVisualizer:
             x = model_data.text_encoder.ln_final(x)
             return x  # (1, 77, 1024)
 
+    def get_uncond_text_embedding(self, model_name: str) -> Optional["torch.Tensor"]:
+        """Get cached unconditional text embedding (empty string encoded).
+
+        For CFG, we need proper uncond embedding, not zeros.
+        """
+        model_data = self.get_model(model_name)
+        if model_data is None or model_data.conditioning_type != "text":
+            return None
+
+        # Cache on first call
+        if not hasattr(model_data, '_uncond_embedding') or model_data._uncond_embedding is None:
+            model_data._uncond_embedding = self.encode_text(model_name, "")
+            print(f"[encode_text] Cached uncond embedding: {model_data._uncond_embedding.shape}")
+
+        return model_data._uncond_embedding
+
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""
         model_data = self.get_model(model_name)

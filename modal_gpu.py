@@ -129,6 +129,7 @@ class GPUWorker:
         extract_layers: Optional[List[str]] = None,
         return_trajectory: bool = True,
         text_embedding: Optional[List] = None,
+        uncond_embedding: Optional[List] = None,
     ) -> Optional[List]:
         """Generate with pre-computed mask from CPU.
 
@@ -137,6 +138,7 @@ class GPUWorker:
             mask_dict: {layer_name: [[values]]} — numpy arrays as nested lists
             class_label: Class for generation (class-conditioned models)
             text_embedding: Text embedding as list (T2I models)
+            uncond_embedding: Unconditional embedding as list (T2I models, for CFG)
             ... generation params ...
 
         Returns:
@@ -157,10 +159,13 @@ class GPUWorker:
         for layer_name, arr in mask_dict.items():
             activation_dict[layer_name] = torch.tensor(arr, dtype=torch.float32)
 
-        # Reconstruct text_embedding tensor if provided
+        # Reconstruct text embeddings if provided
         text_emb_tensor = None
+        uncond_emb_tensor = None
         if text_embedding is not None:
             text_emb_tensor = torch.tensor(text_embedding, dtype=torch.float32, device=self.device)
+        if uncond_embedding is not None:
+            uncond_emb_tensor = torch.tensor(uncond_embedding, dtype=torch.float32, device=self.device)
 
         # Run generation
         masker = ActivationMasker(adapter)
@@ -174,6 +179,7 @@ class GPUWorker:
                 masker,
                 class_label=class_label,
                 text_embedding=text_emb_tensor,
+                uncond_embedding=uncond_emb_tensor,
                 num_steps=n_steps,
                 mask_steps=m_steps,
                 sigma_max=s_max,

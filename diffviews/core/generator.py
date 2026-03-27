@@ -92,6 +92,7 @@ def _prepare_conditioning(
     adapter: GeneratorAdapter,
     class_label: Optional[int],
     text_embedding: Optional[torch.Tensor],
+    uncond_embedding: Optional[torch.Tensor],
     num_samples: int,
     device: str
 ) -> Tuple[any, any, torch.Tensor]:
@@ -107,7 +108,11 @@ def _prepare_conditioning(
     if text_embedding is not None:
         # T2I model - use text embeddings in dict format for forward_with_cfg
         cond = {"encoder_hidden_states": text_embedding}
-        uncond = {"encoder_hidden_states": torch.zeros_like(text_embedding)}
+        # Use proper uncond embedding (empty string) if provided, else fall back to zeros
+        if uncond_embedding is not None:
+            uncond = {"encoder_hidden_states": uncond_embedding}
+        else:
+            uncond = {"encoder_hidden_states": torch.zeros_like(text_embedding)}
         return cond, uncond, random_labels
 
     # Class-conditioned model
@@ -139,6 +144,7 @@ def generate_with_mask_multistep(
     masker: Optional[ActivationMasker] = None,
     class_label: Optional[int] = None,
     text_embedding: Optional[torch.Tensor] = None,
+    uncond_embedding: Optional[torch.Tensor] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
     sigma_max: float = 80.0,
@@ -205,7 +211,7 @@ def generate_with_mask_multistep(
 
     # Prepare conditioning using helper
     cond, uncond, random_labels = _prepare_conditioning(
-        adapter, class_label, text_embedding, num_samples, device
+        adapter, class_label, text_embedding, uncond_embedding, num_samples, device
     )
 
     # Setup trajectory extraction (diffviews-specific)
