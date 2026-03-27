@@ -9,11 +9,12 @@
 - R2 data download includes configs, so Modal/HF deployments work
 - Local dev requires manual setup or running download scripts
 
-**Potential solutions:**
-1. Bundle default configs in package (e.g., `diffviews/configs/`) and copy on first run
-2. Have adapters provide all defaults via `get_default_config()` - no config.json needed
-3. Script to generate configs from adapter registry
-4. Document required config format in README
+**Recommended solution:** Have adapters provide all defaults via `get_default_config()`.
+
+- Adapter already knows its own defaults (guidance, sigmas, conditioning_type, etc.)
+- No config.json needed - diffviews queries adapter directly
+- Config files become optional overrides only
+- Avoids committing configs without data, merge conflicts, and config/data coupling
 
 ## Auto-encode/decode for Latent Models
 
