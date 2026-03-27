@@ -79,6 +79,9 @@ def generate_with_mask(
     # Generate with masked activations
     generated = adapter.forward(noise * conditioning_sigma, sigma_tensor, one_hot)
 
+    # Decode latents to pixel space (identity for pixel-space models)
+    generated = adapter.decode(generated)
+
     # Convert to uint8
     images = tensor_to_uint8_image(generated)
 
@@ -226,9 +229,9 @@ def generate_with_mask_multistep(
 
     # Iterative denoising
     for i, t in enumerate(timesteps[:-1]):
-        # Capture noised input before denoising
+        # Capture noised input before denoising (decode for latent models)
         if return_noised_inputs:
-            noised_input_images.append(tensor_to_uint8_image(x))
+            noised_input_images.append(tensor_to_uint8_image(adapter.decode(x)))
 
         # Remove mask after mask_steps
         if i == mask_steps and masker is not None:
@@ -253,9 +256,9 @@ def generate_with_mask_multistep(
                 trajectory_activations.append(concat_act)
             extractor.clear()
 
-        # Capture intermediate image
+        # Capture intermediate image (decode for latent models)
         if return_intermediates:
-            intermediate_images.append(tensor_to_uint8_image(pred))
+            intermediate_images.append(tensor_to_uint8_image(adapter.decode(pred)))
 
         # Model-appropriate step via adapter interface
         t_next = timesteps[i + 1]
@@ -263,6 +266,9 @@ def generate_with_mask_multistep(
 
     if extractor is not None:
         extractor.remove_hooks()
+
+    # Decode latents to pixel space (identity for pixel-space models)
+    x = adapter.decode(x)
 
     # Convert to uint8
     images = tensor_to_uint8_image(x)
