@@ -91,8 +91,7 @@ def generate_with_mask(
 def _prepare_conditioning(
     adapter: GeneratorAdapter,
     class_label: Optional[int],
-    text_embedding: Optional[torch.Tensor],
-    uncond_embedding: Optional[torch.Tensor],
+    caption: Optional[str],
     num_samples: int,
     device: str
 ) -> Tuple[any, any, torch.Tensor]:
@@ -105,14 +104,10 @@ def _prepare_conditioning(
     num_classes = adapter.num_classes
     random_labels = torch.zeros(num_samples, device=device, dtype=torch.long)
 
-    if text_embedding is not None:
-        # T2I model - use text embeddings in dict format for forward_with_cfg
-        cond = {"encoder_hidden_states": text_embedding}
-        # Use proper uncond embedding (empty string) if provided, else fall back to zeros
-        if uncond_embedding is not None:
-            uncond = {"encoder_hidden_states": uncond_embedding}
-        else:
-            uncond = {"encoder_hidden_states": torch.zeros_like(text_embedding)}
+    if caption is not None:
+        # T2I model - use adapter's prepare_conditioning for proper encoding
+        cond = adapter.prepare_conditioning(text=caption, batch_size=num_samples)
+        uncond = adapter.prepare_conditioning(text="", batch_size=num_samples)
         return cond, uncond, random_labels
 
     # Class-conditioned model
@@ -143,8 +138,7 @@ def generate_with_mask_multistep(
     adapter: GeneratorAdapter,
     masker: Optional[ActivationMasker] = None,
     class_label: Optional[int] = None,
-    text_embedding: Optional[torch.Tensor] = None,
-    uncond_embedding: Optional[torch.Tensor] = None,
+    caption: Optional[str] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
     sigma_max: float = 80.0,
@@ -168,7 +162,7 @@ def generate_with_mask_multistep(
         adapter: GeneratorAdapter instance
         masker: ActivationMasker with masks set (hooks should be registered)
         class_label: Class label (0-999), random if None, -1 for uniform
-        text_embedding: Text embedding for T2I models (B, seq_len, dim), overrides class_label
+        caption: Text caption for T2I models (encoded by adapter), overrides class_label
         num_steps: Number of denoising steps
         mask_steps: Steps to apply mask (default=num_steps, 1=first-only)
         sigma_max: Maximum sigma (passed to adapter.get_timesteps for sigma-based models)
@@ -211,7 +205,7 @@ def generate_with_mask_multistep(
 
     # Prepare conditioning using helper
     cond, uncond, random_labels = _prepare_conditioning(
-        adapter, class_label, text_embedding, uncond_embedding, num_samples, device
+        adapter, class_label, caption, num_samples, device
     )
 
     # Setup trajectory extraction (diffviews-specific)

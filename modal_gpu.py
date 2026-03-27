@@ -128,8 +128,7 @@ class GPUWorker:
         noise_mode: str = "stochastic",
         extract_layers: Optional[List[str]] = None,
         return_trajectory: bool = True,
-        text_embedding: Optional[List] = None,
-        uncond_embedding: Optional[List] = None,
+        caption: Optional[str] = None,
     ) -> Optional[List]:
         """Generate with pre-computed mask from CPU.
 
@@ -137,8 +136,7 @@ class GPUWorker:
             model_name: Model to use
             mask_dict: {layer_name: [[values]]} — numpy arrays as nested lists
             class_label: Class for generation (class-conditioned models)
-            text_embedding: Text embedding as list (T2I models)
-            uncond_embedding: Unconditional embedding as list (T2I models, for CFG)
+            caption: Text caption for T2I models (encoded by adapter on GPU)
             ... generation params ...
 
         Returns:
@@ -148,7 +146,7 @@ class GPUWorker:
         from diffviews.core.masking import ActivationMasker
         from diffviews.core.generator import generate_with_mask_multistep
 
-        print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}, text_emb: {text_embedding is not None}")
+        print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}, caption: {caption is not None}")
 
         adapter = self._get_or_load_adapter(model_name)
         if adapter is None:
@@ -158,14 +156,6 @@ class GPUWorker:
         activation_dict = {}
         for layer_name, arr in mask_dict.items():
             activation_dict[layer_name] = torch.tensor(arr, dtype=torch.float32)
-
-        # Reconstruct text embeddings if provided
-        text_emb_tensor = None
-        uncond_emb_tensor = None
-        if text_embedding is not None:
-            text_emb_tensor = torch.tensor(text_embedding, dtype=torch.float32, device=self.device)
-        if uncond_embedding is not None:
-            uncond_emb_tensor = torch.tensor(uncond_embedding, dtype=torch.float32, device=self.device)
 
         # Run generation
         masker = ActivationMasker(adapter)
@@ -178,8 +168,7 @@ class GPUWorker:
                 adapter,
                 masker,
                 class_label=class_label,
-                text_embedding=text_emb_tensor,
-                uncond_embedding=uncond_emb_tensor,
+                caption=caption,
                 num_steps=n_steps,
                 mask_steps=m_steps,
                 sigma_max=s_max,
