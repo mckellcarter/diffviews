@@ -24,6 +24,7 @@ class ModelData:
     sigma_max: float
     sigma_min: float
     default_steps: int
+    default_guidance: float = 1.0
 
     # Loaded data
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -41,8 +42,6 @@ class ModelData:
 
     # Conditioning type: "class" for ImageNet models, "text" for T2I models
     conditioning_type: str = "class"
-    text_encoder: Any = None  # CLIP model for text conditioning (lazy loaded)
-    text_tokenizer: Any = None  # CLIP tokenizer
 
     # Default (pre-computed) embeddings backup for restore after layer change
     default_df: Optional[pd.DataFrame] = None

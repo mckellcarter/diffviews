@@ -32,9 +32,8 @@ cpu_image = (
         "boto3>=1.28.0",
         "diffusers>=0.25.0",
         "transformers>=4.30.0",
-        "open_clip_torch>=2.20.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@e4f97e389519e73f10876daeb0e0152f783bffcb")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@f26b17d")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
@@ -52,7 +51,7 @@ def download_data(output_dir: Path) -> None:
         print("Warning: R2 not configured")
         return
 
-    for model in ["dmd2", "edm"]:
+    for model in ["dmd2", "edm", "mscoco"]:
         config = output_dir / model / "config.json"
         if not config.exists():
             print(f"Downloading {model} data from R2...")

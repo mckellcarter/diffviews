@@ -159,6 +159,9 @@ class GradioVisualizer:
                 adapter_defaults = {}
 
             model_name = subdir.name
+            conditioning_type = config.get("conditioning_type", "class")
+            # Text-conditioned models default to CFG=7.5, class-conditioned to 1.0
+            guidance_fallback = 7.5 if conditioning_type == "text" else 1.0
             self.model_configs[model_name] = {
                 "data_dir": subdir,
                 "adapter": adapter_name,
@@ -166,8 +169,9 @@ class GradioVisualizer:
                 "sigma_max": config.get("sigma_max", adapter_defaults.get("sigma_max", 80.0)),
                 "sigma_min": config.get("sigma_min", adapter_defaults.get("sigma_min", 0.002)),
                 "default_steps": config.get("default_steps", adapter_defaults.get("default_steps", 5)),
+                "default_guidance": config.get("default_guidance", adapter_defaults.get("default_guidance", guidance_fallback)),
                 "embeddings_path": embeddings_path,
-                "conditioning_type": config.get("conditioning_type", "class"),
+                "conditioning_type": conditioning_type,
                 "dataset_type": dataset_type,
             }
             status = "ready" if embeddings_path else "needs UMAP"
@@ -221,6 +225,7 @@ class GradioVisualizer:
             sigma_max=config.get("sigma_max", self._default_sigma_max),
             sigma_min=config.get("sigma_min", self._default_sigma_min),
             default_steps=config.get("default_steps", self._default_num_steps),
+            default_guidance=config.get("default_guidance", self.guidance_scale),
             conditioning_type=conditioning_type,
         )
 
@@ -601,42 +606,6 @@ class GradioVisualizer:
         model_data.layer_shapes = model_data.adapter.get_layer_shapes()
         print(f"Adapter loaded. Layers: {list(model_data.layer_shapes.keys())}")
         return model_data.adapter
-
-    def encode_text(self, model_name: str, caption: str) -> Optional["torch.Tensor"]:
-        """Encode text caption for T2I models using CLIP.
-
-        Args:
-            model_name: Name of the model
-            caption: Text caption to encode
-
-        Returns:
-            Text embedding tensor (1, 1024) or None if not text-conditioned
-        """
-        import torch
-
-        model_data = self.get_model(model_name)
-        if model_data is None:
-            return None
-        if model_data.conditioning_type != "text":
-            return None
-
-        # Lazy load CLIP encoder
-        if model_data.text_encoder is None:
-            import open_clip
-            print(f"Loading CLIP ViT-H/14 for text encoding...")
-            model, _, _ = open_clip.create_model_and_transforms(
-                "ViT-H-14", pretrained="laion2b_s32b_b79k"
-            )
-            model_data.text_encoder = model.eval().to(self.device)
-            model_data.text_tokenizer = open_clip.get_tokenizer("ViT-H-14")
-            print(f"CLIP encoder loaded on {self.device}")
-
-        # Encode caption
-        with torch.no_grad():
-            tokens = model_data.text_tokenizer([caption]).to(self.device)
-            text_features = model_data.text_encoder.encode_text(tokens)
-            # Return as (1, 1, 1024) for cross-attention: (batch, seq_len, dim)
-            return text_features.unsqueeze(1)
 
     def get_default_layer_label(self, model_name: str) -> Optional[str]:
         """Get label for pre-computed default embeddings (e.g. 'encoder_bottleneck+midblock')."""

@@ -165,6 +165,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     default_steps = default_model_data.default_steps if default_model_data else 5
                     default_sigma_max = default_model_data.sigma_max if default_model_data else 80.0
                     default_sigma_min = default_model_data.sigma_min if default_model_data else 0.5
+                    default_guidance = default_model_data.default_guidance if default_model_data else 1.0
                     with gr.Row(elem_id="gen-params-row"):
                         num_steps_slider = gr.Number(
                             value=default_steps, label="Steps",
@@ -175,7 +176,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             elem_id="mask-steps", min_width=50, precision=0
                         )
                         guidance_slider = gr.Number(
-                            value=visualizer.guidance_scale, label="CFG",
+                            value=default_guidance, label="CFG",
                             elem_id="guidance", min_width=50
                         )
                         sigma_max_input = gr.Number(
@@ -545,14 +546,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             Single-model-at-a-time: unloads current model, loads new one.
             """
             if new_model_name == cur_model:
-                return (gr.update(),) * 25
+                return (gr.update(),) * 28
 
             if not visualizer.is_valid_model(new_model_name):
-                return (gr.update(),) * 25
+                return (gr.update(),) * 28
 
             # Load new model (unloads current automatically)
             if not visualizer._ensure_model_loaded(new_model_name):
-                return (gr.update(),) * 25
+                return (gr.update(),) * 28
 
             model_data = visualizer.get_model(new_model_name)
             fig = visualizer.create_umap_figure(new_model_name)
@@ -584,6 +585,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "No neighbors selected",           # neighbor_info
                 gr.update(choices=visualizer.get_layer_choices(new_model_name), value=visualizer.get_default_layer_label(new_model_name)),  # layer_dropdown
                 "2D",                              # view_mode_radio (reset to 2D)
+                gr.update(value=model_data.default_guidance),  # guidance_slider
+                gr.update(value=model_data.sigma_max),         # sigma_max_input
+                gr.update(value=model_data.sigma_min),         # sigma_min_input
             )
 
         # Wire up events
@@ -681,6 +685,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     neighbor_info,
                     layer_dropdown,
                     view_mode_radio,
+                    guidance_slider,
+                    sigma_max_input,
+                    sigma_min_input,
                 ],
             )
 
@@ -893,17 +900,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Get conditioning from selected point (or first neighbor)
             ref_idx = sel_idx if sel_idx is not None else all_neighbors[0]
             class_label = None
-            text_embedding = None
             caption = None
 
             print(f"[on_generate] conditioning_type={model_data.conditioning_type}, df_cols={list(model_data.df.columns)[:5]}")
             if model_data.conditioning_type == "text":
-                # Text-conditioned model: get caption and encode
+                # Text-conditioned model: get caption (adapter will encode on GPU)
                 if "caption" in model_data.df.columns:
                     caption = model_data.df.iloc[ref_idx]["caption"]
                     print(f"[on_generate] caption={caption[:50] if caption else None}")
-                    text_embedding = visualizer.encode_text(model_name, caption)
-                    print(f"[on_generate] text_embedding={text_embedding.shape if text_embedding is not None else None}")
             elif "class_label" in model_data.df.columns:
                 class_label = int(model_data.df.iloc[ref_idx]["class_label"])
 
@@ -919,7 +923,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             result = _generate_on_gpu(
                 model_name, all_neighbors, class_label,
                 n_steps, m_steps, s_max, s_min, guidance, noise_mode,
-                extract_layers, can_project, text_embedding
+                extract_layers, can_project, caption
             )
             if result is None:
                 return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
