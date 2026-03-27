@@ -2,8 +2,8 @@
 # Requires Python 3.10+
 # Package installed via git clone in app.py (bypasses pip cache)
 
-# Adapter library (pinned to SD2 text encoder fix)
-adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@53bd1ef
+# Adapter library (pinned to sd2-community text encoder)
+adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@e6f709f
 
 # Core dependencies
 torch>=2.0.0
