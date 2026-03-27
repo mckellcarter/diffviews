@@ -34,7 +34,7 @@ cpu_image = (
         "transformers>=4.30.0",
         "open_clip_torch>=2.20.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@23e6b8f04423b3cf157ea7b9b15c04dc1ce53170")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@0afc0f52b9ab51ae1ef6407a5a4e21d9eb784369")
 )
 
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
