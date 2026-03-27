@@ -166,6 +166,7 @@ class GradioVisualizer:
                 "sigma_max": config.get("sigma_max", adapter_defaults.get("sigma_max", 80.0)),
                 "sigma_min": config.get("sigma_min", adapter_defaults.get("sigma_min", 0.002)),
                 "default_steps": config.get("default_steps", adapter_defaults.get("default_steps", 5)),
+                "default_guidance": config.get("default_guidance", adapter_defaults.get("default_guidance", 1.0)),
                 "embeddings_path": embeddings_path,
                 "conditioning_type": config.get("conditioning_type", "class"),
                 "dataset_type": dataset_type,
@@ -221,6 +222,7 @@ class GradioVisualizer:
             sigma_max=config.get("sigma_max", self._default_sigma_max),
             sigma_min=config.get("sigma_min", self._default_sigma_min),
             default_steps=config.get("default_steps", self._default_num_steps),
+            default_guidance=config.get("default_guidance", self.guidance_scale),
             conditioning_type=conditioning_type,
         )
 

@@ -24,6 +24,7 @@ class ModelData:
     sigma_max: float
     sigma_min: float
     default_steps: int
+    default_guidance: float = 1.0
 
     # Loaded data
     df: pd.DataFrame = field(default_factory=pd.DataFrame)

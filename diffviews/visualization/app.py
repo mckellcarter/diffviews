@@ -165,6 +165,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     default_steps = default_model_data.default_steps if default_model_data else 5
                     default_sigma_max = default_model_data.sigma_max if default_model_data else 80.0
                     default_sigma_min = default_model_data.sigma_min if default_model_data else 0.5
+                    default_guidance = default_model_data.default_guidance if default_model_data else 1.0
                     with gr.Row(elem_id="gen-params-row"):
                         num_steps_slider = gr.Number(
                             value=default_steps, label="Steps",
@@ -175,7 +176,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             elem_id="mask-steps", min_width=50, precision=0
                         )
                         guidance_slider = gr.Number(
-                            value=visualizer.guidance_scale, label="CFG",
+                            value=default_guidance, label="CFG",
                             elem_id="guidance", min_width=50
                         )
                         sigma_max_input = gr.Number(
@@ -545,14 +546,14 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             Single-model-at-a-time: unloads current model, loads new one.
             """
             if new_model_name == cur_model:
-                return (gr.update(),) * 25
+                return (gr.update(),) * 28
 
             if not visualizer.is_valid_model(new_model_name):
-                return (gr.update(),) * 25
+                return (gr.update(),) * 28
 
             # Load new model (unloads current automatically)
             if not visualizer._ensure_model_loaded(new_model_name):
-                return (gr.update(),) * 25
+                return (gr.update(),) * 28
 
             model_data = visualizer.get_model(new_model_name)
             fig = visualizer.create_umap_figure(new_model_name)
@@ -584,6 +585,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "No neighbors selected",           # neighbor_info
                 gr.update(choices=visualizer.get_layer_choices(new_model_name), value=visualizer.get_default_layer_label(new_model_name)),  # layer_dropdown
                 "2D",                              # view_mode_radio (reset to 2D)
+                gr.update(value=model_data.default_guidance),  # guidance_slider
+                gr.update(value=model_data.sigma_max),         # sigma_max_input
+                gr.update(value=model_data.sigma_min),         # sigma_min_input
             )
 
         # Wire up events
@@ -681,6 +685,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     neighbor_info,
                     layer_dropdown,
                     view_mode_radio,
+                    guidance_slider,
+                    sigma_max_input,
+                    sigma_min_input,
                 ],
             )
 
