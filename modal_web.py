@@ -52,7 +52,7 @@ def download_data(output_dir: Path) -> None:
         print("Warning: R2 not configured")
         return
 
-    for model in ["dmd2", "edm"]:
+    for model in ["dmd2", "edm", "mscoco"]:
         config = output_dir / model / "config.json"
         if not config.exists():
             print(f"Downloading {model} data from R2...")
