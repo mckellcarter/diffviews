@@ -28,6 +28,7 @@ from diffviews.processing.aligned_umap import (
 )
 from adapt_diff import get_adapter
 from diffviews.core.masking import unflatten_activation
+from diffviews.data.cloud_adapter import get_cloud_adapter, cloud_enabled
 from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
 
@@ -516,19 +517,36 @@ class GradioVisualizer:
     def get_image(self, model_name: str, image_path: str) -> Optional[np.ndarray]:
         """Load image as numpy array for gr.Image.
 
+        Tries local disk first, falls back to cloud API if available.
+
         Args:
             model_name: Name of the model (determines data directory)
             image_path: Relative path to image within model's data directory
+                       (e.g., "images/imagenet_real/sample_000009.png")
         """
         model_data = self.get_model(model_name)
         if model_data is None:
             return None
-        try:
-            full_path = model_data.data_dir / image_path
-            return np.array(Image.open(full_path))
-        except Exception as e:
-            print(f"Error loading image {image_path}: {e}")
-            return None
+
+        # Try local file first
+        full_path = model_data.data_dir / image_path
+        if full_path.exists():
+            try:
+                return np.array(Image.open(full_path))
+            except Exception as e:
+                print(f"Error loading local image {image_path}: {e}")
+
+        # Fall back to cloud API for ImageNet samples
+        if cloud_enabled() and "sample_" in image_path:
+            try:
+                # Extract sample_XXXXXX from path
+                filename = Path(image_path).stem  # e.g., "sample_000009"
+                adapter = get_cloud_adapter()
+                return adapter.get_image_from_sample_id(filename)
+            except Exception as e:
+                print(f"Cloud fetch failed for {image_path}: {e}")
+
+        return None
 
     @staticmethod
     def create_composite_image(

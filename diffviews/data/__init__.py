@@ -2,6 +2,7 @@
 
 from .class_labels import load_class_labels, get_class_name
 from .sources import NPZDataSource, JPEGDataSource
+from .cloud_adapter import ImageNetCloudAdapter, get_cloud_adapter, cloud_enabled
 
 # LMDB is optional
 try:
@@ -17,6 +18,9 @@ __all__ = [
     "NPZDataSource",
     "JPEGDataSource",
     "LMDB_AVAILABLE",
+    "ImageNetCloudAdapter",
+    "get_cloud_adapter",
+    "cloud_enabled",
 ]
 
 if LMDB_AVAILABLE:
