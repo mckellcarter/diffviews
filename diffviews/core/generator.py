@@ -256,9 +256,10 @@ def generate_with_mask_multistep(
                 trajectory_activations.append(concat_act)
             extractor.clear()
 
-        # Capture intermediate image (decode for latent models)
+        # Capture intermediate image (convert prediction to x₀, then decode)
         if return_intermediates:
-            intermediate_images.append(tensor_to_uint8_image(adapter.decode(pred)))
+            x0_pred = adapter.convert_latent_sample(x, t, pred)
+            intermediate_images.append(tensor_to_uint8_image(adapter.decode(x0_pred)))
 
         # Model-appropriate step via adapter interface
         t_next = timesteps[i + 1]

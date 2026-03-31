@@ -240,6 +240,9 @@ class GeneratorAdapter:
     def encode(self, images: Tensor) -> Tensor
     def decode(self, latent: Tensor) -> Tensor
 
+    # Prediction conversion (for intermediate visualization)
+    def convert_latent_sample(self, x_t, t, model_output) -> Tensor  # pred → x₀
+
     # Conditioning
     def prepare_conditioning(self, text=None, class_label=None, ...) -> Any
 
