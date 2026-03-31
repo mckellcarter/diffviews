@@ -48,6 +48,7 @@ image = (
 vol = modal.Volume.from_name("diffviews-data", create_if_missing=True)
 
 r2_secret = modal.Secret.from_name("R2_ACCESS")
+yodal_secret = modal.Secret.from_name("YODAL_ITEMS_API", required=False)
 
 # --- Data constants (same as app.py) ---
 
@@ -359,7 +360,7 @@ def get_device() -> str:
     image=image,
     gpu="T4",
     volumes={"/data": vol},
-    secrets=[r2_secret],
+    secrets=[r2_secret, yodal_secret],
     timeout=600,
     scaledown_window=120,
     max_containers=1,
