@@ -233,15 +233,12 @@ class GeneratorAdapter:
 
     # Diffusion schedule and stepping
     def get_timesteps(self, num_steps: int, **kwargs) -> List[Tensor]
-    def step(self, x_t, t, pred, t_next=None) -> Tensor
+    def step(self, x_t, t, pred, t_next=None, return_x0=False) -> Tensor | Tuple
     def get_initial_noise(self, batch_size, device, generator=None) -> Tensor
 
     # Latent space transforms (identity for pixel-space)
     def encode(self, images: Tensor) -> Tensor
     def decode(self, latent: Tensor) -> Tensor
-
-    # Prediction conversion (for intermediate visualization)
-    def convert_latent_sample(self, x_t, t, model_output) -> Tensor  # pred → x₀
 
     # Conditioning
     def prepare_conditioning(self, text=None, class_label=None, ...) -> Any
@@ -259,7 +256,8 @@ x = adapter.get_initial_noise(batch_size, device)
 
 for i, t in enumerate(timesteps[:-1]):
     pred = adapter.forward_with_cfg(x, t, cond, uncond, guidance_scale)
-    x = adapter.step(x, t, pred, t_next=timesteps[i+1])
+    # Use return_x0=True for intermediate visualization
+    x, pred_x0 = adapter.step(x, t, pred, t_next=timesteps[i+1], return_x0=True)
 
 images = adapter.decode(x)
 ```
