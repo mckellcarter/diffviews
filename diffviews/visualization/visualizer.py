@@ -53,8 +53,8 @@ class GradioVisualizer:
         num_steps: int = 5,
         mask_steps: int = 1,
         guidance_scale: float = 1.0,
-        sigma_max: float = 80.0,
-        sigma_min: float = 0.5,
+        noise_max: float = 100.0,
+        noise_min: float = 0.0,
         label_dropout: float = 0.0,
         adapter_name: str = "dmd2-imagenet-64",
         max_classes: int = None,
@@ -70,8 +70,8 @@ class GradioVisualizer:
             num_steps: Number of denoising steps
             mask_steps: Steps to apply activation mask
             guidance_scale: CFG scale
-            sigma_max: Maximum sigma for denoising schedule
-            sigma_min: Minimum sigma for denoising schedule
+            noise_max: Maximum noise level (0-100 scale, 100=pure noise)
+            noise_min: Minimum noise level (0-100 scale, 0=clean)
             label_dropout: Label dropout for model config
             adapter_name: Adapter name for model loading
             max_classes: Maximum number of classes to load (None=all)
@@ -86,8 +86,8 @@ class GradioVisualizer:
 
         # Fallback defaults (used if no model config overrides)
         self._default_num_steps = num_steps
-        self._default_sigma_max = sigma_max
-        self._default_sigma_min = sigma_min
+        self._default_noise_max = noise_max
+        self._default_noise_min = noise_min
         self._default_adapter_name = adapter_name
         self._default_checkpoint_path = checkpoint_path
         self._default_embeddings_path = embeddings_path
@@ -167,8 +167,8 @@ class GradioVisualizer:
                 "data_dir": subdir,
                 "adapter": adapter_name,
                 "checkpoint": config.get("checkpoint"),
-                "sigma_max": config.get("sigma_max", adapter_defaults.get("sigma_max", 80.0)),
-                "sigma_min": config.get("sigma_min", adapter_defaults.get("sigma_min", 0.002)),
+                "noise_max": config.get("noise_max", adapter_defaults.get("noise_max", 100.0)),
+                "noise_min": config.get("noise_min", adapter_defaults.get("noise_min", 0.0)),
                 "default_steps": config.get("default_steps", adapter_defaults.get("default_steps", 5)),
                 "default_guidance": config.get("default_guidance", adapter_defaults.get("default_guidance", guidance_fallback)),
                 "embeddings_path": embeddings_path,
@@ -223,8 +223,8 @@ class GradioVisualizer:
             data_dir=data_dir,
             adapter_name=config.get("adapter", self._default_adapter_name),
             checkpoint_path=checkpoint_path,
-            sigma_max=config.get("sigma_max", self._default_sigma_max),
-            sigma_min=config.get("sigma_min", self._default_sigma_min),
+            noise_max=config.get("noise_max", self._default_noise_max),
+            noise_min=config.get("noise_min", self._default_noise_min),
             default_steps=config.get("default_steps", self._default_num_steps),
             default_guidance=config.get("default_guidance", self.guidance_scale),
             conditioning_type=conditioning_type,

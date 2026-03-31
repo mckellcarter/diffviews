@@ -21,8 +21,8 @@ class ModelData:
     data_dir: Path
     adapter_name: str
     checkpoint_path: Optional[Path]
-    sigma_max: float
-    sigma_min: float
+    noise_max: float  # Noise level 0-100 (100=pure noise)
+    noise_min: float  # Noise level 0-100 (0=clean)
     default_steps: int
     default_guidance: float = 1.0
 

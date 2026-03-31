@@ -141,8 +141,8 @@ def generate_with_mask_multistep(
     caption: Optional[str] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
-    sigma_max: float = 80.0,
-    sigma_min: float = 0.002,
+    noise_level_max: float = 100.0,
+    noise_level_min: float = 0.0,
     rho: float = 7.0,
     guidance_scale: float = 1.0,
     stochastic: bool = True,  # Deprecated, ignored
@@ -165,9 +165,9 @@ def generate_with_mask_multistep(
         caption: Text caption for T2I models (encoded by adapter), overrides class_label
         num_steps: Number of denoising steps
         mask_steps: Steps to apply mask (default=num_steps, 1=first-only)
-        sigma_max: Maximum sigma (passed to adapter.get_timesteps for sigma-based models)
-        sigma_min: Minimum sigma (passed to adapter.get_timesteps for sigma-based models)
-        rho: Karras schedule parameter (passed to adapter.get_timesteps)
+        noise_level_max: Starting noise level (0-100), default 100 (pure noise)
+        noise_level_min: Ending noise level (0-100), default 0 (clean)
+        rho: Karras schedule parameter (for EDM-style models)
         guidance_scale: CFG scale (0=uncond, 1=class, >1=amplify)
         stochastic: Legacy param, ignored when noise_mode is set
         noise_mode: Noise injection mode:
@@ -193,13 +193,12 @@ def generate_with_mask_multistep(
         torch.manual_seed(seed if seed is not None else 42)
         torch.use_deterministic_algorithms(True, warn_only=True)
 
-    # Get timesteps/sigmas from adapter
-    # Pass sigma params for sigma-based models (EDM/DMD2), ignored by timestep models (MSCOCO)
+    # Get timesteps/sigmas from adapter using universal noise_level (0-100)
     timesteps = adapter.get_timesteps(
         num_steps,
         device=device,
-        sigma_max=sigma_max,
-        sigma_min=sigma_min,
+        noise_level_max=noise_level_max,
+        noise_level_min=noise_level_min,
         rho=rho
     )
 
@@ -218,14 +217,12 @@ def generate_with_mask_multistep(
         extractor = ActivationExtractor(adapter, extract_layers)
         extractor.register_hooks()
 
-    # Get resolution and channels from adapter
-    resolution = getattr(adapter, 'latent_resolution', adapter.resolution)
-    in_channels = adapter.in_channels
-    noise_shape = (num_samples, in_channels, resolution, resolution)
-
-    # Generate initial noise (stochastic mode only; fixed/zero require adapt_diff changes)
-    initial_noise = torch.randn(noise_shape, device=device)
-    x = initial_noise * sigma_max
+    # Generate initial noise using adapter (handles model-specific scaling)
+    x = adapter.get_initial_noise(
+        batch_size=num_samples,
+        device=device,
+        noise_level=noise_level_max
+    )
 
     # Iterative denoising
     for i, t in enumerate(timesteps[:-1]):
@@ -258,7 +255,9 @@ def generate_with_mask_multistep(
 
         # Capture intermediate image (decode for latent models)
         if return_intermediates:
-            intermediate_images.append(tensor_to_uint8_image(adapter.decode(pred)))
+            # Convert prediction to estimated x0 (handles epsilon/sample/v_prediction)
+            x0_estimate = adapter.pred_to_sample(x, t, pred)
+            intermediate_images.append(tensor_to_uint8_image(adapter.decode(x0_estimate)))
 
         # Model-appropriate step via adapter interface
         t_next = timesteps[i + 1]

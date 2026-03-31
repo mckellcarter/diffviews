@@ -72,7 +72,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 | `check_umap_compatibility` | `(data_dir: Path, model: str) -> bool` | Check if UMAP pickle is compatible with numba | `pickle.load`, `reducer.transform` | `ensure_data_ready` |
 | `ensure_data_ready` | `(data_dir: Path, checkpoints: list) -> bool` | Ensure data and checkpoints are downloaded | `download_data`, `download_checkpoint`, `regenerate_umap` | `_setup` |
 | `get_device` | `() -> str` | Auto-detect best available device | `torch.cuda.is_available`, `torch.backends.mps.is_available` | `_setup` |
-| `generate_on_gpu` | `(model_name, all_neighbors, class_label, n_steps, m_steps, s_max, s_min, guidance, noise_mode, extract_layers, can_project) -> result` | **@spaces.GPU** Run masked generation on GPU | `visualizer.load_adapter`, `visualizer.prepare_activation_dict`, `ActivationMasker`, `generate_with_mask_multistep` | `viz_mod._generate_on_gpu` (injected), Gradio callbacks |
+| `generate_on_gpu` | `(model_name, all_neighbors, class_label, n_steps, m_steps, noise_max, noise_min, guidance, noise_mode, extract_layers, can_project) -> result` | **@spaces.GPU** Run masked generation on GPU | `visualizer.load_adapter`, `visualizer.prepare_activation_dict`, `ActivationMasker`, `generate_with_mask_multistep` | `viz_mod._generate_on_gpu` (injected), Gradio callbacks |
 | `extract_layer_on_gpu` | `(model_name, layer_name, batch_size=32) -> np.ndarray` | **@spaces.GPU** Extract layer activations on GPU | `visualizer.extract_layer_activations` | `viz_mod._extract_layer_on_gpu` (injected), Gradio callbacks |
 | `_setup` | `() -> gr.Blocks` | Initialize data, visualizer, and Gradio app | `ensure_data_ready`, `GradioVisualizer`, `create_gradio_app` | Module-level execution |
 
@@ -214,7 +214,7 @@ See the adapt_diff repository for adapter documentation and available implementa
 
 #### Adapter Interface
 
-The unified adapter interface supports both pixel-space (EDM/DMD2) and latent-space (SD-style) models:
+The unified adapter interface supports both pixel-space (EDM/DMD2) and latent-space (SD-style) models. Noise levels use a universal 0-100 scale (100=pure noise, 0=clean) that each adapter translates to its native format.
 
 ```python
 class GeneratorAdapter:
@@ -231,10 +231,16 @@ class GeneratorAdapter:
     def forward(self, x, t, conditioning) -> Tensor
     def forward_with_cfg(self, x, t, cond, uncond, scale) -> Tensor
 
+    # Noise level translation (0-100 → native format)
+    def noise_level_to_native(self, noise_level) -> Tensor  # sigma or timestep
+
+    # Prediction type conversion
+    def pred_to_sample(self, x_t, t, model_output) -> Tensor  # any prediction → x0
+
     # Diffusion schedule and stepping
-    def get_timesteps(self, num_steps: int, **kwargs) -> List[Tensor]
+    def get_timesteps(self, num_steps, noise_level_max=100, noise_level_min=0) -> Tensor
     def step(self, x_t, t, pred, t_next=None) -> Tensor
-    def get_initial_noise(self, batch_size, device, generator=None) -> Tensor
+    def get_initial_noise(self, batch_size, device, noise_level=100) -> Tensor
 
     # Latent space transforms (identity for pixel-space)
     def encode(self, images: Tensor) -> Tensor
@@ -244,18 +250,25 @@ class GeneratorAdapter:
     def prepare_conditioning(self, text=None, class_label=None, ...) -> Any
 
     # Config and hooks
-    def get_default_config(self) -> Dict
+    def get_default_config(self) -> Dict  # includes noise_max, noise_min, default_steps
     def get_layer_shapes(self) -> Dict[str, Tuple]
 ```
 
 The generator uses this unified interface:
 ```python
+config = adapter.get_default_config()
 cond = adapter.prepare_conditioning(text=caption)
-timesteps = adapter.get_timesteps(num_steps)
-x = adapter.get_initial_noise(batch_size, device)
+timesteps = adapter.get_timesteps(
+    num_steps,
+    noise_level_max=config.get('noise_max', 100),
+    noise_level_min=config.get('noise_min', 0)
+)
+x = adapter.get_initial_noise(batch_size, device, noise_level=config.get('noise_max', 100))
 
 for i, t in enumerate(timesteps[:-1]):
     pred = adapter.forward_with_cfg(x, t, cond, uncond, guidance_scale)
+    # Optional: get x0 estimate (handles epsilon/sample/v_prediction)
+    # x0 = adapter.pred_to_sample(x, t, pred)
     x = adapter.step(x, t, pred, t_next=timesteps[i+1])
 
 images = adapter.decode(x)
@@ -296,7 +309,7 @@ images = adapter.decode(x)
 
 | Method | Signature | Summary | Calls | Called By |
 |--------|-----------|---------|-------|-----------|
-| `__init__` | `(data_dir, embeddings_path, checkpoint_path, device, num_steps, mask_steps, guidance_scale, sigma_max, sigma_min, label_dropout, adapter_name, max_classes, initial_model)` | Initialize visualizer | `discover_models`, `_load_all_models`, `load_class_labels` | `app.py._setup` |
+| `__init__` | `(data_dir, embeddings_path, checkpoint_path, device, num_steps, mask_steps, guidance_scale, noise_max, noise_min, label_dropout, adapter_name, max_classes, initial_model)` | Initialize visualizer | `discover_models`, `_load_all_models`, `load_class_labels` | `app.py._setup` |
 | `discover_models` | `() -> None` | Discover available models in data directory | — | `__init__` |
 | `_load_all_models` | `() -> None` | Load only the initial/default model | `_ensure_model_loaded` | `__init__` |
 | `_load_model_data` | `(model_name, config) -> ModelData` | Load all data for a model | `pd.read_csv`, `load_dataset_activations`, `_fit_knn_model` | `_ensure_model_loaded` |
@@ -394,8 +407,8 @@ images = adapter.decode(x)
 | `data_dir` | `Path` | Data directory |
 | `adapter_name` | `str` | Adapter registry name |
 | `checkpoint_path` | `Optional[Path]` | Checkpoint file path |
-| `sigma_max` | `float` | Maximum sigma |
-| `sigma_min` | `float` | Minimum sigma |
+| `noise_max` | `float` | Max noise level (0-100 scale) |
+| `noise_min` | `float` | Min noise level (0-100 scale) |
 | `default_steps` | `int` | Default denoising steps |
 | `df` | `pd.DataFrame` | Embeddings DataFrame |
 | `activations` | `Optional[np.ndarray]` | Activation matrix |
@@ -441,7 +454,7 @@ images = adapter.decode(x)
 | `get_visualizer` | `() -> GradioVisualizer` | Get current visualizer | — | — |
 | `set_remote_gpu_worker` | `(worker) -> None` | Set remote GPU worker for hybrid mode | — | Modal setup |
 | `is_hybrid_mode` | `() -> bool` | Check if in hybrid CPU/GPU mode | — | — |
-| `_generate_on_gpu` | `(model_name, all_neighbors, class_label, n_steps, m_steps, s_max, s_min, guidance, noise_mode, extract_layers, can_project) -> result` | Run masked generation (local or remote) | `compute_mask_dict`, `ActivationMasker`, `generate_with_mask_multistep` | `on_generate` callback |
+| `_generate_on_gpu` | `(model_name, all_neighbors, class_label, n_steps, m_steps, noise_max, noise_min, guidance, noise_mode, extract_layers, can_project) -> result` | Run masked generation (local or remote) | `compute_mask_dict`, `ActivationMasker`, `generate_with_mask_multistep` | `on_generate` callback |
 | `_deserialize_result` | `(result) -> Tuple` | Convert numpy from remote back to torch | `torch.from_numpy` | `_generate_on_gpu` |
 | `_deserialize_dict` | `(d) -> Dict` | Convert numpy in dict to torch | `torch.from_numpy` | `_deserialize_result` |
 | `_extract_layer_on_gpu` | `(model_name, layer_name, batch_size) -> Optional[np.ndarray]` | Extract layer activations (local only) | `visualizer.extract_layer_activations` | `recompute_layer_umap` |
@@ -747,6 +760,7 @@ See the [adapt_diff repository](https://github.com/mckellcarter/adapt_diff) for 
 ### Using the Visualizer Programmatically
 
 ```python
+import torch
 from adapt_diff import get_adapter
 
 # Get adapter class
@@ -755,11 +769,13 @@ AdapterClass = get_adapter('dmd2-imagenet-64')
 # Load from checkpoint
 adapter = AdapterClass.from_checkpoint('/path/to/checkpoint.pkl', device='cuda')
 
-# Get layer shapes
+# Get config and layer shapes
+config = adapter.get_default_config()  # includes noise_max, noise_min, default_steps
 shapes = adapter.get_layer_shapes()
 
-# Forward pass
-output = adapter.forward(x, sigma, class_labels)
+# Forward pass (t is in native format - use noise_level_to_native to convert)
+t = adapter.noise_level_to_native(torch.tensor(80.0))  # 80% noise → native sigma/timestep
+output = adapter.forward(x, t, class_labels)
 ```
 
 ### Core Generation Pipeline
@@ -773,12 +789,14 @@ masker = ActivationMasker(adapter)
 masker.set_mask('encoder_bottleneck', activation_tensor)
 masker.register_hooks(['encoder_bottleneck'])
 
-# Generate
+# Generate (noise_level uses 0-100 scale)
 images, labels = generate_with_mask_multistep(
     adapter, masker,
     class_label=207,  # golden retriever
     num_steps=5,
     mask_steps=1,
+    noise_level_max=100.0,  # start from pure noise
+    noise_level_min=0.0,    # denoise to clean
 )
 ```
 
