@@ -43,6 +43,9 @@ class ModelData:
     # Conditioning type: "class" for ImageNet models, "text" for T2I models
     conditioning_type: str = "class"
 
+    # Timestep label for UI display (σ for sigma-based, t for DDPM)
+    timestep_label: str = "σ"
+
     # Default (pre-computed) embeddings backup for restore after layer change
     default_df: Optional[pd.DataFrame] = None
     default_activations: Optional[np.ndarray] = None

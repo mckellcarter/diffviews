@@ -163,6 +163,8 @@ class GradioVisualizer:
             conditioning_type = config.get("conditioning_type", "class")
             # Text-conditioned models default to CFG=7.5, class-conditioned to 1.0
             guidance_fallback = 7.5 if conditioning_type == "text" else 1.0
+            # Get timestep label from adapter (σ for sigma-based, t for DDPM)
+            timestep_label = "t" if conditioning_type == "text" else "σ"
             self.model_configs[model_name] = {
                 "data_dir": subdir,
                 "adapter": adapter_name,
@@ -174,6 +176,7 @@ class GradioVisualizer:
                 "embeddings_path": embeddings_path,
                 "conditioning_type": conditioning_type,
                 "dataset_type": dataset_type,
+                "timestep_label": timestep_label,
             }
             status = "ready" if embeddings_path else "needs UMAP"
             print(f"Discovered model: {model_name} (adapter={adapter_name}, {status})")
@@ -228,6 +231,7 @@ class GradioVisualizer:
             default_steps=config.get("default_steps", self._default_num_steps),
             default_guidance=config.get("default_guidance", self.guidance_scale),
             conditioning_type=conditioning_type,
+            timestep_label=config.get("timestep_label", "σ"),
         )
 
         # Load activations for generation (always needed)
