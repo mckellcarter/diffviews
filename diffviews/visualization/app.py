@@ -935,28 +935,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if result is None:
                 return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
 
-            # Unpack results: (images, labels, [trajectory], [intermediates], [noised_inputs])
+            # Unpack results: (images, labels, [trajectory], [intermediates], [noised_inputs], timesteps)
+            # timesteps is always the last element
             images = result[0]
+            sigmas = result[-1]  # Native timesteps from adapter (last element)
             trajectory_acts = []
             intermediate_imgs = []
             noised_inputs = []
             idx = 2  # Start after images, labels
             if can_project:
-                trajectory_acts = result[idx] if len(result) > idx else []
+                trajectory_acts = result[idx] if len(result) > idx - 1 else []
                 idx += 1
             intermediate_imgs = result[idx] if len(result) > idx else []
             idx += 1
             noised_inputs = result[idx] if len(result) > idx else []
-
-            # Compute sigma schedule used during this generation (store with results)
-            rho = 7.0
-            sigmas = []
-            for i in range(int(n_steps)):
-                ramp = i / max(int(n_steps) - 1, 1)
-                min_inv_rho = float(s_min) ** (1 / rho)
-                max_inv_rho = float(s_max) ** (1 / rho)
-                sigma = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
-                sigmas.append(sigma)
 
             # Project trajectory through UMAP (2D or 3D mode)
             traj_coords = []
