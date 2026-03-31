@@ -80,12 +80,18 @@ class MockAdapter(GeneratorAdapter):
         sigmas = torch.linspace(sigma_max, sigma_min, num_steps, device=device)
         return torch.cat([sigmas, torch.zeros(1, device=device)])
 
-    def step(self, x_t, t, model_output, t_next=None, **kwargs):
+    def step(self, x_t, t, model_output, t_next=None, return_x0=False, **kwargs):
         """Mock Euler step."""
         if t_next is None or t_next == 0:
-            return model_output
-        d_cur = (x_t - model_output) / t
-        return x_t + (t_next - t) * d_cur
+            x_next = model_output
+        else:
+            d_cur = (x_t - model_output) / t
+            x_next = x_t + (t_next - t) * d_cur
+
+        if return_x0:
+            # Mock predicts x0 directly (sample model)
+            return x_next, model_output
+        return x_next
 
     def get_initial_noise(self, batch_size, device='cuda', generator=None, sigma_max=80.0):
         """Generate initial noise."""
@@ -108,10 +114,6 @@ class MockAdapter(GeneratorAdapter):
             'encoder_bottleneck': (256, 8, 8),
             'midblock': (512, 4, 4),
         }
-
-    def convert_latent_sample(self, x_t, t, model_output):
-        """Mock predicts x0 directly."""
-        return model_output
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cuda', **kwargs):
@@ -605,12 +607,18 @@ class HookableMockAdapter(GeneratorAdapter):
         sigmas = torch.linspace(sigma_max, sigma_min, num_steps, device=device)
         return torch.cat([sigmas, torch.zeros(1, device=device)])
 
-    def step(self, x_t, t, model_output, t_next=None, **kwargs):
+    def step(self, x_t, t, model_output, t_next=None, return_x0=False, **kwargs):
         """Mock Euler step."""
         if t_next is None or t_next == 0:
-            return model_output
-        d_cur = (x_t - model_output) / t
-        return x_t + (t_next - t) * d_cur
+            x_next = model_output
+        else:
+            d_cur = (x_t - model_output) / t
+            x_next = x_t + (t_next - t) * d_cur
+
+        if return_x0:
+            # Mock predicts x0 directly (sample model)
+            return x_next, model_output
+        return x_next
 
     def get_initial_noise(self, batch_size, device='cuda', generator=None, sigma_max=80.0):
         """Generate initial noise."""
@@ -638,10 +646,6 @@ class HookableMockAdapter(GeneratorAdapter):
             'encoder_bottleneck': (256, 8, 8),
             'midblock': (512, 4, 4),
         }
-
-    def convert_latent_sample(self, x_t, t, model_output):
-        """Mock predicts x0 directly."""
-        return model_output
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cpu', **kwargs):
