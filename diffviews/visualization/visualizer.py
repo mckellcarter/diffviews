@@ -1656,8 +1656,10 @@ class GradioVisualizer:
                     new_nn_models[new_t] = nn_models[old_sigma]
             embeddings_per_sigma = new_embeddings
             nn_models = new_nn_models
-            # Convert sigma column in df
+            # Convert sigma columns in df
             df["sigma"] = df["sigma"].apply(_sigma_to_ddpm_timestep)
+            if "conditioning_sigma" in df.columns:
+                df["conditioning_sigma"] = df["conditioning_sigma"].apply(_sigma_to_ddpm_timestep)
             sigma_levels = converted_levels
             print(f"[3D] Converted levels: {sigma_levels}")
 
