@@ -326,7 +326,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     step_idx = int(step_idx)
                     traj_idx = int(traj_idx)
 
-                if intermediates is not None:
+                if intermediates is not None and traj_idx < len(intermediates):
                     step_idx = int(step_idx)
                     traj_len = len(intermediates[traj_idx])
                     # Handle special case: -1 means last step
