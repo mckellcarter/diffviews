@@ -335,12 +335,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     if 0 <= step_idx-1 < traj_len:
                         img, stored_sigma = intermediates[traj_idx][step_idx-1]
                         details = f"**Trajectory {traj_idx + 1}, Step {step_idx}**\n\n"
-                        details += f"σ = {stored_sigma:.1f}\n\n"
+                        details += f"N% = {stored_sigma:.1f}\n\n"
                         details += f"Coords: ({hover_data.get('x', 0):.2f}, {hover_data.get('y', 0):.2f})"
                         return img, details
 
                 # No intermediates stored
-                details = f"**Trajectory step {step_idx}**\n\nσ = {sigma}"
+                details = f"**Trajectory step {step_idx}**\n\nN% = {sigma}"
                 return gr.update(), details
 
             # Sample hover - show dataset image
@@ -368,7 +368,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                details += f"σ = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                details += f"N% = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -416,7 +416,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    details += f"σ = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    details += f"N% = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -1037,7 +1037,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 else:
                     composite_img = img_np
 
-                step_caption = f"{display_label} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                step_caption = f"{display_label} | Step {i+1}/{n_steps} | N%={sigma:.1f}"
                 step_gallery.append((composite_img, step_caption))
                 intermediates_state[-1].append((composite_img, sigma))
 
@@ -1103,17 +1103,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         )
 
         # --- Frame navigation for intermediate images ---
-        def format_frame_info(gen_info, frame_idx, n_frames, sigma):
-            """Format frame info string with class/caption, step, sigma (compact)."""
+        def format_frame_info(gen_info, frame_idx, n_frames, noise_pct):
+            """Format frame info string with class/caption, step, noise % (compact)."""
             if not gen_info:
-                return f"Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+                return f"Step {frame_idx + 1}/{n_frames} | N%={noise_pct:.1f}"
 
             class_id = gen_info.get("class_id")
             class_name = gen_info.get("class_name", "")
 
             if class_id is not None:
-                return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
-            return f"{class_name} | Step {frame_idx + 1}/{n_frames} | σ={sigma:.1f}"
+                return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | N%={noise_pct:.1f}"
+            return f"{class_name} | Step {frame_idx + 1}/{n_frames} | N%={noise_pct:.1f}"
 
         def _get_traj_idx(traj_sel, intermediates):
             """Resolve selected trajectory index, default to last."""
@@ -1208,11 +1208,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             cid = info.get("class_id")
             cname = info.get("class_name", "")
             n_steps = len(steps)
-            for i, (img, sigma) in enumerate(steps):
+            for i, (img, noise_pct) in enumerate(steps):
                 if cid is not None:
-                    step_caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                    step_caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | N%={noise_pct:.1f}"
                 else:
-                    step_caption = f"{cname} | Step {i+1}/{n_steps} | σ={sigma:.1f}"
+                    step_caption = f"{cname} | Step {i+1}/{n_steps} | N%={noise_pct:.1f}"
                 step_gallery.append((img, step_caption))
 
             if cid is not None:
