@@ -37,6 +37,7 @@ pip install diffviews[all]
 ### Using with a model adapter
 
 ```python
+import torch
 from adapt_diff import get_adapter
 from diffviews.core.extractor import ActivationExtractor
 from diffviews.core.generator import generate_with_mask_multistep
@@ -45,10 +46,15 @@ from diffviews.core.generator import generate_with_mask_multistep
 AdapterClass = get_adapter('dmd2-imagenet-64')
 adapter = AdapterClass.from_checkpoint('path/to/model.pkl', device='cuda')
 
+# Get defaults from adapter config
+config = adapter.get_default_config()
+# config contains: noise_max (100), noise_min (0-5), default_steps, etc.
+
 # Extract activations
 extractor = ActivationExtractor(adapter, layers=['encoder_bottleneck', 'midblock'])
 with extractor:
-    images, labels = adapter.forward(noise, sigma, class_labels)
+    timestep = adapter.noise_level_to_native(torch.tensor(80.0))  # 80% noise
+    images, labels = adapter.forward(noise, timestep, class_labels)
     activations = extractor.get_activations()
 
 # Generate with masked activations
@@ -61,6 +67,8 @@ images, labels = generate_with_mask_multistep(
     adapter, masker,
     class_label=207,  # golden retriever
     num_steps=4,
+    noise_level_max=100.0,  # start from pure noise (0-100 scale)
+    noise_level_min=0.0,    # denoise to clean
     guidance_scale=1.5
 )
 ```

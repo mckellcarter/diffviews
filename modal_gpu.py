@@ -122,8 +122,8 @@ class GPUWorker:
         class_label: Optional[int] = None,
         n_steps: int = 10,
         m_steps: int = 8,
-        s_max: float = 80.0,
-        s_min: float = 0.002,
+        noise_max: float = 100.0,
+        noise_min: float = 0.0,
         guidance: float = 1.0,
         noise_mode: str = "stochastic",
         extract_layers: Optional[List[str]] = None,
@@ -137,6 +137,8 @@ class GPUWorker:
             mask_dict: {layer_name: [[values]]} — numpy arrays as nested lists
             class_label: Class for generation (class-conditioned models)
             caption: Text caption for T2I models (encoded by adapter on GPU)
+            noise_max: Max noise level (0-100 scale)
+            noise_min: Min noise level (0-100 scale)
             ... generation params ...
 
         Returns:
@@ -171,8 +173,8 @@ class GPUWorker:
                 caption=caption,
                 num_steps=n_steps,
                 mask_steps=m_steps,
-                sigma_max=s_max,
-                sigma_min=s_min,
+                noise_level_max=noise_max,
+                noise_level_min=noise_min,
                 guidance_scale=guidance,
                 noise_mode=noise_mode.replace(" noise", ""),
                 num_samples=1,

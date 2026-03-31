@@ -163,8 +163,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     gr.Markdown("### Generation")
                     # Parameters and buttons first (use model defaults)
                     default_steps = default_model_data.default_steps if default_model_data else 5
-                    default_sigma_max = default_model_data.sigma_max if default_model_data else 80.0
-                    default_sigma_min = default_model_data.sigma_min if default_model_data else 0.5
+                    default_noise_max = default_model_data.noise_max if default_model_data else 100.0
+                    default_noise_min = default_model_data.noise_min if default_model_data else 0.0
                     default_guidance = default_model_data.default_guidance if default_model_data else 1.0
                     with gr.Row(elem_id="gen-params-row"):
                         num_steps_slider = gr.Number(
@@ -179,13 +179,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             value=default_guidance, label="CFG",
                             elem_id="guidance", min_width=50
                         )
-                        sigma_max_input = gr.Number(
-                            value=default_sigma_max, label="σ max",
-                            elem_id="sigma-max", min_width=50
+                        noise_max_input = gr.Number(
+                            value=default_noise_max, label="% max",
+                            elem_id="noise-max", min_width=50
                         )
-                        sigma_min_input = gr.Number(
-                            value=default_sigma_min, label="σ min",
-                            elem_id="sigma-min", min_width=50
+                        noise_min_input = gr.Number(
+                            value=default_noise_min, label="% min",
+                            elem_id="noise-min", min_width=50
                         )
                     noise_mode_dropdown = gr.Dropdown(
                         choices=["stochastic noise", "fixed noise", "zero noise"],
@@ -586,8 +586,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 gr.update(choices=visualizer.get_layer_choices(new_model_name), value=visualizer.get_default_layer_label(new_model_name)),  # layer_dropdown
                 "2D",                              # view_mode_radio (reset to 2D)
                 gr.update(value=model_data.default_guidance),  # guidance_slider
-                gr.update(value=model_data.sigma_max),         # sigma_max_input
-                gr.update(value=model_data.sigma_min),         # sigma_min_input
+                gr.update(value=model_data.noise_max),         # noise_max_input
+                gr.update(value=model_data.noise_min),         # noise_min_input
             )
 
         # Wire up events
@@ -686,8 +686,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     layer_dropdown,
                     view_mode_radio,
                     guidance_slider,
-                    sigma_max_input,
-                    sigma_min_input,
+                    noise_max_input,
+                    noise_min_input,
                 ],
             )
 
@@ -1067,7 +1067,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             inputs=[
                 selected_idx, manual_neighbors, knn_neighbors,
                 num_steps_slider, mask_steps_slider, guidance_slider,
-                sigma_max_input, sigma_min_input, noise_mode_dropdown,
+                noise_max_input, noise_min_input, noise_mode_dropdown,
                 highlighted_class, trajectory_coords, current_model,
                 intermediate_images, generation_infos
             ],
@@ -1248,8 +1248,8 @@ def main():
     parser.add_argument("--num-steps", type=int, default=5, help="Number of denoising steps")
     parser.add_argument("--mask-steps", type=int, default=1, help="Steps to apply mask")
     parser.add_argument("--guidance-scale", type=float, default=1.0, help="CFG scale")
-    parser.add_argument("--sigma-max", type=float, default=80.0, help="Maximum sigma")
-    parser.add_argument("--sigma-min", type=float, default=0.5, help="Minimum sigma")
+    parser.add_argument("--noise-max", type=float, default=100.0, help="Max noise level (0-100)")
+    parser.add_argument("--noise-min", type=float, default=0.0, help="Min noise level (0-100)")
     parser.add_argument("--max-classes", "-c", type=int, default=None, help="Max classes to load")
     parser.add_argument("--model", "-m", type=str, default=None, help="Initial model to load")
     args = parser.parse_args()
@@ -1261,8 +1261,8 @@ def main():
         num_steps=args.num_steps,
         mask_steps=args.mask_steps,
         guidance_scale=args.guidance_scale,
-        sigma_max=args.sigma_max,
-        sigma_min=args.sigma_min,
+        noise_max=args.noise_max,
+        noise_min=args.noise_min,
         max_classes=args.max_classes,
         initial_model=args.model,
     )
