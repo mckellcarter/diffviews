@@ -299,7 +299,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 info += ")"
             return images, info
 
-        def on_hover_data(hover_json, intermediates, model_name):
+        def on_hover_data(hover_json, intermediates, model_name, gen_infos):
             """Handle plot hover via JS bridge - update preview panel.
 
             Handles two types:
@@ -326,6 +326,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     step_idx = int(step_idx)
                     traj_idx = int(traj_idx)
 
+                # Get timestep label from gen_infos if available
+                ts_label = "σ"
+                if gen_infos and traj_idx < len(gen_infos):
+                    ts_label = gen_infos[traj_idx].get("timestep_label", "σ")
+
                 if intermediates is not None and traj_idx < len(intermediates):
                     step_idx = int(step_idx)
                     traj_len = len(intermediates[traj_idx])
@@ -335,12 +340,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     if 0 <= step_idx-1 < traj_len:
                         img, stored_sigma = intermediates[traj_idx][step_idx-1]
                         details = f"**Trajectory {traj_idx + 1}, Step {step_idx}**\n\n"
-                        details += f"N% = {stored_sigma:.1f}\n\n"
+                        details += f"{ts_label} = {stored_sigma:.1f}\n\n"
                         details += f"Coords: ({hover_data.get('x', 0):.2f}, {hover_data.get('y', 0):.2f})"
                         return img, details
 
                 # No intermediates stored
-                details = f"**Trajectory step {step_idx}**\n\nN% = {sigma}"
+                details = f"**Trajectory step {step_idx}**\n\n{ts_label} = {sigma}"
                 return gr.update(), details
 
             # Sample hover - show dataset image
@@ -368,7 +373,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                details += f"N% = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                ts_label = model_data.timestep_label
+                details += f"{ts_label} = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -416,7 +422,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    details += f"N% = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    ts_label = model_data.timestep_label
+                    details += f"{ts_label} = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -598,7 +605,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         # Gradio 6: use .change() instead of .input()
         hover_data_box.change(
             on_hover_data,
-            inputs=[hover_data_box, intermediate_images, current_model],
+            inputs=[hover_data_box, intermediate_images, current_model, generation_infos],
             outputs=[preview_image, preview_details],
         )
 
@@ -1018,6 +1025,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "caption": caption,
                 "n_steps": n_steps,
                 "final_image": gen_img,
+                "timestep_label": model_data.timestep_label,
             }
             gen_infos_state = list(gen_infos_state)
             gen_infos_state.append(gen_info)
@@ -1037,7 +1045,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 else:
                     composite_img = img_np
 
-                step_caption = f"{display_label} | Step {i+1}/{n_steps} | N%={sigma:.1f}"
+                step_caption = f"{display_label} | Step {i+1}/{n_steps} | {model_data.timestep_label}={sigma:.1f}"
                 step_gallery.append((composite_img, step_caption))
                 intermediates_state[-1].append((composite_img, sigma))
 
@@ -1103,17 +1111,18 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
         )
 
         # --- Frame navigation for intermediate images ---
-        def format_frame_info(gen_info, frame_idx, n_frames, noise_pct):
-            """Format frame info string with class/caption, step, noise % (compact)."""
+        def format_frame_info(gen_info, frame_idx, n_frames, timestep_val):
+            """Format frame info string with class/caption, step, timestep (compact)."""
+            ts_label = gen_info.get("timestep_label", "σ") if gen_info else "σ"
             if not gen_info:
-                return f"Step {frame_idx + 1}/{n_frames} | N%={noise_pct:.1f}"
+                return f"Step {frame_idx + 1}/{n_frames} | {ts_label}={timestep_val:.1f}"
 
             class_id = gen_info.get("class_id")
             class_name = gen_info.get("class_name", "")
 
             if class_id is not None:
-                return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | N%={noise_pct:.1f}"
-            return f"{class_name} | Step {frame_idx + 1}/{n_frames} | N%={noise_pct:.1f}"
+                return f"{class_id}: {class_name} | Step {frame_idx + 1}/{n_frames} | {ts_label}={timestep_val:.1f}"
+            return f"{class_name} | Step {frame_idx + 1}/{n_frames} | {ts_label}={timestep_val:.1f}"
 
         def _get_traj_idx(traj_sel, intermediates):
             """Resolve selected trajectory index, default to last."""
@@ -1207,12 +1216,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             step_gallery = []
             cid = info.get("class_id")
             cname = info.get("class_name", "")
+            ts_label = info.get("timestep_label", "σ")
             n_steps = len(steps)
-            for i, (img, noise_pct) in enumerate(steps):
+            for i, (img, ts_val) in enumerate(steps):
                 if cid is not None:
-                    step_caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | N%={noise_pct:.1f}"
+                    step_caption = f"{cid}: {cname} | Step {i+1}/{n_steps} | {ts_label}={ts_val:.1f}"
                 else:
-                    step_caption = f"{cname} | Step {i+1}/{n_steps} | N%={noise_pct:.1f}"
+                    step_caption = f"{cname} | Step {i+1}/{n_steps} | {ts_label}={ts_val:.1f}"
                 step_gallery.append((img, step_caption))
 
             if cid is not None:
