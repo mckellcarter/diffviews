@@ -1361,6 +1361,7 @@ class GradioVisualizer:
         """
         model_data = self.get_model(model_name)
         df = model_data.df
+        ts_label = model_data.timestep_label
         manual_neighbors = manual_neighbors or []
         knn_neighbors = knn_neighbors or []
 
@@ -1399,8 +1400,8 @@ class GradioVisualizer:
                 mode="markers",
                 marker=dict(size=4, color=colors, opacity=opacity),
                 customdata=slice_indices,
-                hovertemplate=f"σ={sigma:.2f}<br>%{{customdata}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
-                name=f"σ={sigma:.2f}",
+                hovertemplate=f"{ts_label}={sigma:.2f}<br>%{{customdata}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
+                name=f"{ts_label}={sigma:.2f}",
                 showlegend=True,
             ))
 
@@ -1476,7 +1477,7 @@ class GradioVisualizer:
                     color=list(range(len(traj))),
                     colorscale=[[0, "#90EE90"], [1, "#228B22"]],
                 ),
-                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>σ=%{{text:.2f}}<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>{ts_label}=%{{text:.2f}}<extra></extra>",
                 text=traj_sigma,
                 customdata=list(range(1, len(traj) + 1)),
                 name=f"trajectory_{traj_idx}",
@@ -1490,7 +1491,7 @@ class GradioVisualizer:
                 z=[traj_z[0]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=10, color="lime"),
-                hovertemplate=f"Traj {traj_idx + 1} Start (σ={traj_sigma[0]:.2f})<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} Start ({ts_label}={traj_sigma[0]:.2f})<extra></extra>",
                 name=f"traj_start_{traj_idx}",
                 showlegend=False,
             ))
@@ -1502,17 +1503,17 @@ class GradioVisualizer:
                 z=[traj_z[-1]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=12, color="#228B22"),
-                hovertemplate=f"Traj {traj_idx + 1} End (σ={traj_sigma[-1]:.2f})<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} End ({ts_label}={traj_sigma[-1]:.2f})<extra></extra>",
                 name=f"traj_end_{traj_idx}",
                 showlegend=False,
             ))
 
         fig.update_layout(
-            title="AlignedUMAP 3D (σ as Z-axis)",
+            title=f"AlignedUMAP 3D ({ts_label} as Z-axis)",
             scene=dict(
                 xaxis_title="UMAP 1",
                 yaxis_title="UMAP 2",
-                zaxis_title="log(σ)",
+                zaxis_title=f"log({ts_label})",
                 camera=dict(eye=dict(x=1.5, y=1.5, z=1.0)),
             ),
             hovermode="closest",

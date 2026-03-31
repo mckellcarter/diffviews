@@ -183,9 +183,8 @@ def generate_with_mask_multistep(
         return_noised_inputs: Return noised input x_t at each step
 
     Returns:
-        (images, labels) or (images, labels, trajectory) or
-        (images, labels, trajectory, intermediates) or
-        (images, labels, trajectory, intermediates, noised_inputs)
+        Tuple with: images, labels, [trajectory], [intermediates], [noised_inputs], timesteps
+        timesteps is always included as the last element (native format from adapter)
     """
     if mask_steps is None:
         mask_steps = num_steps
@@ -280,6 +279,8 @@ def generate_with_mask_multistep(
         result.append(intermediate_images)
     if return_noised_inputs:
         result.append(noised_input_images)
+    # Always append timesteps (native format from adapter)
+    result.append(timesteps.cpu().tolist())
 
     return tuple(result) if len(result) > 2 else (result[0], result[1])
 
