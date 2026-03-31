@@ -33,6 +33,23 @@ from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
 
 
+def _sigma_to_ddpm_timestep(sigma: float, sigma_max: float = 80.0, rho: float = 7.0) -> int:
+    """Convert Karras sigma to DDPM timestep (temporary fix for MSCOCO data).
+
+    TODO: Regenerate MSCOCO data with native DDPM timesteps.
+    """
+    # Inverse Karras: sigma -> step_fraction -> noise_level -> timestep
+    sigma_min = 0.002
+    inv_rho = 1.0 / rho
+    # step_fraction = (sigma^(1/rho) - sigma_max^(1/rho)) / (sigma_min^(1/rho) - sigma_max^(1/rho))
+    num = sigma ** inv_rho - sigma_max ** inv_rho
+    denom = sigma_min ** inv_rho - sigma_max ** inv_rho
+    step_fraction = max(0.0, min(1.0, num / denom))
+    noise_level = (1 - step_fraction) * 100  # 100% at start, 0% at end
+    # DDPM: timestep = noise_level% * 999
+    return int(round(noise_level / 100 * 999))
+
+
 class GradioVisualizer:
     """Gradio-based visualizer with multi-user support.
 
@@ -1620,9 +1637,33 @@ class GradioVisualizer:
         saved_activations = model_data.activations
         model_data.df = df
         model_data.is_3d_mode = True
-        model_data.sigma_levels = pkl_data["sigma_levels"]
-        model_data.embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
-        model_data.nn_models_per_sigma = pkl_data["nn_models"]
+        sigma_levels = pkl_data["sigma_levels"]
+        embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
+
+        # TEMP FIX: Convert sigma to DDPM timesteps for DDPM-based models
+        # TODO: Regenerate MSCOCO data with native timesteps
+        nn_models = pkl_data["nn_models"]
+        if model_data.timestep_label == "t":
+            print(f"[3D] Converting sigma to DDPM timesteps (temp fix)")
+            # Convert sigma_levels
+            converted_levels = [float(_sigma_to_ddpm_timestep(s)) for s in sigma_levels]
+            # Rebuild embeddings dict with new keys
+            new_embeddings = {}
+            new_nn_models = {}
+            for old_sigma, new_t in zip(sigma_levels, converted_levels):
+                new_embeddings[new_t] = embeddings_per_sigma[old_sigma]
+                if old_sigma in nn_models:
+                    new_nn_models[new_t] = nn_models[old_sigma]
+            embeddings_per_sigma = new_embeddings
+            nn_models = new_nn_models
+            # Convert sigma column in df
+            df["sigma"] = df["sigma"].apply(_sigma_to_ddpm_timestep)
+            sigma_levels = converted_levels
+            print(f"[3D] Converted levels: {sigma_levels}")
+
+        model_data.sigma_levels = sigma_levels
+        model_data.embeddings_per_sigma = embeddings_per_sigma
+        model_data.nn_models_per_sigma = nn_models
         model_data.umap_scaler = pkl_data["scaler"]
         model_data.umap_pca = pkl_data["pca_reducer"]
         model_data.umap_params = params
