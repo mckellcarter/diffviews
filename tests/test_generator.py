@@ -109,6 +109,10 @@ class MockAdapter(GeneratorAdapter):
             'midblock': (512, 4, 4),
         }
 
+    def convert_latent_sample(self, x_t, t, model_output):
+        """Mock predicts x0 directly."""
+        return model_output
+
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cuda', **kwargs):
         return cls()
@@ -634,6 +638,10 @@ class HookableMockAdapter(GeneratorAdapter):
             'encoder_bottleneck': (256, 8, 8),
             'midblock': (512, 4, 4),
         }
+
+    def convert_latent_sample(self, x_t, t, model_output):
+        """Mock predicts x0 directly."""
+        return model_output
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cpu', **kwargs):
