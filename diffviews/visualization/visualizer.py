@@ -1303,7 +1303,7 @@ class GradioVisualizer:
                     colorscale=[[0, "#90EE90"], [1, "#228B22"]],  # lightgreen -> forestgreen
                     line=dict(width=1, color="white"),
                 ),
-                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>σ=%{{text:.1f}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>{model_data.timestep_label}=%{{text:.1f}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
                 text=traj_sigma,
                 customdata=list(range(1,len(traj)+1)),
                 name=f"trajectory_{traj_idx}",
@@ -1311,12 +1311,13 @@ class GradioVisualizer:
             ))
 
             # Start marker (diamond)
+            ts_label = model_data.timestep_label
             fig.add_trace(go.Scatter(
                 x=[traj_x[0]],
                 y=[traj_y[0]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=14, color="lime", line=dict(width=1, color="white")),
-                hovertemplate=f"Traj {traj_idx + 1} Start (σ=%.1f)<extra></extra>" % traj_sigma[0],
+                hovertemplate=f"Traj {traj_idx + 1} Start ({ts_label}=%.1f)<extra></extra>" % traj_sigma[0],
                 name=f"traj_start_{traj_idx}",
                 showlegend=False,
             ))
@@ -1327,7 +1328,7 @@ class GradioVisualizer:
                 y=[traj_y[-1]],
                 mode="markers",
                 marker=dict(symbol="star", size=18, color="#228B22", line=dict(width=1, color="white")),
-                hovertemplate=f"Traj {traj_idx + 1} End (σ=%.1f)<extra></extra>" % traj_sigma[-1],
+                hovertemplate=f"Traj {traj_idx + 1} End ({ts_label}=%.1f)<extra></extra>" % traj_sigma[-1],
                 name=f"traj_end_{traj_idx}",
                 showlegend=False,
             ))
