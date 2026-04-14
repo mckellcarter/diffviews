@@ -38,8 +38,7 @@ pip install diffviews[all]
 
 ```python
 import torch
-from adapt_diff import get_adapter
-from diffviews.core.extractor import ActivationExtractor
+from adapt_diff import get_adapter, ActivationExtractor, ActivationMasker
 from diffviews.core.generator import generate_with_mask_multistep
 
 # Load adapter
@@ -58,7 +57,6 @@ with extractor:
     activations = extractor.get_activations()
 
 # Generate with masked activations
-from diffviews.core.masking import ActivationMasker
 masker = ActivationMasker(adapter)
 masker.set_mask('encoder_bottleneck', target_activation)
 masker.register_hooks()
@@ -231,9 +229,8 @@ diffviews --help
 
 ```
 diffviews/
-├── core/               # Core functionality
-│   ├── extractor.py    # Activation extraction + fast format conversion
-│   ├── masking.py      # Activation masking
+├── core/               # Core functionality (re-exports from adapt_diff)
+│   ├── masking.py      # UMAP-specific mask computation (compute_mask_dict)
 │   └── generator.py    # Generation utilities
 ├── processing/         # UMAP computation
 │   └── umap.py
@@ -245,7 +242,7 @@ diffviews/
     └── device.py
 ```
 
-Adapters are provided by the external [`adapt_diff`](https://github.com/mckellcarter/adapt_diff) package.
+Extraction and masking functionality (`ActivationExtractor`, `ActivationMasker`, etc.) is provided by the external [`adapt_diff`](https://github.com/mckellcarter/adapt_diff) package and re-exported via `diffviews.core`.
 
 ## Adapter Registration
 

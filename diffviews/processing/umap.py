@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from .umap_backend import get_umap_class, get_backend_name, to_numpy
-from ..core.extractor import flatten_activations, load_activations, load_fast_activations
+from adapt_diff import flatten_activations, load_activations, load_fast_activations
 
 
 def load_dataset_activations(

@@ -26,8 +26,7 @@ from diffviews.processing.aligned_umap import (
     save_aligned_embeddings,
     load_aligned_embeddings,
 )
-from adapt_diff import get_adapter
-from diffviews.core.masking import unflatten_activation
+from adapt_diff import get_adapter, unflatten_activation
 from diffviews.data.cloud_adapter import get_cloud_adapter, cloud_enabled
 from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
@@ -839,7 +838,7 @@ class GradioVisualizer:
         Returns (N, D) flattened activation matrix, or None on error.
         """
         import torch
-        from diffviews.core.extractor import ActivationExtractor
+        from adapt_diff import ActivationExtractor
 
         model_data = self.get_model(model_name)
         if model_data is None or model_data.metadata_df is None:

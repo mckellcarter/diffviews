@@ -105,7 +105,7 @@ def download_command(args):
 
 def convert_command(args):
     """Convert .npz activations to fast .npy format."""
-    from ..core.extractor import convert_to_fast_format
+    from adapt_diff import convert_to_fast_format
 
     data_dir = Path(args.data_dir)
     activation_dir = data_dir / "activations" / args.model_type
