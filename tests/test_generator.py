@@ -16,8 +16,7 @@ from diffviews.core.generator import (
     save_generated_sample,
     tensor_to_uint8_image
 )
-from diffviews.core.masking import ActivationMasker
-from adapt_diff import GeneratorAdapter
+from adapt_diff import ActivationMasker, GeneratorAdapter
 
 
 class MockAdapter(GeneratorAdapter):
@@ -108,6 +107,12 @@ class MockAdapter(GeneratorAdapter):
             'encoder_bottleneck': (256, 8, 8),
             'midblock': (512, 4, 4),
         }
+
+    def noise_level_to_native(self, noise_level):
+        return noise_level * 0.8
+
+    def native_to_noise_level(self, native):
+        return native / 0.8
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cuda', **kwargs):
@@ -634,6 +639,12 @@ class HookableMockAdapter(GeneratorAdapter):
             'encoder_bottleneck': (256, 8, 8),
             'midblock': (512, 4, 4),
         }
+
+    def noise_level_to_native(self, noise_level):
+        return noise_level * 0.8
+
+    def native_to_noise_level(self, native):
+        return native / 0.8
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cpu', **kwargs):

@@ -11,7 +11,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from diffviews.processing.umap import compute_umap, save_embeddings
-from diffviews.core.extractor import load_activations, flatten_activations
+from adapt_diff import load_activations, flatten_activations
 
 
 # Diverse classes for demo

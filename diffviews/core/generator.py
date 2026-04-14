@@ -10,9 +10,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from ..adapters.base import GeneratorAdapter
-from .extractor import ActivationExtractor
-from .masking import ActivationMasker
+from adapt_diff import ActivationExtractor, ActivationMasker, GeneratorAdapter
 
 
 def tensor_to_uint8_image(tensor: torch.Tensor) -> torch.Tensor:

@@ -24,8 +24,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from adapt_diff import get_adapter
-from diffviews.core.extractor import ActivationExtractor
+from adapt_diff import get_adapter, ActivationExtractor
 
 
 # Timesteps matching DMD2 sigma schedule (80, 14, 1.9, 0.62)

@@ -7,7 +7,8 @@ that can be overridden by HF Spaces @spaces.GPU decorator or Modal.
 Supports hybrid CPU/GPU mode via remote GPU worker.
 """
 
-from diffviews.core.masking import ActivationMasker, compute_mask_dict
+from adapt_diff import ActivationMasker
+from diffviews.core.masking import compute_mask_dict
 from diffviews.core.generator import generate_with_mask_multistep
 
 

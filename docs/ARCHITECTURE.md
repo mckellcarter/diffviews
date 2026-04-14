@@ -80,82 +80,28 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 
 ### Core Module
 
----
+The core module re-exports extraction and masking functionality from `adapt_diff`, plus provides UMAP-specific utilities.
 
-#### `diffviews/core/extractor.py`
+**Re-exports from `adapt_diff`:**
+- `ActivationExtractor` - Hook-based activation capture during forward pass
+- `ActivationMasker` - Hook-based activation replacement during forward pass
+- `flatten_activations`, `load_activations`, `convert_to_fast_format`, `load_fast_activations`
+- `unflatten_activation`, `load_activation_from_npz`
 
-**Purpose:** Activation extraction using PyTorch forward hooks. Captures layer outputs during forward pass.
-
-**Lines:** 197
-
-**Imports from local files:**
-- `adapt_diff` → `GeneratorAdapter`
-
-**Called by:**
-- `diffviews/core/generator.py`
-- `diffviews/visualization/visualizer.py`
-
----
-
-##### Classes
-
-###### `ActivationExtractor`
-
-**Summary:** Extract activations from a model during forward pass using the adapter hook interface.
-
-| Method | Signature | Summary | Calls | Called By |
-|--------|-----------|---------|-------|-----------|
-| `__init__` | `(adapter: GeneratorAdapter, layers: List[str] = None)` | Initialize with adapter and target layers | — | `generate_with_mask_multistep`, `GradioVisualizer.extract_layer_activations`, `infer_layer_shape` |
-| `_make_hook` | `(name: str) -> Callable` | Create forward hook that stores activations | — | `register_hooks` |
-| `register_hooks` | `() -> None` | Register extraction hooks on specified layers | `adapter.register_activation_hooks` | Context manager `__enter__`, explicit calls |
-| `remove_hooks` | `() -> None` | Remove all registered hooks | `handle.remove` | Context manager `__exit__`, explicit calls |
-| `clear` | `() -> None` | Clear stored activations | — | `generate_with_mask_multistep` |
-| `get_activations` | `() -> Dict[str, torch.Tensor]` | Get extracted activations | — | `generate_with_mask_multistep`, `infer_layer_shape` |
-| `save` | `(output_path: Path, metadata: Dict = None) -> None` | Save activations to disk as .npz | `np.savez_compressed` | External scripts |
-
----
-
-##### Functions
-
-| Function | Signature | Summary | Calls | Called By |
-|----------|-----------|---------|-------|-----------|
-| `flatten_activations` | `(activations: Dict[str, np.ndarray]) -> np.ndarray` | Flatten all layer activations to single vector per sample | `np.concatenate` | `_load_npz_format` in umap.py |
-| `load_activations` | `(activation_path: Path) -> Tuple[dict, dict]` | Load activations and metadata from disk | `np.load`, `json.load` | `_load_npz_format` in umap.py |
-| `convert_to_fast_format` | `(npz_path: Path, output_path: Path = None, layers: List[str] = None) -> Path` | Convert .npz to fast-loading .npy format | `np.load`, `np.save` | CLI tools |
-| `load_fast_activations` | `(npy_path: Path, mmap_mode: str = 'r') -> np.ndarray` | Load pre-concatenated activations with memory mapping | `np.load` | `_load_fast_format` in umap.py |
+See [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) for these components.
 
 ---
 
 #### `diffviews/core/masking.py`
 
-**Purpose:** Activation masking (replacement) during forward pass. Replaces layer outputs with fixed values.
+**Purpose:** UMAP-specific mask computation for visualization. Averages neighbor activations.
 
-**Lines:** 183
+**Lines:** ~50
 
-**Imports from local files:**
-- `adapt_diff` → `GeneratorAdapter`
+**Imports from local files:** None (pure numpy)
 
 **Called by:**
-- `app.py` → `generate_on_gpu`
 - `diffviews/visualization/gpu_ops.py`
-
----
-
-##### Classes
-
-###### `ActivationMasker`
-
-**Summary:** Mask (replace) layer activations with fixed values during forward pass.
-
-| Method | Signature | Summary | Calls | Called By |
-|--------|-----------|---------|-------|-----------|
-| `__init__` | `(adapter: GeneratorAdapter)` | Initialize with adapter | — | `generate_on_gpu`, `_generate_on_gpu` |
-| `set_mask` | `(layer_name: str, activation: torch.Tensor) -> None` | Set fixed activation for a layer | — | `generate_on_gpu`, `_generate_on_gpu` |
-| `clear_mask` | `(layer_name: str) -> None` | Remove mask for a layer | — | — |
-| `clear_masks` | `() -> None` | Remove all masks | — | — |
-| `_make_hook` | `(name: str) -> Callable` | Create forward hook that replaces output | — | `register_hooks` |
-| `register_hooks` | `(layers: List[str] = None) -> None` | Register masking hooks | `adapter.register_activation_hooks` | `generate_on_gpu`, `_generate_on_gpu` |
-| `remove_hooks` | `() -> None` | Remove all registered hooks | `handle.remove` | `generate_on_gpu`, `_generate_on_gpu` |
 
 ---
 
@@ -163,9 +109,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 
 | Function | Signature | Summary | Calls | Called By |
 |----------|-----------|---------|-------|-----------|
-| `load_activation_from_npz` | `(npz_path, layer_name: str) -> torch.Tensor` | Load activation from saved NPZ file | `np.load`, `torch.from_numpy` | External usage |
-| `compute_mask_dict` | `(activations: np.ndarray, neighbor_indices: List[int], layer_shapes: Dict[str, tuple], layers: List[str] = None) -> Dict[str, np.ndarray]` | Compute mask dict from cached activations (CPU, pure numpy) | `np.mean`, `np.prod` | `_generate_on_gpu` (hybrid mode) |
-| `unflatten_activation` | `(flat_activation: torch.Tensor, target_shape: tuple) -> torch.Tensor` | Reshape flattened activation to spatial (1, C, H, W) | `torch.reshape` | `GradioVisualizer.prepare_activation_dict` |
+| `compute_mask_dict` | `(activations: np.ndarray, neighbor_indices: List[int], layer_shapes: Dict[str, tuple], layers: List[str] = None) -> Dict[str, np.ndarray]` | Compute mask dict from cached activations by averaging neighbors (CPU, pure numpy) | `np.mean`, `np.prod` | `_generate_on_gpu` (hybrid mode) |
 
 ---
 
@@ -176,9 +120,7 @@ DiffViews is an interactive visualization toolkit for exploring diffusion model 
 **Lines:** 373
 
 **Imports from local files:**
-- `adapt_diff` → `GeneratorAdapter`
-- `diffviews.core.extractor` → `ActivationExtractor`
-- `diffviews.core.masking` → `ActivationMasker`
+- `adapt_diff` → `GeneratorAdapter`, `ActivationExtractor`, `ActivationMasker`
 
 **Called by:**
 - `app.py` → `generate_on_gpu`
@@ -290,8 +232,7 @@ images = adapter.decode(x)
 - `diffviews.processing.umap` → `load_dataset_activations`
 - `diffviews.processing.umap_backend` → `get_knn_class`, `to_numpy`
 - `diffviews.processing.aligned_umap` → `compute_aligned_umap`, `load_aligned_embeddings`, `save_aligned_embeddings`, `project_aligned_trajectory_point`
-- `adapt_diff` → `get_adapter`
-- `diffviews.core.masking` → `unflatten_activation`
+- `adapt_diff` → `get_adapter`, `unflatten_activation`
 - `diffviews.visualization.models` → `ModelData`
 - `diffviews.visualization.gpu_ops` → `_extract_layer_on_gpu`
 
@@ -437,7 +378,8 @@ images = adapter.decode(x)
 **Lines:** 213
 
 **Imports from local files:**
-- `diffviews.core.masking` → `ActivationMasker`, `compute_mask_dict`
+- `adapt_diff` → `ActivationMasker`
+- `diffviews.core.masking` → `compute_mask_dict`
 - `diffviews.core.generator` → `generate_with_mask_multistep`
 
 **Called by:**
@@ -496,7 +438,7 @@ images = adapter.decode(x)
 
 **Imports from local files:**
 - `diffviews.processing.umap_backend` → `get_umap_class`, `get_backend_name`, `to_numpy`
-- `diffviews.core.extractor` → `flatten_activations`, `load_activations`, `load_fast_activations`
+- `adapt_diff` → `flatten_activations`, `load_activations`, `load_fast_activations`
 
 **Called by:**
 - `app.py`
@@ -709,7 +651,7 @@ app.py (entry point)
 │   ├── compute_umap
 │   └── save_embeddings
 │       └── diffviews.processing.umap_backend
-│       └── diffviews.core.extractor
+│       └── adapt_diff (flatten_activations, load_activations, load_fast_activations)
 ├── diffviews.processing.aligned_umap
 │   ├── compute_aligned_umap
 │   ├── project_aligned_trajectory_point
@@ -722,30 +664,30 @@ app.py (entry point)
 │   │   ├── diffviews.processing.umap
 │   │   ├── diffviews.processing.umap_backend
 │   │   ├── diffviews.processing.aligned_umap
-│   │   ├── adapt_diff (get_adapter)
-│   │   ├── diffviews.core.masking
+│   │   ├── adapt_diff (get_adapter, unflatten_activation)
+│   │   ├── diffviews.core.masking (compute_mask_dict only)
 │   │   └── diffviews.visualization.models
 │   │       └── ModelData (includes 3D mode fields)
 │   ├── diffviews.visualization.gpu_ops
-│   │   ├── diffviews.core.masking
+│   │   ├── adapt_diff (ActivationMasker)
+│   │   ├── diffviews.core.masking (compute_mask_dict)
 │   │   └── diffviews.core.generator
 │   └── diffviews.visualization.layout
 │       └── CUSTOM_CSS, PLOTLY_HANDLER_JS (3D support)
-├── diffviews.core.masking
-│   ├── ActivationMasker
-│   └── adapt_diff (GeneratorAdapter)
+├── adapt_diff (ActivationMasker)
 └── diffviews.core.generator
     ├── generate_with_mask_multistep
-    ├── adapt_diff (GeneratorAdapter)
-    ├── diffviews.core.extractor
-    └── diffviews.core.masking
+    └── adapt_diff (GeneratorAdapter, ActivationExtractor, ActivationMasker)
 
 adapt_diff (external package)
 ├── GeneratorAdapter (ABC)
 ├── HookMixin
-├── get_adapter()
-├── list_adapters()
-├── register_adapter()
+├── ActivationExtractor      # Hook-based activation capture
+├── ActivationMasker         # Hook-based activation replacement
+├── flatten_activations, load_activations, save_activations
+├── convert_to_fast_format, load_fast_activations
+├── unflatten_activation, load_activation_from_npz
+├── get_adapter(), list_adapters(), register_adapter()
 └── Adapters: dmd2-imagenet-64, edm-imagenet-64, mscoco-t2i-128, abu-custom-sd14
 ```
 
@@ -781,7 +723,7 @@ output = adapter.forward(x, t, class_labels)
 ### Core Generation Pipeline
 
 ```python
-from diffviews.core.masking import ActivationMasker
+from adapt_diff import ActivationMasker
 from diffviews.core.generator import generate_with_mask_multistep
 
 # Setup masker

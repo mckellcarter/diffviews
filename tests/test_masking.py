@@ -9,12 +9,12 @@ import numpy as np
 from pathlib import Path
 import tempfile
 
-from diffviews.core.masking import (
+from adapt_diff import (
     ActivationMasker,
     load_activation_from_npz,
-    unflatten_activation
+    unflatten_activation,
+    GeneratorAdapter,
 )
-from adapt_diff import GeneratorAdapter
 
 
 class MockAdapter(GeneratorAdapter):
@@ -44,6 +44,22 @@ class MockAdapter(GeneratorAdapter):
     def hookable_layers(self):
         return list(self._modules.keys())
 
+    @property
+    def prediction_type(self) -> str:
+        return 'epsilon'
+
+    @property
+    def uses_latent(self) -> bool:
+        return False
+
+    @property
+    def conditioning_type(self) -> str:
+        return 'class'
+
+    @property
+    def in_channels(self) -> int:
+        return 3
+
     def forward(self, x, sigma, class_labels=None, **kwargs):
         return torch.randn_like(x)
 
@@ -61,6 +77,24 @@ class MockAdapter(GeneratorAdapter):
             'midblock': (512, 4, 4),
             'decoder_block_0': (256, 8, 8),
         }
+
+    def get_timesteps(self, num_steps, sigma_max=80.0, sigma_min=0.002, rho=7.0):
+        return torch.linspace(sigma_max, sigma_min, num_steps)
+
+    def get_initial_noise(self, batch_size, device='cuda', seed=None):
+        return torch.randn(batch_size, 3, 64, 64, device=device)
+
+    def step(self, x, pred, sigma, sigma_next, **kwargs):
+        return x - pred * (sigma - sigma_next)
+
+    def prepare_conditioning(self, class_labels=None, text=None, **kwargs):
+        return {'class_labels': class_labels}
+
+    def noise_level_to_native(self, noise_level):
+        return noise_level * 0.8
+
+    def native_to_noise_level(self, native):
+        return native / 0.8
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cuda', **kwargs):
