@@ -1,5 +1,10 @@
 # Migration Plan: Consolidate Extraction/Masking Code
 
+**Status: COMPLETED**
+
+- adapt_diff: `feature/extraction-utilities` branch, commit `c943aa1`
+- diffviews: `feature/extraction-migration` branch, commit `941c20f`
+
 ## Summary
 
 Move `ActivationMasker` and related utilities from diffviews to adapt_diff. Delete duplicate extraction code from diffviews and re-export from adapt_diff.
@@ -260,3 +265,21 @@ python -c "from adapt_diff import ActivationMasker, unflatten_activation; print(
 - `scripts/create_demo_subset.py` - update imports
 - `tests/test_masking.py` - update imports
 - `tests/test_generator.py` - update imports
+
+---
+
+## Results
+
+**Tests passing:**
+- adapt_diff: 34/34 tests pass
+- diffviews: 49/54 tests pass (5 pre-existing failures unrelated to migration)
+
+**API verification:**
+```bash
+python -c "from diffviews.core import ActivationMasker, compute_mask_dict; print('OK')"  # OK
+python -c "from adapt_diff import ActivationMasker, unflatten_activation; print('OK')"   # OK
+```
+
+**Lines changed:**
+- adapt_diff: +494 lines (new masking code + tests)
+- diffviews: -446 lines, +121 lines (net reduction of ~325 lines)
