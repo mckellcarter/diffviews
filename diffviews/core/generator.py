@@ -92,15 +92,9 @@ def generate_with_mask_multistep(
     caption: Optional[str] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
-    # Noise level params (model-agnostic, 0-100 scale)
-    noise_level_max: Optional[float] = None,
-    noise_level_min: Optional[float] = None,
-    # Sigma params (backwards compat, direct sigma values)
-    sigma_max: Optional[float] = None,
-    sigma_min: Optional[float] = None,
-    rho: float = 7.0,
+    noise_level_max: float = 100.0,
+    noise_level_min: float = 0.0,
     guidance_scale: float = 1.0,
-    stochastic: bool = True,  # legacy, ignored
     noise_mode: str = "stochastic",
     num_samples: int = 1,
     device: str = 'cuda',
@@ -113,7 +107,7 @@ def generate_with_mask_multistep(
     """
     Generate images using multi-step denoising with optional activation masking.
 
-    Wraps adapt_diff.generate() with backwards-compatible interface.
+    Wraps adapt_diff.generate() using model-agnostic noise_level interface.
 
     Args:
         adapter: GeneratorAdapter instance
@@ -122,13 +116,9 @@ def generate_with_mask_multistep(
         caption: Text caption for T2I models
         num_steps: Number of denoising steps
         mask_steps: Steps to apply mask (default=num_steps)
-        noise_level_max: Starting noise level (0-100 scale, model-agnostic)
-        noise_level_min: Ending noise level (0-100 scale, model-agnostic)
-        sigma_max: Maximum sigma (backwards compat, bypasses noise_level)
-        sigma_min: Minimum sigma (backwards compat, bypasses noise_level)
-        rho: Karras schedule parameter
+        noise_level_max: Starting noise level (0-100 scale, default 100)
+        noise_level_min: Ending noise level (0-100 scale, default 0)
         guidance_scale: CFG scale
-        stochastic: Legacy param, ignored
         noise_mode: "stochastic", "fixed", or "zero"
         num_samples: Number of images
         device: Device for generation
@@ -141,39 +131,25 @@ def generate_with_mask_multistep(
     Returns:
         (images, labels) or (images, labels, trajectory, ...) tuple
     """
-    # Build kwargs for adapt_diff.generate()
-    gen_kwargs = {
-        "class_label": class_label,
-        "caption": caption,
-        "num_steps": num_steps,
-        "guidance_scale": guidance_scale,
-        "num_samples": num_samples,
-        "device": device,
-        "seed": seed,
-        "activation_masker": masker,
-        "mask_steps": mask_steps,
-        "noise_mode": noise_mode,
-        "extract_layers": extract_layers,
-        "return_trajectory": return_trajectory,
-        "return_intermediates": return_intermediates,
-        "return_noised_inputs": return_noised_inputs,
-        "rho": rho,
-    }
-
-    # Handle noise level vs sigma params
-    # Prefer sigma if provided (backwards compat with existing code)
-    if sigma_max is not None or sigma_min is not None:
-        gen_kwargs["sigma_max"] = sigma_max if sigma_max is not None else 80.0
-        gen_kwargs["sigma_min"] = sigma_min if sigma_min is not None else 0.002
-    elif noise_level_max is not None or noise_level_min is not None:
-        gen_kwargs["noise_level_max"] = noise_level_max if noise_level_max is not None else 100.0
-        gen_kwargs["noise_level_min"] = noise_level_min if noise_level_min is not None else 0.0
-    else:
-        # Default to sigma values for backwards compat
-        gen_kwargs["sigma_max"] = 80.0
-        gen_kwargs["sigma_min"] = 0.002
-
-    result = adapt_generate(adapter, **gen_kwargs)
+    result = adapt_generate(
+        adapter,
+        class_label=class_label,
+        caption=caption,
+        num_steps=num_steps,
+        noise_level_max=noise_level_max,
+        noise_level_min=noise_level_min,
+        guidance_scale=guidance_scale,
+        num_samples=num_samples,
+        device=device,
+        seed=seed,
+        activation_masker=masker,
+        mask_steps=mask_steps,
+        noise_mode=noise_mode,
+        extract_layers=extract_layers,
+        return_trajectory=return_trajectory,
+        return_intermediates=return_intermediates,
+        return_noised_inputs=return_noised_inputs,
+    )
 
     # Convert GenerationResult to legacy tuple format
     ret = [result.images, result.labels]
