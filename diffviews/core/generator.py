@@ -186,6 +186,9 @@ def generate_with_mask_multistep(
     if return_noised_inputs:
         ret.append(result.noised_inputs if result.noised_inputs else [])
 
+    # Always append timesteps as last element (expected by app.py)
+    ret.append(result.timesteps if result.timesteps else [])
+
     return tuple(ret) if len(ret) > 2 else (ret[0], ret[1])
 
 
