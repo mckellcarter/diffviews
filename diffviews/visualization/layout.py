@@ -87,9 +87,9 @@ function handlePlotlyHover(data) {
         return;
     }
 
-    // For 3D plots, accept any sigma slice trace (not just curve 0)
-    // In 3D mode, traces are named "σ=X.XX" for data points
-    const is3DDataTrace = is3D && traceName.startsWith('σ=');
+    // For 3D plots, accept any data slice trace (not just curve 0)
+    // In 3D mode, traces are named "{label}=X.XX" (e.g., "σ=80.00", "t=999.00", "noise=100.00")
+    const is3DDataTrace = is3D && /^[^\d]+=\d/.test(traceName);
     if (!is3DDataTrace && point.curveNumber !== 0) return;
 
     const idx = point.customdata;

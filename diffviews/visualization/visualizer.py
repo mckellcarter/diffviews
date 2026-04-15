@@ -32,21 +32,20 @@ from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
 
 
-def _sigma_to_ddpm_timestep(sigma: float, sigma_max: float = 80.0, rho: float = 7.0) -> int:
-    """Convert Karras sigma to DDPM timestep (temporary fix for MSCOCO data).
+def _native_to_noise_level(native_value: float, adapter) -> float:
+    """Convert native sigma/timestep to noise_level (0-100) using adapter.
 
-    TODO: Regenerate MSCOCO data with native DDPM timesteps.
+    Args:
+        native_value: Native sigma (EDM/DMD2) or timestep (DDPM/SD)
+        adapter: GeneratorAdapter with native_to_noise_level method
+
+    Returns:
+        noise_level: 0-100 scale (100=pure noise, 0=clean)
     """
-    # Inverse Karras: sigma -> step_fraction -> noise_level -> timestep
-    sigma_min = 0.002
-    inv_rho = 1.0 / rho
-    # step_fraction = (sigma^(1/rho) - sigma_max^(1/rho)) / (sigma_min^(1/rho) - sigma_max^(1/rho))
-    num = sigma ** inv_rho - sigma_max ** inv_rho
-    denom = sigma_min ** inv_rho - sigma_max ** inv_rho
-    step_fraction = max(0.0, min(1.0, num / denom))
-    noise_level = (1 - step_fraction) * 100  # 100% at start, 0% at end
-    # DDPM: timestep = noise_level% * 999
-    return int(round(noise_level / 100 * 999))
+    import torch
+    native_tensor = torch.tensor([native_value], dtype=torch.float32)
+    noise_level = adapter.native_to_noise_level(native_tensor)
+    return float(noise_level[0].item())
 
 
 class GradioVisualizer:
@@ -514,12 +513,12 @@ class GradioVisualizer:
         model_data = self.get_model(model_name)
         if model_data is None or model_data.nn_model is None:
             return []
-        if idx >= len(model_data.df):
+        if idx not in model_data.df.index:
             return []
 
         # Query k+1 since the point itself is included
         query_k = k + 1 if exclude_selected else k
-        query_point = model_data.df.iloc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
+        query_point = model_data.df.loc[idx][["umap_x", "umap_y"]].values.reshape(1, -1)
         distances, indices = model_data.nn_model.kneighbors(query_point, n_neighbors=query_k)
 
         # Ensure numpy arrays (cuML returns cupy)
@@ -1269,8 +1268,8 @@ class GradioVisualizer:
             ))
 
         # Highlight selected point (red ring, highest priority)
-        if selected_idx is not None and selected_idx < len(df):
-            sel_row = df.iloc[selected_idx]
+        if selected_idx is not None and selected_idx in df.index:
+            sel_row = df.loc[selected_idx]
             fig.add_trace(go.Scatter(
                 x=[float(sel_row["umap_x"])],
                 y=[float(sel_row["umap_y"])],
@@ -1442,8 +1441,8 @@ class GradioVisualizer:
                 ))
 
         # Selected point highlight
-        if selected_idx is not None and selected_idx < len(df):
-            sel_row = df.iloc[selected_idx]
+        if selected_idx is not None and selected_idx in df.index:
+            sel_row = df.loc[selected_idx]
             z_val = np.log(sel_row.get("sigma", 1.0) + 1e-8)
             fig.add_trace(go.Scatter3d(
                 x=[float(sel_row["umap_x"])],
@@ -1621,7 +1620,11 @@ class GradioVisualizer:
         return self._load_aligned_3d(model_name, aligned_dir)
 
     def _load_aligned_3d(self, model_name: str, aligned_dir: Path) -> bool:
-        """Load aligned 3D embeddings from cache directory."""
+        """Load aligned 3D embeddings from cache directory.
+
+        Converts native sigma/timestep values to noise_level (0-100) for
+        model-agnostic visualization.
+        """
         model_data = self.get_model(model_name)
         if model_data is None:
             return False
@@ -1638,29 +1641,38 @@ class GradioVisualizer:
         model_data.is_3d_mode = True
         sigma_levels = pkl_data["sigma_levels"]
         embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
-
-        # TEMP FIX: Convert sigma to DDPM timesteps for DDPM-based models
-        # TODO: Regenerate MSCOCO data with native timesteps
         nn_models = pkl_data["nn_models"]
-        if model_data.timestep_label == "t":
-            print(f"[3D] Converting sigma to DDPM timesteps (temp fix)")
+
+        # Convert native sigma/timestep to noise_level (0-100) for model-agnostic viz
+        # Load adapter to get native_to_noise_level conversion
+        adapter = self.load_adapter(model_name)
+        if adapter is not None:
+            print(f"[3D] Converting native values to noise_level (0-100)")
+
+            def to_noise(val):
+                return _native_to_noise_level(val, adapter)
+
             # Convert sigma_levels
-            converted_levels = [float(_sigma_to_ddpm_timestep(s)) for s in sigma_levels]
+            converted_levels = [to_noise(s) for s in sigma_levels]
             # Rebuild embeddings dict with new keys
             new_embeddings = {}
             new_nn_models = {}
-            for old_sigma, new_t in zip(sigma_levels, converted_levels):
-                new_embeddings[new_t] = embeddings_per_sigma[old_sigma]
+            for old_sigma, new_nl in zip(sigma_levels, converted_levels):
+                new_embeddings[new_nl] = embeddings_per_sigma[old_sigma]
                 if old_sigma in nn_models:
-                    new_nn_models[new_t] = nn_models[old_sigma]
+                    new_nn_models[new_nl] = nn_models[old_sigma]
             embeddings_per_sigma = new_embeddings
             nn_models = new_nn_models
-            # Convert sigma columns in df
-            df["sigma"] = df["sigma"].apply(_sigma_to_ddpm_timestep)
+            # Convert sigma columns in df to noise_level
+            df["sigma"] = df["sigma"].apply(to_noise)
             if "conditioning_sigma" in df.columns:
-                df["conditioning_sigma"] = df["conditioning_sigma"].apply(_sigma_to_ddpm_timestep)
+                df["conditioning_sigma"] = df["conditioning_sigma"].apply(to_noise)
             sigma_levels = converted_levels
-            print(f"[3D] Converted levels: {sigma_levels}")
+            # Update timestep_label to indicate noise_level scale
+            model_data.timestep_label = "noise"
+            print(f"[3D] Converted levels: {[f'{nl:.1f}' for nl in sigma_levels]}")
+        else:
+            print(f"[3D] Warning: adapter not loaded, using native values")
 
         model_data.sigma_levels = sigma_levels
         model_data.embeddings_per_sigma = embeddings_per_sigma
@@ -1673,7 +1685,7 @@ class GradioVisualizer:
         # Fit KNN on the full 3D dataset for neighbor finding
         self._fit_knn_model(model_data)
 
-        print(f"Loaded 3D mode: {len(model_data.sigma_levels)} sigma levels, "
+        print(f"Loaded 3D mode: {len(model_data.sigma_levels)} noise levels, "
               f"{len(df)} total points")
         return True
 
@@ -1701,38 +1713,38 @@ class GradioVisualizer:
         self,
         model_name: str,
         trajectory_activations: List[np.ndarray],
-        sigmas: List[float],
+        noise_levels: List[float],
     ) -> List[Tuple[float, float, float]]:
         """Project trajectory activations to 3D coordinates using aligned UMAP.
 
         Args:
             model_name: Model name
             trajectory_activations: List of (1, D) activation arrays per step
-            sigmas: List of sigma values per step
+            noise_levels: List of noise_level values (0-100) per step
 
         Returns:
-            List of (x, y, sigma) tuples for 3D trajectory
+            List of (x, y, noise_level) tuples for 3D trajectory
         """
         model_data = self.get_model(model_name)
         if not model_data or not model_data.is_3d_mode:
             return []
 
         coords = []
-        for act, sigma in zip(trajectory_activations, sigmas):
+        for act, noise_level in zip(trajectory_activations, noise_levels):
             # Convert tensor to float if needed
-            if hasattr(sigma, 'flatten'):
-                sigma_val = sigma.flatten()[0].item()
+            if hasattr(noise_level, 'flatten'):
+                nl_val = noise_level.flatten()[0].item()
             else:
-                sigma_val = float(sigma)
+                nl_val = float(noise_level)
             x, y = project_aligned_trajectory_point(
                 act,
-                sigma_val,
+                nl_val,
                 model_data.umap_scaler,
                 model_data.umap_pca,
                 model_data.nn_models_per_sigma,
                 model_data.embeddings_per_sigma,
                 model_data.sigma_levels,
             )
-            coords.append((x, y, sigma_val))
+            coords.append((x, y, nl_val))
 
         return coords
