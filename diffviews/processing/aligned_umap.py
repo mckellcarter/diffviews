@@ -157,8 +157,9 @@ def project_aligned_trajectory_point(
     Returns:
         (x, y) UMAP coordinates
     """
-    # Find closest sigma level
+    # Find closest sigma level (sigma here is actually noise_level after conversion)
     closest_sigma = min(sigma_levels, key=lambda s: abs(np.log(s + 1e-8) - np.log(sigma + 1e-8)))
+    print(f"[TRAJ] sigma={sigma:.2f} -> closest in {[f'{s:.2f}' for s in sigma_levels]} = {closest_sigma:.2f}")
 
     # Preprocess activation
     act = activation.reshape(1, -1)

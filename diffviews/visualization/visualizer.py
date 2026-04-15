@@ -1643,12 +1643,22 @@ class GradioVisualizer:
         embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
         nn_models = pkl_data["nn_models"]
 
+        print(f"[3D] Raw sigma_levels from pkl: {sigma_levels}")
+        print(f"[3D] df columns: {list(df.columns)}")
+        if "conditioning_sigma" in df.columns:
+            print(f"[3D] df['conditioning_sigma'] unique: {sorted(df['conditioning_sigma'].unique())}")
+        if "sigma" in df.columns:
+            print(f"[3D] df['sigma'] unique: {sorted(df['sigma'].unique())}")
+        if "timestep" in df.columns:
+            print(f"[3D] df['timestep'] unique: {sorted(df['timestep'].unique())}")
+
         # Convert native sigma/timestep to noise_level (0-100) for model-agnostic viz
         # Load adapter to get native_to_noise_level conversion
         adapter = self.load_adapter(model_name)
         if adapter is not None:
             # Choose native column based on adapter's native format
             native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
+            print(f"[3D] adapter.timestep_label = '{native_label}'")
             if native_label == "t" and "timestep" in df.columns:
                 # DDPM-based: use timestep column (conditioning_sigma is approximation)
                 native_col = "timestep"
@@ -1662,6 +1672,11 @@ class GradioVisualizer:
 
             def to_noise(val):
                 return _native_to_noise_level(val, adapter)
+
+            # Debug: show conversion for each sigma level
+            for s in sigma_levels:
+                nl = to_noise(s)
+                print(f"[3D] sigma={s} -> noise_level={nl}")
 
             # Convert original sigma_levels directly (preserve order/mapping)
             converted_levels = [to_noise(s) for s in sigma_levels]
