@@ -275,8 +275,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             images = []
             for idx in all_neighbors[:20]:
-                if idx < len(model_data.df):
-                    sample = model_data.df.iloc[idx]
+                if idx in model_data.df.index:
+                    sample = model_data.df.loc[idx]
                     img = visualizer.get_image(model_name, sample["image_path"])
                     if img is not None:
                         if "class_label" in sample:
@@ -361,10 +361,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 return gr.update(), gr.update()
             point_idx = int(point_idx)
 
-            if point_idx < 0 or point_idx >= len(model_data.df):
+            # Use .loc for label-based indexing (safe for filtered DataFrames in 3D mode)
+            if point_idx not in model_data.df.index:
                 return gr.update(), gr.update()
 
-            sample = model_data.df.iloc[point_idx]
+            sample = model_data.df.loc[point_idx]
             img = visualizer.get_image(model_name, sample["image_path"])
 
             # Format details
@@ -376,8 +377,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                ts_label = model_data.timestep_label
-                details += f"{ts_label} = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                # Display as noise level (0-100) for model-agnostic display
+                details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -405,14 +406,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             except (json.JSONDecodeError, TypeError, ValueError):
                 return (gr.update(),) * 9
 
-            if point_idx < 0 or point_idx >= len(model_data.df):
+            # Use label-based indexing (safe for 3D mode with filtered DataFrames)
+            if point_idx not in model_data.df.index:
                 return (gr.update(),) * 9
 
             knn_dist = knn_dist or {}
 
             # First click: select this point
             if sel_idx is None:
-                sample = model_data.df.iloc[point_idx]
+                sample = model_data.df.loc[point_idx]
                 img = visualizer.get_image(model_name, sample["image_path"])
 
                 # Format details based on conditioning type
@@ -425,8 +427,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    ts_label = model_data.timestep_label
-                    details += f"{ts_label} = {sample['conditioning_sigma']:.1f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    # Display as noise level (0-100) for model-agnostic display
+                    details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -915,11 +917,11 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             print(f"[on_generate] conditioning_type={model_data.conditioning_type}, df_cols={list(model_data.df.columns)[:5]}")
             if model_data.conditioning_type == "text":
                 # Text-conditioned model: get caption (adapter will encode on GPU)
-                if "caption" in model_data.df.columns:
-                    caption = model_data.df.iloc[ref_idx]["caption"]
+                if "caption" in model_data.df.columns and ref_idx in model_data.df.index:
+                    caption = model_data.df.loc[ref_idx]["caption"]
                     print(f"[on_generate] caption={caption[:50] if caption else None}")
-            elif "class_label" in model_data.df.columns:
-                class_label = int(model_data.df.iloc[ref_idx]["class_label"])
+            elif "class_label" in model_data.df.columns and ref_idx in model_data.df.index:
+                class_label = int(model_data.df.loc[ref_idx]["class_label"])
 
             # Get layers for trajectory extraction
             extract_layers = sorted(model_data.umap_params.get("layers", []))
@@ -939,9 +941,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 return None, gr.update(), gr.update(), gr.update(), [], [], gen_infos_state, -1
 
             # Unpack results: (images, labels, [trajectory], [intermediates], [noised_inputs], timesteps)
-            # timesteps is always the last element
+            # timesteps is always the last element (native format)
             images = result[0]
-            sigmas = result[-1]  # Native timesteps from adapter (last element)
+            native_timesteps = result[-1]  # Native timesteps from adapter (last element)
+
+            # Convert native timesteps to noise_level (0-100) for model-agnostic display
+            import torch
+            noise_levels = []
+            if model_data.adapter is not None and native_timesteps:
+                for ts in native_timesteps:
+                    if hasattr(ts, 'item'):
+                        ts = ts.item()
+                    ts_tensor = torch.tensor([float(ts)])
+                    nl = model_data.adapter.native_to_noise_level(ts_tensor)
+                    noise_levels.append(float(nl[0].item()))
+            else:
+                noise_levels = [float(ts.item() if hasattr(ts, 'item') else ts) for ts in native_timesteps] if native_timesteps else []
+
             trajectory_acts = []
             intermediate_imgs = []
             noised_inputs = []
@@ -957,9 +973,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             traj_coords = []
             if trajectory_acts:
                 if model_data.is_3d_mode:
-                    # 3D mode: use aligned UMAP projection
+                    # 3D mode: use aligned UMAP projection with noise_levels
                     traj_coords = visualizer.project_trajectory_3d(
-                        model_name, trajectory_acts, sigmas
+                        model_name, trajectory_acts, noise_levels
                     )
                 elif model_data.umap_reducer is not None:
                     # 2D mode: standard UMAP transform
@@ -974,12 +990,8 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                                 act = model_data.umap_pca.transform(act)
                             # Project to 2D
                             coords = model_data.umap_reducer.transform(act)
-                            sigma = sigmas[i] if i < len(sigmas) else 0.0
-                            if hasattr(sigma, 'flatten'):
-                                sigma = sigma.flatten()[0].item()
-                            else:
-                                sigma = float(sigma)
-                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
+                            noise_level = noise_levels[i] if i < len(noise_levels) else 0.0
+                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), noise_level))
                         except Exception as e:
                             print(f"[Trajectory] Failed to project step {i}: {e}")
 
@@ -1024,21 +1036,17 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "caption": caption,
                 "n_steps": n_steps,
                 "final_image": gen_img,
-                "timestep_label": model_data.timestep_label,
+                "timestep_label": "noise",  # Always use noise_level (0-100) scale
             }
             gen_infos_state = list(gen_infos_state)
             gen_infos_state.append(gen_info)
 
-            # Build intermediate gallery and state: list of (image, sigma) tuples
+            # Build intermediate gallery and state: list of (image, noise_level) tuples
             # Each step shows denoised output with noised input as inset
             step_gallery = []
             intermediates_state.append([])  # For trajectory hover
             for i, step_img in enumerate(intermediate_imgs):
-                sigma = sigmas[i] if i < len(sigmas) else 0.0
-                if hasattr(sigma, 'flatten'):
-                    sigma = sigma.flatten()[0].item()
-                else:
-                    sigma = float(sigma)
+                noise_level = noise_levels[i] if i < len(noise_levels) else 0.0
                 img_np = step_img[0].numpy()
 
                 # Create composite with noised input inset if available
@@ -1048,9 +1056,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 else:
                     composite_img = img_np
 
-                step_caption = f"{display_label} | Step {i+1}/{n_steps} | {model_data.timestep_label}={sigma:.1f}"
+                step_caption = f"{display_label} | Step {i+1}/{n_steps} | noise={noise_level:.1f}%"
                 step_gallery.append((composite_img, step_caption))
-                intermediates_state[-1].append((composite_img, sigma))
+                intermediates_state[-1].append((composite_img, noise_level))
 
             # Gallery label
             gallery_label = f"{display_label} | {n_steps} steps"
