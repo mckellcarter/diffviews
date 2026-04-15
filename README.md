@@ -64,9 +64,8 @@ images, labels = generate_with_mask_multistep(
     adapter, masker,
     class_label=207,  # golden retriever
     num_steps=4,
-    noise_level_max=100.0,  # 0-100 scale (model-agnostic)
+    noise_level_max=100.0,  # 0-100 scale (100=pure noise, 0=clean)
     noise_level_min=0.0,
-    # Or use direct sigma values: sigma_max=80.0, sigma_min=0.002
     guidance_scale=1.5,
     noise_mode="stochastic",  # or "fixed", "zero"
 )

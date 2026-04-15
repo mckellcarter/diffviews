@@ -135,7 +135,7 @@ See [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) for t
 |----------|-----------|---------|-------|-----------|
 | `tensor_to_uint8_image` | `(tensor: torch.Tensor) -> torch.Tensor` | Convert tensor [-1,1] to uint8 [0,255] | `torch.clamp`, `torch.permute` | `generate_with_mask` |
 | `generate_with_mask` | `(adapter, masker, class_label, conditioning_sigma, num_samples, device, seed) -> Tuple` | Generate images with fixed activations (single-step, legacy) | `adapter.forward`, `tensor_to_uint8_image` | — |
-| `generate_with_mask_multistep` | `(adapter, masker, class_label, num_steps, mask_steps, noise_level_max, noise_level_min, sigma_max, sigma_min, ...) -> Tuple` | Wrapper around adapt_diff.generate() - accepts both noise_level (0-100) and sigma params | `adapt_generate` | `generate_on_gpu`, `_generate_on_gpu` |
+| `generate_with_mask_multistep` | `(adapter, masker, class_label, num_steps, mask_steps, noise_level_max, noise_level_min, ...) -> Tuple` | Wrapper around adapt_diff.generate() using noise_level (0-100) | `adapt_generate` | `generate_on_gpu`, `_generate_on_gpu` |
 | `save_generated_sample` | `(image, activations, metadata, output_dir, sample_id) -> Dict` | Save generated image, activations, and metadata | `Image.save`, `np.savez_compressed` | External scripts |
 | `infer_layer_shape` | `(adapter: GeneratorAdapter, layer_name: str, device: str = 'cuda') -> Tuple[int, ...]` | Infer activation shape by running dummy forward pass | `adapter.get_layer_shapes`, `ActivationExtractor`, `adapter.forward` | External usage |
 
@@ -732,15 +732,14 @@ from diffviews.core.generator import generate_with_mask_multistep
 masker = ActivationMasker(adapter)
 masker.set_mask('encoder_bottleneck', activation_tensor)
 
-# Generate - accepts both noise_level (0-100) and sigma params
+# Generate using noise_level (0-100 scale, model-agnostic)
 images, labels = generate_with_mask_multistep(
     adapter, masker,
     class_label=207,  # golden retriever
     num_steps=5,
     mask_steps=1,
-    noise_level_max=100.0,  # 0-100 scale (model-agnostic)
+    noise_level_max=100.0,  # 0-100 scale (100=pure noise, 0=clean)
     noise_level_min=0.0,
-    # Or use direct sigma: sigma_max=80.0, sigma_min=0.002
     noise_mode="stochastic",  # or "fixed", "zero"
 )
 ```
