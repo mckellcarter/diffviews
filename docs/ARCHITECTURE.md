@@ -115,12 +115,13 @@ See [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) for t
 
 #### `diffviews/core/generator.py`
 
-**Purpose:** Image generation with multi-step denoising and optional activation masking.
+**Purpose:** Thin wrapper around `adapt_diff.generate()` with backwards-compatible interface.
 
-**Lines:** 373
+**Lines:** ~290
 
 **Imports from local files:**
 - `adapt_diff` → `GeneratorAdapter`, `ActivationExtractor`, `ActivationMasker`
+- `adapt_diff.generation` → `generate` (as `adapt_generate`)
 
 **Called by:**
 - `app.py` → `generate_on_gpu`
@@ -132,9 +133,9 @@ See [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) for t
 
 | Function | Signature | Summary | Calls | Called By |
 |----------|-----------|---------|-------|-----------|
-| `tensor_to_uint8_image` | `(tensor: torch.Tensor) -> torch.Tensor` | Convert tensor [-1,1] to uint8 [0,255] | `torch.clamp`, `torch.permute` | `generate_with_mask`, `generate_with_mask_multistep` |
-| `generate_with_mask` | `(adapter, masker, class_label, conditioning_sigma, num_samples, device, seed) -> Tuple` | Generate images with fixed activations (single-step) | `adapter.forward`, `tensor_to_uint8_image` | — |
-| `generate_with_mask_multistep` | `(adapter, masker, class_label, num_steps, mask_steps, guidance_scale, num_samples, device, seed, extract_layers, return_trajectory, return_intermediates, return_noised_inputs) -> Tuple` | Multi-step denoising with optional masking | `adapter.get_timesteps`, `adapter.forward_with_cfg`, `adapter.step`, `adapter.decode`, `ActivationExtractor`, `tensor_to_uint8_image` | `generate_on_gpu`, `_generate_on_gpu` |
+| `tensor_to_uint8_image` | `(tensor: torch.Tensor) -> torch.Tensor` | Convert tensor [-1,1] to uint8 [0,255] | `torch.clamp`, `torch.permute` | `generate_with_mask` |
+| `generate_with_mask` | `(adapter, masker, class_label, conditioning_sigma, num_samples, device, seed) -> Tuple` | Generate images with fixed activations (single-step, legacy) | `adapter.forward`, `tensor_to_uint8_image` | — |
+| `generate_with_mask_multistep` | `(adapter, masker, class_label, num_steps, mask_steps, noise_level_max, noise_level_min, sigma_max, sigma_min, ...) -> Tuple` | Wrapper around adapt_diff.generate() - accepts both noise_level (0-100) and sigma params | `adapt_generate` | `generate_on_gpu`, `_generate_on_gpu` |
 | `save_generated_sample` | `(image, activations, metadata, output_dir, sample_id) -> Dict` | Save generated image, activations, and metadata | `Image.save`, `np.savez_compressed` | External scripts |
 | `infer_layer_shape` | `(adapter: GeneratorAdapter, layer_name: str, device: str = 'cuda') -> Tuple[int, ...]` | Infer activation shape by running dummy forward pass | `adapter.get_layer_shapes`, `ActivationExtractor`, `adapter.forward` | External usage |
 
@@ -676,14 +677,15 @@ app.py (entry point)
 │       └── CUSTOM_CSS, PLOTLY_HANDLER_JS (3D support)
 ├── adapt_diff (ActivationMasker)
 └── diffviews.core.generator
-    ├── generate_with_mask_multistep
-    └── adapt_diff (GeneratorAdapter, ActivationExtractor, ActivationMasker)
+    ├── generate_with_mask_multistep (wrapper)
+    └── adapt_diff.generation.generate (core implementation)
 
 adapt_diff (external package)
 ├── GeneratorAdapter (ABC)
 ├── HookMixin
 ├── ActivationExtractor      # Hook-based activation capture
 ├── ActivationMasker         # Hook-based activation replacement
+├── generation.generate()    # Core generation with masking, noise_mode support
 ├── flatten_activations, load_activations, save_activations
 ├── convert_to_fast_format, load_fast_activations
 ├── unflatten_activation, load_activation_from_npz
@@ -729,16 +731,17 @@ from diffviews.core.generator import generate_with_mask_multistep
 # Setup masker
 masker = ActivationMasker(adapter)
 masker.set_mask('encoder_bottleneck', activation_tensor)
-masker.register_hooks(['encoder_bottleneck'])
 
-# Generate (noise_level uses 0-100 scale)
+# Generate - accepts both noise_level (0-100) and sigma params
 images, labels = generate_with_mask_multistep(
     adapter, masker,
     class_label=207,  # golden retriever
     num_steps=5,
     mask_steps=1,
-    noise_level_max=100.0,  # start from pure noise
-    noise_level_min=0.0,    # denoise to clean
+    noise_level_max=100.0,  # 0-100 scale (model-agnostic)
+    noise_level_min=0.0,
+    # Or use direct sigma: sigma_max=80.0, sigma_min=0.002
+    noise_mode="stochastic",  # or "fixed", "zero"
 )
 ```
 

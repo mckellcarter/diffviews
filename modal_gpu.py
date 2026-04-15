@@ -28,7 +28,7 @@ gpu_image = (
         "diffusers>=0.25.0",
         "transformers>=4.30.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@94587f8")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@897c742")
 )
 
 # Volume for checkpoints only
@@ -145,7 +145,7 @@ class GPUWorker:
             Serialized result tuple or None on error
         """
         import torch
-        from diffviews.core.masking import ActivationMasker
+        from adapt_diff import ActivationMasker
         from diffviews.core.generator import generate_with_mask_multistep
 
         print(f"[GPU] generate_from_mask: model={model_name}, layers={list(mask_dict.keys())}, caption: {caption is not None}")

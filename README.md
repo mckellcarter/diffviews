@@ -59,15 +59,16 @@ with extractor:
 # Generate with masked activations
 masker = ActivationMasker(adapter)
 masker.set_mask('encoder_bottleneck', target_activation)
-masker.register_hooks()
 
 images, labels = generate_with_mask_multistep(
     adapter, masker,
     class_label=207,  # golden retriever
     num_steps=4,
-    noise_level_max=100.0,  # start from pure noise (0-100 scale)
-    noise_level_min=0.0,    # denoise to clean
-    guidance_scale=1.5
+    noise_level_max=100.0,  # 0-100 scale (model-agnostic)
+    noise_level_min=0.0,
+    # Or use direct sigma values: sigma_max=80.0, sigma_min=0.002
+    guidance_scale=1.5,
+    noise_mode="stochastic",  # or "fixed", "zero"
 )
 ```
 
@@ -257,10 +258,6 @@ my-model = "my_package.adapters:MyModelAdapter"
 See the [adapt_diff documentation](https://github.com/mckellcarter/adapt_diff) for details.
 
 ## Known Issues
-
-### Noise modes (fixed/zero)
-
-Only `stochastic` noise mode currently works. The `fixed` and `zero` modes require stochastic step support in adapt_diff (planned).
 
 ### Multi-tab session corruption (Modal deployment)
 
