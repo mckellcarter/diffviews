@@ -3,7 +3,7 @@ Gradio-based diffusion activation visualizer.
 Port of the Dash visualization app with multi-user support.
 """
 
-__version__ = "e5c32b5-sigma-fix"
+__version__ = "d781ef2-sigma-fix-v2"
 print(f"[diffviews.visualization.app] version: {__version__}")
 
 import argparse
@@ -1032,6 +1032,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             intermediates_state.append([])  # For trajectory hover
             for i, step_img in enumerate(intermediate_imgs):
                 sigma = sigmas[i] if i < len(sigmas) else 0.0
+                sigma = float(sigma) if hasattr(sigma, 'item') else float(sigma)
                 img_np = step_img[0].numpy()
 
                 # Create composite with noised input inset if available
