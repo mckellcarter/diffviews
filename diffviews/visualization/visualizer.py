@@ -51,6 +51,28 @@ def _native_to_noise_level(native_value: float, adapter) -> float:
     return max(0.0, min(100.0, float(noise_level[0].item())))
 
 
+def _sigma_to_noise_level(sigma: float, sigma_max: float = 80.0, sigma_min: float = 0.002) -> float:
+    """Convert Karras sigma to noise_level (0-100) using log scale.
+
+    Used for 3D visualization where data is stored in Karras sigma format
+    regardless of the underlying model's native format.
+
+    Args:
+        sigma: Karras sigma value
+        sigma_max: Maximum sigma (default 80.0)
+        sigma_min: Minimum sigma (default 0.002)
+
+    Returns:
+        noise_level: 0-100 scale
+    """
+    import math
+    sigma = max(sigma, sigma_min)
+    sigma = min(sigma, sigma_max)
+    log_range = math.log(sigma_max / sigma_min)
+    noise_level = 100.0 * math.log(sigma / sigma_min) / log_range
+    return max(0.0, min(100.0, noise_level))
+
+
 class GradioVisualizer:
     """Gradio-based visualizer with multi-user support.
 
@@ -1659,25 +1681,37 @@ class GradioVisualizer:
         # Load adapter to get native_to_noise_level conversion
         adapter = self.load_adapter(model_name)
         if adapter is not None:
-            # Choose native column based on adapter's native format
-            # Note: 3D CSV has 'sigma' column with correct per-slice values,
-            # while 'conditioning_sigma' may only have metadata (single value).
-            # For timestep-based models, 'timestep' column has native values.
+            # Choose native column and conversion method based on data format
+            # The 3D data is always computed using Karras sigma values (from conditioning_sigma).
+            # For sigma-based adapters: use sigma column with adapter conversion
+            # For timestep-based adapters: if timestep column exists use it, else use sigma-based conversion
             native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
             print(f"[3D] adapter.timestep_label = '{native_label}'")
+
             if native_label == "t" and "timestep" in df.columns:
-                # DDPM-based: use timestep column
+                # DDPM-based with timestep column: use adapter's conversion
                 native_col = "timestep"
-                print(f"[3D] Using 'timestep' column (DDPM native format)")
-            else:
-                # Sigma-based: use 'sigma' column (has correct per-slice values)
+                use_sigma_conversion = False
+                print(f"[3D] Using 'timestep' column with adapter conversion")
+            elif native_label == "t":
+                # DDPM-based but no timestep column: data is in sigma format, use sigma conversion
                 native_col = "sigma"
-                print(f"[3D] Using 'sigma' column (sigma native format)")
+                use_sigma_conversion = True
+                print(f"[3D] Using 'sigma' column with sigma-based conversion (no timestep column)")
+            else:
+                # Sigma-based: use sigma column with adapter conversion
+                native_col = "sigma"
+                use_sigma_conversion = False
+                print(f"[3D] Using 'sigma' column with adapter conversion")
 
             print(f"[3D] Converting {native_col} to noise_level (0-100)")
 
-            def to_noise(val):
-                return _native_to_noise_level(val, adapter)
+            if use_sigma_conversion:
+                def to_noise(val):
+                    return _sigma_to_noise_level(val)
+            else:
+                def to_noise(val):
+                    return _native_to_noise_level(val, adapter)
 
             # Debug: show conversion for each sigma level
             for s in sigma_levels:
