@@ -3,6 +3,9 @@ Gradio-based diffusion activation visualizer.
 Port of the Dash visualization app with multi-user support.
 """
 
+__version__ = "e5c32b5-sigma-fix"
+print(f"[diffviews.visualization.app] version: {__version__}")
+
 import argparse
 import json
 
