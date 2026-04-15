@@ -1,5 +1,5 @@
 """
-Image generation with activation masking using adapter interface.
+Image generation - wraps adapt_diff.generate() with backwards compatibility.
 """
 
 import json
@@ -11,6 +11,7 @@ import torch
 from PIL import Image
 
 from adapt_diff import ActivationExtractor, ActivationMasker, GeneratorAdapter
+from adapt_diff.generation import generate as adapt_generate
 
 
 def tensor_to_uint8_image(tensor: torch.Tensor) -> torch.Tensor:
@@ -28,19 +29,6 @@ def tensor_to_uint8_image(tensor: torch.Tensor) -> torch.Tensor:
     return images
 
 
-def get_denoising_sigmas(num_steps: int, sigma_max: float, sigma_min: float, rho: float = 7.0) -> torch.Tensor:
-    """
-    Generate Karras sigma schedule for multi-step denoising.
-
-    Returns sigmas in descending order (large to small).
-    """
-    ramp = torch.linspace(0, 1, num_steps)
-    min_inv_rho = sigma_min ** (1 / rho)
-    max_inv_rho = sigma_max ** (1 / rho)
-    sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
-    return sigmas
-
-
 @torch.no_grad()
 def generate_with_mask(
     adapter: GeneratorAdapter,
@@ -52,7 +40,7 @@ def generate_with_mask(
     seed: Optional[int] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Generate images with fixed activations (single-step).
+    Generate images with fixed activations (single-step, legacy).
 
     Args:
         adapter: GeneratorAdapter instance
@@ -101,13 +89,18 @@ def generate_with_mask_multistep(
     adapter: GeneratorAdapter,
     masker: Optional[ActivationMasker] = None,
     class_label: Optional[int] = None,
+    caption: Optional[str] = None,
     num_steps: int = 4,
     mask_steps: Optional[int] = None,
-    sigma_max: float = 80.0,
-    sigma_min: float = 0.002,
+    # Noise level params (model-agnostic, 0-100 scale)
+    noise_level_max: Optional[float] = None,
+    noise_level_min: Optional[float] = None,
+    # Sigma params (backwards compat, direct sigma values)
+    sigma_max: Optional[float] = None,
+    sigma_min: Optional[float] = None,
     rho: float = 7.0,
     guidance_scale: float = 1.0,
-    stochastic: bool = True,
+    stochastic: bool = True,  # legacy, ignored
     noise_mode: str = "stochastic",
     num_samples: int = 1,
     device: str = 'cuda',
@@ -120,21 +113,23 @@ def generate_with_mask_multistep(
     """
     Generate images using multi-step denoising with optional activation masking.
 
+    Wraps adapt_diff.generate() with backwards-compatible interface.
+
     Args:
         adapter: GeneratorAdapter instance
-        masker: ActivationMasker with masks set (hooks should be registered)
+        masker: ActivationMasker with masks set (hooks registered by this function)
         class_label: Class label (0-999), random if None, -1 for uniform
+        caption: Text caption for T2I models
         num_steps: Number of denoising steps
-        mask_steps: Steps to apply mask (default=num_steps, 1=first-only)
-        sigma_max: Maximum sigma
-        sigma_min: Minimum sigma
+        mask_steps: Steps to apply mask (default=num_steps)
+        noise_level_max: Starting noise level (0-100 scale, model-agnostic)
+        noise_level_min: Ending noise level (0-100 scale, model-agnostic)
+        sigma_max: Maximum sigma (backwards compat, bypasses noise_level)
+        sigma_min: Minimum sigma (backwards compat, bypasses noise_level)
         rho: Karras schedule parameter
-        guidance_scale: CFG scale (0=uncond, 1=class, >1=amplify)
-        stochastic: Legacy param, ignored when noise_mode is set
-        noise_mode: Noise injection mode:
-            "stochastic" - fresh random noise each step (default)
-            "fixed" - pre-generated noise reused across generations (seeded)
-            "zero" - no noise (deterministic, zeros)
+        guidance_scale: CFG scale
+        stochastic: Legacy param, ignored
+        noise_mode: "stochastic", "fixed", or "zero"
         num_samples: Number of images
         device: Device for generation
         seed: Random seed
@@ -144,134 +139,54 @@ def generate_with_mask_multistep(
         return_noised_inputs: Return noised input x_t at each step
 
     Returns:
-        (images, labels) or (images, labels, trajectory) or
-        (images, labels, trajectory, intermediates) or
-        (images, labels, trajectory, intermediates, noised_inputs)
+        (images, labels) or (images, labels, trajectory, ...) tuple
     """
-    if mask_steps is None:
-        mask_steps = num_steps
-    if seed is not None or noise_mode in ("zero", "fixed"):
-        torch.manual_seed(seed if seed is not None else 42)
-        torch.use_deterministic_algorithms(True, warn_only=True)
+    # Build kwargs for adapt_diff.generate()
+    gen_kwargs = {
+        "class_label": class_label,
+        "caption": caption,
+        "num_steps": num_steps,
+        "guidance_scale": guidance_scale,
+        "num_samples": num_samples,
+        "device": device,
+        "seed": seed,
+        "activation_masker": masker,
+        "mask_steps": mask_steps,
+        "noise_mode": noise_mode,
+        "extract_layers": extract_layers,
+        "return_trajectory": return_trajectory,
+        "return_intermediates": return_intermediates,
+        "return_noised_inputs": return_noised_inputs,
+        "rho": rho,
+    }
 
-    resolution = adapter.resolution
-    num_classes = adapter.num_classes
-
-    trajectory_activations = []
-    intermediate_images = []
-    noised_input_images = []
-    extractor = None
-
-    if return_trajectory and extract_layers:
-        extractor = ActivationExtractor(adapter, extract_layers)
-        extractor.register_hooks()
-
-    # Generate labels
-    if class_label is not None and class_label < 0:
-        random_labels = torch.tensor([-1], device=device).repeat(num_samples)
-        one_hot = torch.ones((num_samples, num_classes), device=device) / num_classes
-        uncond = one_hot.clone()
-    elif class_label is None:
-        random_labels = torch.randint(0, num_classes, (num_samples,), device=device)
-        one_hot = torch.eye(num_classes, device=device)[random_labels]
-        uncond = torch.zeros_like(one_hot)
+    # Handle noise level vs sigma params
+    # Prefer sigma if provided (backwards compat with existing code)
+    if sigma_max is not None or sigma_min is not None:
+        gen_kwargs["sigma_max"] = sigma_max if sigma_max is not None else 80.0
+        gen_kwargs["sigma_min"] = sigma_min if sigma_min is not None else 0.002
+    elif noise_level_max is not None or noise_level_min is not None:
+        gen_kwargs["noise_level_max"] = noise_level_max if noise_level_max is not None else 100.0
+        gen_kwargs["noise_level_min"] = noise_level_min if noise_level_min is not None else 0.0
     else:
-        random_labels = torch.full((num_samples,), class_label, device=device, dtype=torch.long)
-        one_hot = torch.eye(num_classes, device=device)[random_labels]
-        uncond = torch.zeros_like(one_hot)
+        # Default to sigma values for backwards compat
+        gen_kwargs["sigma_max"] = 80.0
+        gen_kwargs["sigma_min"] = 0.002
 
-    # Generate sigma schedule
-    sigmas = get_denoising_sigmas(num_steps, sigma_max, sigma_min, rho).to(device)
+    result = adapt_generate(adapter, **gen_kwargs)
 
-    # Pre-generate noise based on mode
-    noise_shape = (num_samples, 3, resolution, resolution)
-    if noise_mode == "zero":
-        initial_noise = torch.zeros(noise_shape, device=device)
-        step_noises = [torch.zeros(noise_shape, device=device)] * (num_steps - 1)
-    elif noise_mode == "fixed":
-        # Use seed (or 0) to generate reproducible noise for all steps
-        rng = torch.Generator(device=device)
-        rng.manual_seed(seed if seed is not None else 42)
-        initial_noise = torch.randn(noise_shape, device=device, generator=rng)
-        step_noises = [torch.randn(noise_shape, device=device, generator=rng) for _ in range(num_steps - 1)]
-    else:
-        # "stochastic" (default) - fresh random noise
-        initial_noise = torch.randn(noise_shape, device=device)
-        step_noises = None  # generated inline
-
-    print(f"[diffviews] Initial randn first 5 vals: {initial_noise.flatten()[:5].tolist()}")
-    x = initial_noise * sigma_max
-    print(f"[diffviews] After scaling by {sigma_max}: x.mean={x.mean().item():.4f}, x.std={x.std().item():.4f}")
-    print(f"[diffviews] sigmas={sigmas.tolist()}")
-
-    # Iterative denoising
-    for i, sigma in enumerate(sigmas):
-        # Capture noised input before denoising
-        if return_noised_inputs:
-            noised_input_images.append(tensor_to_uint8_image(x))
-
-        # Remove mask after mask_steps
-        if i == mask_steps and masker is not None:
-            masker.remove_hooks()
-
-        sigma_tensor = torch.ones(num_samples, device=device) * sigma
-
-        if guidance_scale != 1.0:
-            # Classifier-free guidance
-            pred_cond = adapter.forward(x, sigma_tensor, one_hot)
-            pred_uncond = adapter.forward(x, sigma_tensor, uncond)
-            pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
-        else:
-            pred = adapter.forward(x, sigma_tensor, one_hot)
-
-        # Extract trajectory activations
-        if extractor is not None:
-            acts = extractor.get_activations()
-            layer_acts = []
-            for layer_name in sorted(extract_layers):
-                act = acts.get(layer_name)
-                if act is not None:
-                    if len(act.shape) == 4:
-                        B, C, H, W = act.shape
-                        act = act.reshape(B, -1)
-                    layer_acts.append(act.numpy())
-            if layer_acts:
-                concat_act = np.concatenate(layer_acts, axis=1)
-                trajectory_activations.append(concat_act)
-            extractor.clear()
-
-        # Capture intermediate image
-        if return_intermediates:
-            intermediate_images.append(tensor_to_uint8_image(pred))
-
-        # Transition to next step
-        if i < len(sigmas) - 1:
-            next_sigma = sigmas[i + 1]
-            if step_noises is not None:
-                x = pred + next_sigma * step_noises[i]
-            elif noise_mode == "stochastic":
-                x = pred + next_sigma * torch.randn_like(pred)
-            else:
-                x = pred
-        else:
-            x = pred
-
-    if extractor is not None:
-        extractor.remove_hooks()
-
-    # Convert to uint8
-    images = tensor_to_uint8_image(x)
-
-    # Build return tuple
-    result = [images, random_labels.cpu()]
+    # Convert GenerationResult to legacy tuple format
+    ret = [result.images, result.labels]
     if return_trajectory:
-        result.append(trajectory_activations)
+        ret.append(result.trajectory if result.trajectory else [])
     if return_intermediates:
-        result.append(intermediate_images)
+        # adapt_diff includes final image, old API didn't - exclude last element
+        intermediates = result.intermediates if result.intermediates else []
+        ret.append(intermediates[:-1] if intermediates else [])
     if return_noised_inputs:
-        result.append(noised_input_images)
+        ret.append(result.noised_inputs if result.noised_inputs else [])
 
-    return tuple(result) if len(result) > 2 else (result[0], result[1])
+    return tuple(ret) if len(ret) > 2 else (ret[0], ret[1])
 
 
 def save_generated_sample(
@@ -324,7 +239,7 @@ def save_generated_sample(
 
         np.savez_compressed(str(activation_path.with_suffix('.npz')), **activation_dict)
 
-        with open(activation_path.with_suffix('.json'), 'w') as f:
+        with open(activation_path.with_suffix('.json'), 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
 
     return {
