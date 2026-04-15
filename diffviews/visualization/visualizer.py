@@ -40,12 +40,37 @@ def _native_to_noise_level(native_value: float, adapter) -> float:
         adapter: GeneratorAdapter with native_to_noise_level method
 
     Returns:
-        noise_level: 0-100 scale (100=pure noise, 0=clean)
+        noise_level: 0-100 scale (100=pure noise, 0=clean), clamped to valid range
     """
     import torch
-    native_tensor = torch.tensor([native_value], dtype=torch.float32)
+    # Clamp input to avoid log(0) = -inf for sigma=0 at final step
+    native_clamped = max(native_value, 1e-8)
+    native_tensor = torch.tensor([native_clamped], dtype=torch.float32)
     noise_level = adapter.native_to_noise_level(native_tensor)
-    return float(noise_level[0].item())
+    # Clamp output to valid range
+    return max(0.0, min(100.0, float(noise_level[0].item())))
+
+
+def _sigma_to_noise_level(sigma: float, sigma_max: float = 80.0, sigma_min: float = 0.002) -> float:
+    """Convert Karras sigma to noise_level (0-100) using log scale.
+
+    Used for 3D visualization where data is stored in Karras sigma format
+    regardless of the underlying model's native format.
+
+    Args:
+        sigma: Karras sigma value
+        sigma_max: Maximum sigma (default 80.0)
+        sigma_min: Minimum sigma (default 0.002)
+
+    Returns:
+        noise_level: 0-100 scale
+    """
+    import math
+    sigma = max(sigma, sigma_min)
+    sigma = min(sigma, sigma_max)
+    log_range = math.log(sigma_max / sigma_min)
+    noise_level = 100.0 * math.log(sigma / sigma_min) / log_range
+    return max(0.0, min(100.0, noise_level))
 
 
 class GradioVisualizer:
@@ -178,7 +203,7 @@ class GradioVisualizer:
             conditioning_type = config.get("conditioning_type", "class")
             # Text-conditioned models default to CFG=7.5, class-conditioned to 1.0
             guidance_fallback = 7.5 if conditioning_type == "text" else 1.0
-            # Get timestep label from adapter (σ for sigma-based, t for DDPM)
+            # Timestep label: t for DDPM/text-conditioned, σ for sigma-based
             timestep_label = "t" if conditioning_type == "text" else "σ"
             self.model_configs[model_name] = {
                 "data_dir": subdir,
@@ -337,7 +362,6 @@ class GradioVisualizer:
             return
 
         umap_coords = model_data.df[["umap_x", "umap_y"]].values
-        print(f"  [KNN] Fitting on {umap_coords.shape[0]} points")
         NearestNeighbors = get_knn_class()
         model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
         model_data.nn_model.fit(umap_coords)
@@ -1647,48 +1671,54 @@ class GradioVisualizer:
         # Load adapter to get native_to_noise_level conversion
         adapter = self.load_adapter(model_name)
         if adapter is not None:
-            # Choose native column based on adapter's native format
+            # Choose native column and conversion method based on data format
+            # The 3D data is always computed using Karras sigma values (from conditioning_sigma).
+            # For sigma-based adapters: use sigma column with adapter conversion
+            # For timestep-based adapters: if timestep column exists use it, else use sigma-based conversion
             native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
+
             if native_label == "t" and "timestep" in df.columns:
-                # DDPM-based: use timestep column (conditioning_sigma is approximation)
+                # DDPM-based with timestep column: use adapter's conversion
                 native_col = "timestep"
-                print(f"[3D] Using 'timestep' column (DDPM native format)")
+                use_sigma_conversion = False
+            elif native_label == "t":
+                # DDPM-based but no timestep column: data is in sigma format, use sigma conversion
+                native_col = "sigma"
+                use_sigma_conversion = True
             else:
-                # Sigma-based: use conditioning_sigma
-                native_col = "conditioning_sigma"
-                print(f"[3D] Using 'conditioning_sigma' column (sigma native format)")
+                # Sigma-based: use sigma column with adapter conversion
+                native_col = "sigma"
+                use_sigma_conversion = False
 
-            print(f"[3D] Converting {native_col} to noise_level (0-100)")
+            if use_sigma_conversion:
+                def to_noise(val):
+                    return _sigma_to_noise_level(val)
+            else:
+                def to_noise(val):
+                    return _native_to_noise_level(val, adapter)
 
-            def to_noise(val):
-                return _native_to_noise_level(val, adapter)
-
-            # Get native values for sigma_levels from df
-            # sigma_levels from pkl are in the old format, rebuild from native column
-            unique_native = sorted(df[native_col].unique(), reverse=True)
-            converted_levels = [to_noise(s) for s in unique_native]
+            # Convert original sigma_levels directly (preserve order/mapping)
+            converted_levels = [to_noise(s) for s in sigma_levels]
 
             # Rebuild embeddings dict with noise_level keys
-            # Map old sigma_levels to new noise_levels
             new_embeddings = {}
             new_nn_models = {}
-            for old_sigma, new_nl in zip(sigma_levels, converted_levels[:len(sigma_levels)]):
+            for old_sigma, new_nl in zip(sigma_levels, converted_levels):
                 new_embeddings[new_nl] = embeddings_per_sigma[old_sigma]
                 if old_sigma in nn_models:
                     new_nn_models[new_nl] = nn_models[old_sigma]
             embeddings_per_sigma = new_embeddings
             nn_models = new_nn_models
 
-            # Convert columns in df to noise_level
-            df["sigma"] = df[native_col].apply(to_noise)
-            df["conditioning_sigma"] = df[native_col].apply(to_noise)
-            sigma_levels = converted_levels[:len(sigma_levels)]
+            # Convert columns in df to noise_level for internal use
+            # Must convert before overwriting to avoid double-conversion
+            converted_col = df[native_col].apply(to_noise)
+            df["sigma"] = converted_col
+            df["conditioning_sigma"] = converted_col
+            sigma_levels = converted_levels
 
-            # Update timestep_label to indicate noise_level scale
-            model_data.timestep_label = "noise"
-            print(f"[3D] Converted levels: {[f'{nl:.1f}' for nl in sigma_levels]}")
-        else:
-            print(f"[3D] Warning: adapter not loaded, using native values")
+            # Keep native timestep_label (σ or t) for hover card display
+            # Values are internally converted to noise_level but displayed in native format
 
         model_data.sigma_levels = sigma_levels
         model_data.embeddings_per_sigma = embeddings_per_sigma

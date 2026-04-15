@@ -157,7 +157,7 @@ def project_aligned_trajectory_point(
     Returns:
         (x, y) UMAP coordinates
     """
-    # Find closest sigma level
+    # Find closest sigma level (sigma here is actually noise_level after conversion)
     closest_sigma = min(sigma_levels, key=lambda s: abs(np.log(s + 1e-8) - np.log(sigma + 1e-8)))
 
     # Preprocess activation
@@ -221,7 +221,7 @@ def save_aligned_embeddings(
             # Add metadata from the corresponding row in original order
             if i < len(metadata_df):
                 meta_row = metadata_df.iloc[i]
-                for col in ['sample_id', 'class_label', 'class_name', 'image_path', 'conditioning_sigma', 'caption']:
+                for col in ['sample_id', 'class_label', 'class_name', 'image_path', 'conditioning_sigma', 'caption', 'timestep']:
                     if col in meta_row:
                         row[col] = meta_row[col]
             rows.append(row)
