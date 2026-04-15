@@ -1663,16 +1663,13 @@ class GradioVisualizer:
             def to_noise(val):
                 return _native_to_noise_level(val, adapter)
 
-            # Get native values for sigma_levels from df
-            # sigma_levels from pkl are in the old format, rebuild from native column
-            unique_native = sorted(df[native_col].unique(), reverse=True)
-            converted_levels = [to_noise(s) for s in unique_native]
+            # Convert original sigma_levels directly (preserve order/mapping)
+            converted_levels = [to_noise(s) for s in sigma_levels]
 
             # Rebuild embeddings dict with noise_level keys
-            # Map old sigma_levels to new noise_levels
             new_embeddings = {}
             new_nn_models = {}
-            for old_sigma, new_nl in zip(sigma_levels, converted_levels[:len(sigma_levels)]):
+            for old_sigma, new_nl in zip(sigma_levels, converted_levels):
                 new_embeddings[new_nl] = embeddings_per_sigma[old_sigma]
                 if old_sigma in nn_models:
                     new_nn_models[new_nl] = nn_models[old_sigma]
@@ -1682,7 +1679,7 @@ class GradioVisualizer:
             # Convert columns in df to noise_level
             df["sigma"] = df[native_col].apply(to_noise)
             df["conditioning_sigma"] = df[native_col].apply(to_noise)
-            sigma_levels = converted_levels[:len(sigma_levels)]
+            sigma_levels = converted_levels
 
             # Update timestep_label to indicate noise_level scale
             model_data.timestep_label = "noise"
