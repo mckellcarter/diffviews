@@ -3,7 +3,7 @@ Gradio-based diffusion activation visualizer.
 Port of the Dash visualization app with multi-user support.
 """
 
-__version__ = "c744f53-noise-level-only"
+__version__ = "76301aa-noise-level-only"
 print(f"[diffviews.visualization.app] version: {__version__}")
 
 import argparse

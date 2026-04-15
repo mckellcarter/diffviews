@@ -3,7 +3,7 @@
 # Package installed via git clone in app.py (bypasses pip cache)
 
 # Adapter library (pinned to generation migration)
-adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@9ab2d0c
+adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@76301aa
 
 # Core dependencies
 torch>=2.0.0
