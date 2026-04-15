@@ -1719,15 +1719,17 @@ class GradioVisualizer:
 
         coords = []
         for act, sigma in zip(trajectory_activations, sigmas):
+            # Convert tensor to float if needed
+            sigma_val = float(sigma) if hasattr(sigma, 'item') else float(sigma)
             x, y = project_aligned_trajectory_point(
                 act,
-                sigma,
+                sigma_val,
                 model_data.umap_scaler,
                 model_data.umap_pca,
                 model_data.nn_models_per_sigma,
                 model_data.embeddings_per_sigma,
                 model_data.sigma_levels,
             )
-            coords.append((x, y, sigma))
+            coords.append((x, y, sigma_val))
 
         return coords

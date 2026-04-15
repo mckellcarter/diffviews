@@ -972,6 +972,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             # Project to 2D
                             coords = model_data.umap_reducer.transform(act)
                             sigma = sigmas[i] if i < len(sigmas) else 0.0
+                            sigma = float(sigma) if hasattr(sigma, 'item') else float(sigma)
                             traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
                         except Exception as e:
                             print(f"[Trajectory] Failed to project step {i}: {e}")
