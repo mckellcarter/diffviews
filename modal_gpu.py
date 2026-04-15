@@ -28,7 +28,7 @@ gpu_image = (
         "diffusers>=0.25.0",
         "transformers>=4.30.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@e7c9389")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@8c3c89d")
 )
 
 # Volume for checkpoints only
