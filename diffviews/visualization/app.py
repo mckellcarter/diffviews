@@ -3,7 +3,7 @@ Gradio-based diffusion activation visualizer.
 Port of the Dash visualization app with multi-user support.
 """
 
-__version__ = "d781ef2-sigma-fix-v2"
+__version__ = "4d8741c-sigma-fix-v3"
 print(f"[diffviews.visualization.app] version: {__version__}")
 
 import argparse
@@ -975,7 +975,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             # Project to 2D
                             coords = model_data.umap_reducer.transform(act)
                             sigma = sigmas[i] if i < len(sigmas) else 0.0
-                            sigma = float(sigma) if hasattr(sigma, 'item') else float(sigma)
+                            if hasattr(sigma, 'flatten'):
+                                sigma = sigma.flatten()[0].item()
+                            else:
+                                sigma = float(sigma)
                             traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), sigma))
                         except Exception as e:
                             print(f"[Trajectory] Failed to project step {i}: {e}")
@@ -1032,7 +1035,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             intermediates_state.append([])  # For trajectory hover
             for i, step_img in enumerate(intermediate_imgs):
                 sigma = sigmas[i] if i < len(sigmas) else 0.0
-                sigma = float(sigma) if hasattr(sigma, 'item') else float(sigma)
+                if hasattr(sigma, 'flatten'):
+                    sigma = sigma.flatten()[0].item()
+                else:
+                    sigma = float(sigma)
                 img_np = step_img[0].numpy()
 
                 # Create composite with noised input inset if available

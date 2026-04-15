@@ -1720,7 +1720,10 @@ class GradioVisualizer:
         coords = []
         for act, sigma in zip(trajectory_activations, sigmas):
             # Convert tensor to float if needed
-            sigma_val = float(sigma) if hasattr(sigma, 'item') else float(sigma)
+            if hasattr(sigma, 'flatten'):
+                sigma_val = sigma.flatten()[0].item()
+            else:
+                sigma_val = float(sigma)
             x, y = project_aligned_trajectory_point(
                 act,
                 sigma_val,
