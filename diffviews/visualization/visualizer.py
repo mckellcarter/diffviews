@@ -40,12 +40,15 @@ def _native_to_noise_level(native_value: float, adapter) -> float:
         adapter: GeneratorAdapter with native_to_noise_level method
 
     Returns:
-        noise_level: 0-100 scale (100=pure noise, 0=clean)
+        noise_level: 0-100 scale (100=pure noise, 0=clean), clamped to valid range
     """
     import torch
-    native_tensor = torch.tensor([native_value], dtype=torch.float32)
+    # Clamp input to avoid log(0) = -inf for sigma=0 at final step
+    native_clamped = max(native_value, 1e-8)
+    native_tensor = torch.tensor([native_clamped], dtype=torch.float32)
     noise_level = adapter.native_to_noise_level(native_tensor)
-    return float(noise_level[0].item())
+    # Clamp output to valid range
+    return max(0.0, min(100.0, float(noise_level[0].item())))
 
 
 class GradioVisualizer:
@@ -1657,16 +1660,19 @@ class GradioVisualizer:
         adapter = self.load_adapter(model_name)
         if adapter is not None:
             # Choose native column based on adapter's native format
+            # Note: 3D CSV has 'sigma' column with correct per-slice values,
+            # while 'conditioning_sigma' may only have metadata (single value).
+            # For timestep-based models, 'timestep' column has native values.
             native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
             print(f"[3D] adapter.timestep_label = '{native_label}'")
             if native_label == "t" and "timestep" in df.columns:
-                # DDPM-based: use timestep column (conditioning_sigma is approximation)
+                # DDPM-based: use timestep column
                 native_col = "timestep"
                 print(f"[3D] Using 'timestep' column (DDPM native format)")
             else:
-                # Sigma-based: use conditioning_sigma
-                native_col = "conditioning_sigma"
-                print(f"[3D] Using 'conditioning_sigma' column (sigma native format)")
+                # Sigma-based: use 'sigma' column (has correct per-slice values)
+                native_col = "sigma"
+                print(f"[3D] Using 'sigma' column (sigma native format)")
 
             print(f"[3D] Converting {native_col} to noise_level (0-100)")
 
@@ -1692,8 +1698,10 @@ class GradioVisualizer:
             nn_models = new_nn_models
 
             # Convert columns in df to noise_level
-            df["sigma"] = df[native_col].apply(to_noise)
-            df["conditioning_sigma"] = df[native_col].apply(to_noise)
+            # Must convert before overwriting to avoid double-conversion
+            converted_col = df[native_col].apply(to_noise)
+            df["sigma"] = converted_col
+            df["conditioning_sigma"] = converted_col
             sigma_levels = converted_levels
 
             # Update timestep_label to indicate noise_level scale
