@@ -362,7 +362,6 @@ class GradioVisualizer:
             return
 
         umap_coords = model_data.df[["umap_x", "umap_y"]].values
-        print(f"  [KNN] Fitting on {umap_coords.shape[0]} points")
         NearestNeighbors = get_knn_class()
         model_data.nn_model = NearestNeighbors(n_neighbors=21, metric="euclidean")
         model_data.nn_model.fit(umap_coords)
@@ -1668,15 +1667,6 @@ class GradioVisualizer:
         embeddings_per_sigma = pkl_data["embeddings_per_sigma"]
         nn_models = pkl_data["nn_models"]
 
-        print(f"[3D] Raw sigma_levels from pkl: {sigma_levels}")
-        print(f"[3D] df columns: {list(df.columns)}")
-        if "conditioning_sigma" in df.columns:
-            print(f"[3D] df['conditioning_sigma'] unique: {sorted(df['conditioning_sigma'].unique())}")
-        if "sigma" in df.columns:
-            print(f"[3D] df['sigma'] unique: {sorted(df['sigma'].unique())}")
-        if "timestep" in df.columns:
-            print(f"[3D] df['timestep'] unique: {sorted(df['timestep'].unique())}")
-
         # Convert native sigma/timestep to noise_level (0-100) for model-agnostic viz
         # Load adapter to get native_to_noise_level conversion
         adapter = self.load_adapter(model_name)
@@ -1686,25 +1676,19 @@ class GradioVisualizer:
             # For sigma-based adapters: use sigma column with adapter conversion
             # For timestep-based adapters: if timestep column exists use it, else use sigma-based conversion
             native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
-            print(f"[3D] adapter.timestep_label = '{native_label}'")
 
             if native_label == "t" and "timestep" in df.columns:
                 # DDPM-based with timestep column: use adapter's conversion
                 native_col = "timestep"
                 use_sigma_conversion = False
-                print(f"[3D] Using 'timestep' column with adapter conversion")
             elif native_label == "t":
                 # DDPM-based but no timestep column: data is in sigma format, use sigma conversion
                 native_col = "sigma"
                 use_sigma_conversion = True
-                print(f"[3D] Using 'sigma' column with sigma-based conversion (no timestep column)")
             else:
                 # Sigma-based: use sigma column with adapter conversion
                 native_col = "sigma"
                 use_sigma_conversion = False
-                print(f"[3D] Using 'sigma' column with adapter conversion")
-
-            print(f"[3D] Converting {native_col} to noise_level (0-100)")
 
             if use_sigma_conversion:
                 def to_noise(val):
@@ -1712,11 +1696,6 @@ class GradioVisualizer:
             else:
                 def to_noise(val):
                     return _native_to_noise_level(val, adapter)
-
-            # Debug: show conversion for each sigma level
-            for s in sigma_levels:
-                nl = to_noise(s)
-                print(f"[3D] sigma={s} -> noise_level={nl}")
 
             # Convert original sigma_levels directly (preserve order/mapping)
             converted_levels = [to_noise(s) for s in sigma_levels]
@@ -1740,9 +1719,6 @@ class GradioVisualizer:
 
             # Keep native timestep_label (σ or t) for hover card display
             # Values are internally converted to noise_level but displayed in native format
-            print(f"[3D] Converted levels: {[f'{nl:.1f}' for nl in sigma_levels]}")
-        else:
-            print(f"[3D] Warning: adapter not loaded, using native values")
 
         model_data.sigma_levels = sigma_levels
         model_data.embeddings_per_sigma = embeddings_per_sigma

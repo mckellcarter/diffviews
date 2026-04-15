@@ -972,10 +972,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             # Project trajectory through UMAP (2D or 3D mode)
             traj_coords = []
             if trajectory_acts:
-                print(f"[GEN] native_timesteps: {native_timesteps}")
-                print(f"[GEN] noise_levels for trajectory: {[f'{nl:.2f}' for nl in noise_levels]}")
                 if model_data.is_3d_mode:
-                    print(f"[GEN] model sigma_levels: {[f'{s:.2f}' for s in model_data.sigma_levels]}")
                     # 3D mode: use aligned UMAP projection with noise_levels
                     traj_coords = visualizer.project_trajectory_3d(
                         model_name, trajectory_acts, noise_levels
