@@ -377,7 +377,7 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                # Display as noise level (0-100) for model-agnostic display
+                # conditioning_sigma is noise_level (0-100) in 3D mode, native in 2D
                 details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
@@ -1039,17 +1039,20 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 "caption": caption,
                 "n_steps": n_steps,
                 "final_image": gen_img,
-                "timestep_label": "noise",  # Always use noise_level (0-100) scale
+                "timestep_label": model_data.timestep_label,  # Native format (σ or t)
             }
             gen_infos_state = list(gen_infos_state)
             gen_infos_state.append(gen_info)
 
-            # Build intermediate gallery and state: list of (image, noise_level) tuples
+            # Build intermediate gallery and state: list of (image, native_timestep) tuples
             # Each step shows denoised output with noised input as inset
+            ts_label = model_data.timestep_label
             step_gallery = []
             intermediates_state.append([])  # For trajectory hover
             for i, step_img in enumerate(intermediate_imgs):
-                noise_level = noise_levels[i] if i < len(noise_levels) else 0.0
+                native_ts = native_timesteps[i] if i < len(native_timesteps) else 0.0
+                if hasattr(native_ts, 'item'):
+                    native_ts = native_ts.item()
                 img_np = step_img[0].numpy()
 
                 # Create composite with noised input inset if available
@@ -1059,9 +1062,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 else:
                     composite_img = img_np
 
-                step_caption = f"{display_label} | Step {i+1}/{n_steps} | noise={noise_level:.1f}%"
+                step_caption = f"{display_label} | Step {i+1}/{n_steps} | {ts_label}={native_ts:.1f}"
                 step_gallery.append((composite_img, step_caption))
-                intermediates_state[-1].append((composite_img, noise_level))
+                intermediates_state[-1].append((composite_img, native_ts))
 
             # Gallery label
             gallery_label = f"{display_label} | {n_steps} steps"

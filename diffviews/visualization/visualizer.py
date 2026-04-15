@@ -203,7 +203,7 @@ class GradioVisualizer:
             conditioning_type = config.get("conditioning_type", "class")
             # Text-conditioned models default to CFG=7.5, class-conditioned to 1.0
             guidance_fallback = 7.5 if conditioning_type == "text" else 1.0
-            # Get timestep label from adapter (σ for sigma-based, t for DDPM)
+            # Timestep label: t for DDPM/text-conditioned, σ for sigma-based
             timestep_label = "t" if conditioning_type == "text" else "σ"
             self.model_configs[model_name] = {
                 "data_dir": subdir,
@@ -1731,15 +1731,15 @@ class GradioVisualizer:
             embeddings_per_sigma = new_embeddings
             nn_models = new_nn_models
 
-            # Convert columns in df to noise_level
+            # Convert columns in df to noise_level for internal use
             # Must convert before overwriting to avoid double-conversion
             converted_col = df[native_col].apply(to_noise)
             df["sigma"] = converted_col
             df["conditioning_sigma"] = converted_col
             sigma_levels = converted_levels
 
-            # Update timestep_label to indicate noise_level scale
-            model_data.timestep_label = "noise"
+            # Keep native timestep_label (σ or t) for hover card display
+            # Values are internally converted to noise_level but displayed in native format
             print(f"[3D] Converted levels: {[f'{nl:.1f}' for nl in sigma_levels]}")
         else:
             print(f"[3D] Warning: adapter not loaded, using native values")
