@@ -2,8 +2,8 @@
 # Requires Python 3.10+
 # Package installed via git clone in app.py (bypasses pip cache)
 
-# Adapter library (pinned to masking utilities)
-adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@c943aa1
+# Adapter library (pinned to generation migration)
+adapt_diff @ git+https://github.com/mckellcarter/adapt_diff.git@017c923
 
 # Core dependencies
 torch>=2.0.0
