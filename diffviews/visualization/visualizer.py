@@ -1647,27 +1647,43 @@ class GradioVisualizer:
         # Load adapter to get native_to_noise_level conversion
         adapter = self.load_adapter(model_name)
         if adapter is not None:
-            print(f"[3D] Converting native values to noise_level (0-100)")
+            # Choose native column based on adapter's native format
+            native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
+            if native_label == "t" and "timestep" in df.columns:
+                # DDPM-based: use timestep column (conditioning_sigma is approximation)
+                native_col = "timestep"
+                print(f"[3D] Using 'timestep' column (DDPM native format)")
+            else:
+                # Sigma-based: use conditioning_sigma
+                native_col = "conditioning_sigma"
+                print(f"[3D] Using 'conditioning_sigma' column (sigma native format)")
+
+            print(f"[3D] Converting {native_col} to noise_level (0-100)")
 
             def to_noise(val):
                 return _native_to_noise_level(val, adapter)
 
-            # Convert sigma_levels
-            converted_levels = [to_noise(s) for s in sigma_levels]
-            # Rebuild embeddings dict with new keys
+            # Get native values for sigma_levels from df
+            # sigma_levels from pkl are in the old format, rebuild from native column
+            unique_native = sorted(df[native_col].unique(), reverse=True)
+            converted_levels = [to_noise(s) for s in unique_native]
+
+            # Rebuild embeddings dict with noise_level keys
+            # Map old sigma_levels to new noise_levels
             new_embeddings = {}
             new_nn_models = {}
-            for old_sigma, new_nl in zip(sigma_levels, converted_levels):
+            for old_sigma, new_nl in zip(sigma_levels, converted_levels[:len(sigma_levels)]):
                 new_embeddings[new_nl] = embeddings_per_sigma[old_sigma]
                 if old_sigma in nn_models:
                     new_nn_models[new_nl] = nn_models[old_sigma]
             embeddings_per_sigma = new_embeddings
             nn_models = new_nn_models
-            # Convert sigma columns in df to noise_level
-            df["sigma"] = df["sigma"].apply(to_noise)
-            if "conditioning_sigma" in df.columns:
-                df["conditioning_sigma"] = df["conditioning_sigma"].apply(to_noise)
-            sigma_levels = converted_levels
+
+            # Convert columns in df to noise_level
+            df["sigma"] = df[native_col].apply(to_noise)
+            df["conditioning_sigma"] = df[native_col].apply(to_noise)
+            sigma_levels = converted_levels[:len(sigma_levels)]
+
             # Update timestep_label to indicate noise_level scale
             model_data.timestep_label = "noise"
             print(f"[3D] Converted levels: {[f'{nl:.1f}' for nl in sigma_levels]}")
