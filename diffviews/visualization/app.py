@@ -12,6 +12,7 @@ import json
 import gradio as gr
 
 from diffviews.utils.device import get_device
+from diffviews.visualization.visualizer import _sigma_to_noise_level
 
 # Re-exports for backward compatibility
 from .models import ModelData
@@ -377,8 +378,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                # conditioning_sigma is noise_level (0-100) in 3D mode, native in 2D
-                details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                # Always show noise level % for samples (convert from sigma in 2D mode)
+                if model_data.is_3d_mode:
+                    noise_val = sample['conditioning_sigma']  # Already noise_level
+                else:
+                    noise_val = _sigma_to_noise_level(sample['conditioning_sigma'])
+                details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -427,8 +432,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    # Display as noise level (0-100) for model-agnostic display
-                    details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    # Always show noise level % for samples (convert from sigma in 2D mode)
+                    if model_data.is_3d_mode:
+                        noise_val = sample['conditioning_sigma']  # Already noise_level
+                    else:
+                        noise_val = _sigma_to_noise_level(sample['conditioning_sigma'])
+                    details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -1040,12 +1049,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             noised_inputs = result[idx] if len(result) > idx else []
 
             # Project trajectory through UMAP (2D or 3D mode)
+            # Trajectory coords are 4-tuples: (x, y, noise_level, native_ts)
+            # - noise_level: for z-axis in 3D and internal use
+            # - native_ts: for hover display (σ or t format)
             traj_coords = []
             if trajectory_acts:
                 if model_data.is_3d_mode:
                     # 3D mode: use aligned UMAP projection with noise_levels
                     traj_coords = visualizer.project_trajectory_3d(
-                        model_name, trajectory_acts, noise_levels
+                        model_name, trajectory_acts, noise_levels, native_timesteps
                     )
                 elif model_data.umap_reducer is not None:
                     # 2D mode: standard UMAP transform
@@ -1061,7 +1073,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             # Project to 2D
                             coords = model_data.umap_reducer.transform(act)
                             noise_level = noise_levels[i] if i < len(noise_levels) else 0.0
-                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), noise_level))
+                            native_ts = native_timesteps[i] if i < len(native_timesteps) else 0.0
+                            if hasattr(native_ts, 'item'):
+                                native_ts = native_ts.item()
+                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), noise_level, float(native_ts)))
                         except Exception as e:
                             print(f"[Trajectory] Failed to project step {i}: {e}")
 
