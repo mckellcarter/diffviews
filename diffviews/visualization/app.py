@@ -1049,12 +1049,15 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             noised_inputs = result[idx] if len(result) > idx else []
 
             # Project trajectory through UMAP (2D or 3D mode)
+            # Trajectory coords are 4-tuples: (x, y, noise_level, native_ts)
+            # - noise_level: for z-axis in 3D and internal use
+            # - native_ts: for hover display (σ or t format)
             traj_coords = []
             if trajectory_acts:
                 if model_data.is_3d_mode:
                     # 3D mode: use aligned UMAP projection with noise_levels
                     traj_coords = visualizer.project_trajectory_3d(
-                        model_name, trajectory_acts, noise_levels
+                        model_name, trajectory_acts, noise_levels, native_timesteps
                     )
                 elif model_data.umap_reducer is not None:
                     # 2D mode: standard UMAP transform
@@ -1070,7 +1073,10 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                             # Project to 2D
                             coords = model_data.umap_reducer.transform(act)
                             noise_level = noise_levels[i] if i < len(noise_levels) else 0.0
-                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), noise_level))
+                            native_ts = native_timesteps[i] if i < len(native_timesteps) else 0.0
+                            if hasattr(native_ts, 'item'):
+                                native_ts = native_ts.item()
+                            traj_coords.append((float(coords[0, 0]), float(coords[0, 1]), noise_level, float(native_ts)))
                         except Exception as e:
                             print(f"[Trajectory] Failed to project step {i}: {e}")
 

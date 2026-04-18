@@ -1326,7 +1326,8 @@ class GradioVisualizer:
 
             traj_x = [t[0] for t in traj]
             traj_y = [t[1] for t in traj]
-            traj_sigma = [t[2] for t in traj]
+            # Use native_ts (element[3]) for hover display if available, else noise_level (element[2])
+            traj_native = [t[3] if len(t) > 3 else t[2] for t in traj]
 
             # Line trace for trajectory path
             fig.add_trace(go.Scatter(
@@ -1352,7 +1353,7 @@ class GradioVisualizer:
                     line=dict(width=1, color="white"),
                 ),
                 hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>{model_data.timestep_label}=%{{text:.1f}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
-                text=traj_sigma,
+                text=traj_native,
                 customdata=list(range(1,len(traj)+1)),
                 name=f"trajectory_{traj_idx}",
                 showlegend=False,
@@ -1365,7 +1366,7 @@ class GradioVisualizer:
                 y=[traj_y[0]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=14, color="lime", line=dict(width=1, color="white")),
-                hovertemplate=f"Traj {traj_idx + 1} Start ({ts_label}=%.1f)<extra></extra>" % traj_sigma[0],
+                hovertemplate=f"Traj {traj_idx + 1} Start ({ts_label}=%.1f)<extra></extra>" % traj_native[0],
                 name=f"traj_start_{traj_idx}",
                 showlegend=False,
             ))
@@ -1376,7 +1377,7 @@ class GradioVisualizer:
                 y=[traj_y[-1]],
                 mode="markers",
                 marker=dict(symbol="star", size=18, color="#228B22", line=dict(width=1, color="white")),
-                hovertemplate=f"Traj {traj_idx + 1} End ({ts_label}=%.1f)<extra></extra>" % traj_sigma[-1],
+                hovertemplate=f"Traj {traj_idx + 1} End ({ts_label}=%.1f)<extra></extra>" % traj_native[-1],
                 name=f"traj_end_{traj_idx}",
                 showlegend=False,
             ))
@@ -1499,8 +1500,9 @@ class GradioVisualizer:
 
             traj_x = [t[0] for t in traj]
             traj_y = [t[1] for t in traj]
-            traj_z = [np.log(t[2] + 1e-8) for t in traj]  # sigma -> log(sigma)
-            traj_sigma = [t[2] for t in traj]
+            traj_z = [np.log(t[2] + 1e-8) for t in traj]  # noise_level -> log for z-axis
+            # Use native_ts (element[3]) for hover display if available, else noise_level (element[2])
+            traj_native = [t[3] if len(t) > 3 else t[2] for t in traj]
 
             # Line trace
             fig.add_trace(go.Scatter3d(
@@ -1526,7 +1528,7 @@ class GradioVisualizer:
                     colorscale=[[0, "#90EE90"], [1, "#228B22"]],
                 ),
                 hovertemplate=f"Traj {traj_idx + 1} Step %{{customdata}}<br>{ts_label}=%{{text:.2f}}<extra></extra>",
-                text=traj_sigma,
+                text=traj_native,
                 customdata=list(range(1, len(traj) + 1)),
                 name=f"trajectory_{traj_idx}",
                 showlegend=False,
@@ -1539,7 +1541,7 @@ class GradioVisualizer:
                 z=[traj_z[0]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=10, color="lime"),
-                hovertemplate=f"Traj {traj_idx + 1} Start ({ts_label}={traj_sigma[0]:.2f})<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} Start ({ts_label}={traj_native[0]:.2f})<extra></extra>",
                 name=f"traj_start_{traj_idx}",
                 showlegend=False,
             ))
@@ -1551,7 +1553,7 @@ class GradioVisualizer:
                 z=[traj_z[-1]],
                 mode="markers",
                 marker=dict(symbol="diamond", size=12, color="#228B22"),
-                hovertemplate=f"Traj {traj_idx + 1} End ({ts_label}={traj_sigma[-1]:.2f})<extra></extra>",
+                hovertemplate=f"Traj {traj_idx + 1} End ({ts_label}={traj_native[-1]:.2f})<extra></extra>",
                 name=f"traj_end_{traj_idx}",
                 showlegend=False,
             ))
@@ -1769,28 +1771,35 @@ class GradioVisualizer:
         model_name: str,
         trajectory_activations: List[np.ndarray],
         noise_levels: List[float],
-    ) -> List[Tuple[float, float, float]]:
+        native_timesteps: List[float] = None,
+    ) -> List[Tuple[float, float, float, float]]:
         """Project trajectory activations to 3D coordinates using aligned UMAP.
 
         Args:
             model_name: Model name
             trajectory_activations: List of (1, D) activation arrays per step
             noise_levels: List of noise_level values (0-100) per step
+            native_timesteps: List of native timestep values (σ or t) for hover display
 
         Returns:
-            List of (x, y, noise_level) tuples for 3D trajectory
+            List of (x, y, noise_level, native_ts) tuples for 3D trajectory
         """
         model_data = self.get_model(model_name)
         if not model_data or not model_data.is_3d_mode:
             return []
 
+        native_timesteps = native_timesteps or []
         coords = []
-        for act, noise_level in zip(trajectory_activations, noise_levels):
+        for i, (act, noise_level) in enumerate(zip(trajectory_activations, noise_levels)):
             # Convert tensor to float if needed
             if hasattr(noise_level, 'flatten'):
                 nl_val = noise_level.flatten()[0].item()
             else:
                 nl_val = float(noise_level)
+            # Get native timestep for hover display
+            native_ts = native_timesteps[i] if i < len(native_timesteps) else nl_val
+            if hasattr(native_ts, 'item'):
+                native_ts = native_ts.item()
             x, y = project_aligned_trajectory_point(
                 act,
                 nl_val,
@@ -1800,6 +1809,6 @@ class GradioVisualizer:
                 model_data.embeddings_per_sigma,
                 model_data.sigma_levels,
             )
-            coords.append((x, y, nl_val))
+            coords.append((x, y, nl_val, float(native_ts)))
 
         return coords
