@@ -789,10 +789,29 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
         # --- View mode (2D/3D) handler ---
         def on_view_mode_change(view_mode, model_name):
-            """Handle 2D/3D view mode toggle."""
+            """Handle 2D/3D view mode toggle. Clears selection and generations."""
             model_data = visualizer.get_model(model_name)
+            # 17 outputs total
             if model_data is None:
-                return gr.update(), "No model loaded"
+                return (
+                    gr.update(),                       # umap_plot
+                    "No model loaded",                 # status_text
+                    None,                              # selected_idx
+                    [],                                # manual_neighbors
+                    [],                                # knn_neighbors
+                    {},                                # knn_distances
+                    [],                                # trajectory_coords
+                    [],                                # intermediate_images
+                    -1,                                # animation_frame
+                    [],                                # generation_infos
+                    None,                              # selected_image
+                    "Click a point to select",         # selected_details
+                    None,                              # generated_image
+                    gr.update(value=[], label="Denoising Steps"),  # intermediate_gallery
+                    gr.update(choices=[], value=None), # gen_traj_dropdown
+                    [],                                # neighbor_gallery
+                    "No neighbors selected",           # neighbor_info
+                )
 
             if view_mode == "3D":
                 # Switch to 3D mode (compute if needed)
@@ -800,8 +819,23 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 if not success:
                     # Failed to compute/load 3D, stay in 2D
                     return (
-                        gr.update(),
-                        "3D mode unavailable (need multi-sigma data)"
+                        gr.update(),                       # umap_plot
+                        "3D mode unavailable (need multi-sigma data)",  # status_text
+                        gr.update(),                       # selected_idx (keep)
+                        gr.update(),                       # manual_neighbors
+                        gr.update(),                       # knn_neighbors
+                        gr.update(),                       # knn_distances
+                        gr.update(),                       # trajectory_coords
+                        gr.update(),                       # intermediate_images
+                        gr.update(),                       # animation_frame
+                        gr.update(),                       # generation_infos
+                        gr.update(),                       # selected_image
+                        gr.update(),                       # selected_details
+                        gr.update(),                       # generated_image
+                        gr.update(),                       # intermediate_gallery
+                        gr.update(),                       # gen_traj_dropdown
+                        gr.update(),                       # neighbor_gallery
+                        gr.update(),                       # neighbor_info
                     )
                 mode_str = "3D"
             else:
@@ -811,12 +845,48 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
 
             fig = visualizer.create_umap_figure(model_name)
             n = len(model_data.df)
-            return fig, f"Showing {n} samples ({model_name}) — {mode_str} view"
+            return (
+                fig,                                   # umap_plot
+                f"Showing {n} samples ({model_name}) — {mode_str} view",  # status_text
+                None,                                  # selected_idx
+                [],                                    # manual_neighbors
+                [],                                    # knn_neighbors
+                {},                                    # knn_distances
+                [],                                    # trajectory_coords
+                [],                                    # intermediate_images
+                -1,                                    # animation_frame
+                [],                                    # generation_infos
+                None,                                  # selected_image
+                "Click a point to select",             # selected_details
+                None,                                  # generated_image
+                gr.update(value=[], label="Denoising Steps"),  # intermediate_gallery
+                gr.update(choices=[], value=None),     # gen_traj_dropdown
+                [],                                    # neighbor_gallery
+                "No neighbors selected",               # neighbor_info
+            )
 
         view_mode_radio.change(
             on_view_mode_change,
             inputs=[view_mode_radio, current_model],
-            outputs=[umap_plot, status_text],
+            outputs=[
+                umap_plot,
+                status_text,
+                selected_idx,
+                manual_neighbors,
+                knn_neighbors,
+                knn_distances,
+                trajectory_coords,
+                intermediate_images,
+                animation_frame,
+                generation_infos,
+                selected_image,
+                selected_details,
+                generated_image,
+                intermediate_gallery,
+                gen_traj_dropdown,
+                neighbor_gallery,
+                neighbor_info,
+            ],
         )
 
         # Note: neighbor display is updated directly in click/suggest handlers
