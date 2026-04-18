@@ -328,6 +328,15 @@ class GradioVisualizer:
 
             print(f"  Loaded {len(model_data.df)} samples")
 
+            # Derive noise_min/noise_max from data's conditioning_sigma range
+            if "conditioning_sigma" in model_data.df.columns:
+                sigma_min_data = model_data.df["conditioning_sigma"].min()
+                sigma_max_data = model_data.df["conditioning_sigma"].max()
+                # Convert to noise_level (0-100) using log scale
+                model_data.noise_min = _sigma_to_noise_level(sigma_min_data)
+                model_data.noise_max = _sigma_to_noise_level(sigma_max_data)
+                print(f"  Noise range from data: {model_data.noise_min:.1f}% - {model_data.noise_max:.1f}%")
+
         elif model_data.activations is not None:
             # No embeddings but have activations - compute UMAP on demand
             print(f"  No embeddings found, computing UMAP...")

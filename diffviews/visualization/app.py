@@ -377,8 +377,13 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                # conditioning_sigma is noise_level (0-100) in 3D mode, native in 2D
-                details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                # 3D mode: conditioning_sigma is noise_level (0-100), show as %
+                # 2D mode: conditioning_sigma is native (sigma), show with label
+                if model_data.is_3d_mode:
+                    details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                else:
+                    ts_label = model_data.timestep_label
+                    details += f"{ts_label} = {sample['conditioning_sigma']:.2f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -427,8 +432,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    # Display as noise level (0-100) for model-agnostic display
-                    details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    # 3D mode: noise_level (0-100), 2D mode: native sigma
+                    if model_data.is_3d_mode:
+                        details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    else:
+                        ts_label = model_data.timestep_label
+                        details += f"{ts_label} = {sample['conditioning_sigma']:.2f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
