@@ -12,6 +12,7 @@ import json
 import gradio as gr
 
 from diffviews.utils.device import get_device
+from diffviews.visualization.visualizer import _sigma_to_noise_level
 
 # Re-exports for backward compatibility
 from .models import ModelData
@@ -377,13 +378,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                # 3D mode: conditioning_sigma is noise_level (0-100), show as %
-                # 2D mode: conditioning_sigma is native (sigma), show with label
+                # Always show noise level % for samples (convert from sigma in 2D mode)
                 if model_data.is_3d_mode:
-                    details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    noise_val = sample['conditioning_sigma']  # Already noise_level
                 else:
-                    ts_label = model_data.timestep_label
-                    details += f"{ts_label} = {sample['conditioning_sigma']:.2f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    noise_val = _sigma_to_noise_level(sample['conditioning_sigma'])
+                details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -432,12 +432,12 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    # 3D mode: noise_level (0-100), 2D mode: native sigma
+                    # Always show noise level % for samples (convert from sigma in 2D mode)
                     if model_data.is_3d_mode:
-                        details += f"noise = {sample['conditioning_sigma']:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                        noise_val = sample['conditioning_sigma']  # Already noise_level
                     else:
-                        ts_label = model_data.timestep_label
-                        details += f"{ts_label} = {sample['conditioning_sigma']:.2f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                        noise_val = _sigma_to_noise_level(sample['conditioning_sigma'])
+                    details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
