@@ -1,17 +1,31 @@
 #!/usr/bin/env python
-"""Extract activations from MSCOCO T2I model for visualization.
+"""
+DEPRECATED: Use extract_activations.py instead.
 
-Uses real COCO captions encoded with CLIP ViT-L/14 to match training.
+This script is deprecated in favor of the unified extract_activations.py
+which supports all adapters (DMD2, EDM, MSCOCO) with a consistent interface.
 
-Usage:
-    python scripts/extract_mscoco_activations.py \
+New usage:
+    python scripts/extract_activations.py \
+        --adapter mscoco-t2i-128 \
         --image_dir /Volumes/diffattr_external/datasets/coco/train2017 \
         --captions /Volumes/diffattr_external/datasets/coco/annotations/captions_train2017.json \
-        --checkpoint /Users/mckell/Documents/GitHub/adapt_diff/checkpoints/mscoco/model.bin \
+        --checkpoint /path/to/mscoco/model.bin \
         --output_dir data/mscoco \
-        --num_samples 300 \
-        --device mps
+        --num_samples 300
+
+---
+Original docstring (extract_mscoco_activations.py):
+
+Extract activations from MSCOCO T2I model for visualization.
+Uses real COCO captions encoded with CLIP ViT-L/14 to match training.
 """
+import warnings
+warnings.warn(
+    "extract_mscoco_activations.py is deprecated. Use extract_activations.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import argparse
 import json

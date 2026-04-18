@@ -385,8 +385,19 @@ class GradioVisualizer:
 
         print(f"  Computing UMAP for {model_data.name} ({len(model_data.activations)} samples)...")
 
+        # Get layer names from metadata (what was actually extracted)
+        metadata_path = data_dir / "metadata" / dataset_type / "dataset_info.json"
+        layers = ["midblock"]  # fallback
+        if metadata_path.exists():
+            with open(metadata_path, "r") as f:
+                dataset_info = json.load(f)
+            if "layer_shapes" in dataset_info:
+                layers = list(dataset_info["layer_shapes"].keys())
+            elif "layer" in dataset_info:
+                layers = [dataset_info["layer"]]
+
         # Compute UMAP with PCA pre-reduction for speed
-        umap_params = {"n_neighbors": 15, "min_dist": 0.1, "layers": ["mid_block"]}
+        umap_params = {"n_neighbors": 15, "min_dist": 0.1, "layers": layers}
         pca_components = 50 if model_data.activations.shape[1] > 50 else None
 
         try:
