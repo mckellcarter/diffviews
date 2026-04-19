@@ -1230,8 +1230,9 @@ class GradioVisualizer:
 
         # Calculate opacity based on sigma (high sigma = low alpha, log scale)
         if "conditioning_sigma" in df.columns:
-            sigmas = df["conditioning_sigma"].values
-            log_sigmas = np.log(sigmas + 1e-6)  # Avoid log(0)
+            MIN_SIGMA = 1e-6
+            sigmas = np.maximum(df["conditioning_sigma"].values, MIN_SIGMA)
+            log_sigmas = np.log(sigmas)
             log_min, log_max = np.nanmin(log_sigmas), np.nanmax(log_sigmas)
             if np.isfinite(log_min) and np.isfinite(log_max) and log_max > log_min:
                 # Normalize: high sigma (high log) -> low alpha, low sigma -> high alpha
@@ -1241,7 +1242,7 @@ class GradioVisualizer:
                 opacities = np.where(np.isfinite(opacities), opacities, 0.7)
             else:
                 opacities = np.full(len(df), 0.7)
-            opacities = opacities.tolist()
+            opacities = [float(o) for o in opacities]  # Ensure Python floats
         else:
             opacities = 0.7
 
@@ -1449,13 +1450,23 @@ class GradioVisualizer:
                 colors = ["#1f77b4"] * len(slice_df)
 
             # Opacity based on sigma (high sigma = more transparent)
-            sigma_min = min(model_data.sigma_levels)
-            sigma_max = max(model_data.sigma_levels)
-            if sigma_min > 0 and sigma_max > sigma_min and np.isfinite(sigma):
-                opacity = 0.4 + 0.5 * (1 - (np.log(sigma) - np.log(sigma_min)) /
-                                       (np.log(sigma_max) - np.log(sigma_min) + 1e-8))
-                opacity = float(np.clip(opacity, 0.3, 1.0))
+            # Filter out NaN/inf from sigma_levels, use minimum threshold to avoid log(0)
+            MIN_SIGMA = 1e-6
+            valid_sigmas = [max(s, MIN_SIGMA) for s in model_data.sigma_levels if np.isfinite(s)]
+            sigma_safe = max(sigma, MIN_SIGMA) if np.isfinite(sigma) else MIN_SIGMA
+            if valid_sigmas:
+                sigma_min = min(valid_sigmas)
+                sigma_max = max(valid_sigmas)
+                if sigma_max > sigma_min:
+                    opacity = 0.4 + 0.5 * (1 - (np.log(sigma_safe) - np.log(sigma_min)) /
+                                           (np.log(sigma_max) - np.log(sigma_min) + 1e-8))
+                    opacity = float(np.clip(opacity, 0.3, 1.0))
+                else:
+                    opacity = 0.7
             else:
+                opacity = 0.7
+            # Final safeguard: ensure opacity is a valid Python float
+            if not np.isfinite(opacity):
                 opacity = 0.7
 
             # Store original df indices for click handling
