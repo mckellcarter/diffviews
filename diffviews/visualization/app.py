@@ -378,14 +378,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
             if "class_label" in sample:
                 details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
             if "conditioning_sigma" in sample:
-                # Always show noise level % for samples (convert from sigma in 2D mode)
+                # Show noise level % for samples
                 if model_data.is_3d_mode:
                     noise_val = sample['conditioning_sigma']  # Already noise_level
+                    details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
-                    # Load adapter and use native_to_noise_level for conversion
+                    # 2D mode: try to convert sigma to noise_level
                     adapter = visualizer.load_adapter(model_name)
-                    noise_val = float(adapter.native_to_noise_level(torch.tensor(sample['conditioning_sigma'])))
-                details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    if adapter is not None:
+                        noise_val = float(adapter.native_to_noise_level(torch.tensor(sample['conditioning_sigma'])))
+                        details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                    else:
+                        # Hybrid mode: show sigma directly
+                        details += f"σ = {sample['conditioning_sigma']:.3f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 
@@ -434,14 +439,19 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     class_name = visualizer.get_class_name(int(sample["class_label"]))
                     details += f"Class: {int(sample['class_label'])}: {class_name}<br>"
                 if "conditioning_sigma" in sample:
-                    # Always show noise level % for samples (convert from sigma in 2D mode)
+                    # Show noise level % for samples
                     if model_data.is_3d_mode:
                         noise_val = sample['conditioning_sigma']  # Already noise_level
+                        details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                     else:
-                        # Load adapter and use native_to_noise_level for conversion
+                        # 2D mode: try to convert sigma to noise_level
                         adapter = visualizer.load_adapter(model_name)
-                        noise_val = float(adapter.native_to_noise_level(torch.tensor(sample['conditioning_sigma'])))
-                    details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                        if adapter is not None:
+                            noise_val = float(adapter.native_to_noise_level(torch.tensor(sample['conditioning_sigma'])))
+                            details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
+                        else:
+                            # Hybrid mode: show sigma directly
+                            details += f"σ = {sample['conditioning_sigma']:.3f}  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
 

@@ -1398,18 +1398,25 @@ class GradioVisualizer:
         fig = go.Figure()
 
         # Load adapter for noise_level_to_native conversion
-        import torch
         adapter = self.load_adapter(model_name)
 
-        for noise_level in model_data.sigma_levels:
-            slice_mask = df["sigma"] == noise_level
+        # Helper: convert stored value to actual sigma for Z-axis
+        # If adapter available: stored values are noise_level (0-100), convert to sigma
+        # If adapter None (hybrid mode): stored values are already raw sigma
+        def to_sigma(val):
+            if adapter is not None:
+                return float(adapter.noise_level_to_native(torch.tensor(val)))
+            return float(val)
+
+        for sigma_or_noise in model_data.sigma_levels:
+            slice_mask = df["sigma"] == sigma_or_noise
             slice_df = df[slice_mask]
 
             if slice_df.empty:
                 continue
 
-            # Convert noise_level to native sigma for Z-axis
-            actual_sigma = float(adapter.noise_level_to_native(torch.tensor(noise_level)))
+            # Convert to actual sigma for Z-axis
+            actual_sigma = to_sigma(sigma_or_noise)
             z_val = np.log(actual_sigma + 1e-8)  # Log-scale for Z
 
             # Colors by class
@@ -1453,8 +1460,8 @@ class GradioVisualizer:
             class_df = df[class_mask]
             if not class_df.empty:
                 class_color = color_map.get(str(int(highlighted_class)), "#888888")
-                # Convert noise_level (stored in sigma column) to native sigma for Z-axis
-                z_vals = [np.log(float(adapter.noise_level_to_native(torch.tensor(s))) + 1e-8) for s in class_df["sigma"]]
+                # Convert stored sigma values to actual sigma for Z-axis
+                z_vals = [np.log(to_sigma(s) + 1e-8) for s in class_df["sigma"]]
                 fig.add_trace(go.Scatter3d(
                     x=class_df["umap_x"].tolist(),
                     y=class_df["umap_y"].tolist(),
@@ -1471,8 +1478,8 @@ class GradioVisualizer:
         # Selected point highlight
         if selected_idx is not None and selected_idx in df.index:
             sel_row = df.loc[selected_idx]
-            # Convert noise_level to native sigma for Z-axis
-            z_val = np.log(float(adapter.noise_level_to_native(torch.tensor(sel_row.get("sigma", 1.0)))) + 1e-8)
+            # Convert stored sigma to actual sigma for Z-axis
+            z_val = np.log(to_sigma(sel_row.get("sigma", 1.0)) + 1e-8)
             fig.add_trace(go.Scatter3d(
                 x=[float(sel_row["umap_x"])],
                 y=[float(sel_row["umap_y"])],
@@ -1495,8 +1502,8 @@ class GradioVisualizer:
 
             traj_x = [t[0] for t in traj]
             traj_y = [t[1] for t in traj]
-            # t[2] is noise_level (0-100), convert to native sigma for Z-axis
-            traj_z = [np.log(float(adapter.noise_level_to_native(torch.tensor(t[2]))) + 1e-8) for t in traj]
+            # t[2] is noise_level or sigma depending on mode, convert for Z-axis
+            traj_z = [np.log(to_sigma(t[2]) + 1e-8) for t in traj]
             # Use native_ts (element[3]) for hover display if available, else noise_level (element[2])
             traj_native = [t[3] if len(t) > 3 else t[2] for t in traj]
 
