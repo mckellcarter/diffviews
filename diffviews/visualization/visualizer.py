@@ -1425,14 +1425,14 @@ class GradioVisualizer:
             else:
                 colors = ["#1f77b4"] * len(slice_df)
 
-            # Opacity based on noise_level (high noise = more transparent)
+            # Opacity based on sigma/noise level (high value = more transparent)
             valid_levels = [nl for nl in model_data.sigma_levels if np.isfinite(nl)]
             if valid_levels:
                 nl_min = min(valid_levels)
                 nl_max = max(valid_levels)
                 if nl_max > nl_min:
-                    # Normalize: high noise_level -> low opacity
-                    opacity = 0.4 + 0.5 * (1 - (noise_level - nl_min) / (nl_max - nl_min + 1e-8))
+                    # Normalize: high value -> low opacity
+                    opacity = 0.4 + 0.5 * (1 - (sigma_or_noise - nl_min) / (nl_max - nl_min + 1e-8))
                     opacity = float(np.clip(opacity, 0.3, 1.0))
                 else:
                     opacity = 0.7
