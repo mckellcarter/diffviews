@@ -294,9 +294,12 @@ class GradioVisualizer:
                 sigma_max_data = model_data.df["conditioning_sigma"].max()
                 # Load adapter and use native_to_noise_level for conversion
                 adapter = self.load_adapter(model_name)
-                model_data.noise_min = float(adapter.native_to_noise_level(torch.tensor(sigma_min_data)))
-                model_data.noise_max = float(adapter.native_to_noise_level(torch.tensor(sigma_max_data)))
-                print(f"  Noise range from data: {model_data.noise_min:.1f}% - {model_data.noise_max:.1f}%")
+                if adapter is not None:
+                    model_data.noise_min = float(adapter.native_to_noise_level(torch.tensor(sigma_min_data)))
+                    model_data.noise_max = float(adapter.native_to_noise_level(torch.tensor(sigma_max_data)))
+                    print(f"  Noise range from data: {model_data.noise_min:.1f}% - {model_data.noise_max:.1f}%")
+                else:
+                    print(f"  Adapter not available, using config noise range")
 
         elif model_data.activations is not None:
             # No embeddings but have activations - compute UMAP on demand
