@@ -27,6 +27,8 @@ gpu_image = (
         "tqdm>=4.60.0",
         "diffusers>=0.25.0",
         "transformers>=4.30.0",
+        "umap-learn>=0.5.0",
+        "scikit-learn>=1.0.0",
     )
     .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@2741393")
 )
