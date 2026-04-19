@@ -1232,13 +1232,15 @@ class GradioVisualizer:
         if "conditioning_sigma" in df.columns:
             sigmas = df["conditioning_sigma"].values
             log_sigmas = np.log(sigmas + 1e-6)  # Avoid log(0)
-            log_min, log_max = log_sigmas.min(), log_sigmas.max()
-            if log_max > log_min:
+            log_min, log_max = np.nanmin(log_sigmas), np.nanmax(log_sigmas)
+            if np.isfinite(log_min) and np.isfinite(log_max) and log_max > log_min:
                 # Normalize: high sigma (high log) -> low alpha, low sigma -> high alpha
                 normalized = (log_max - log_sigmas) / (log_max - log_min)
                 opacities = 0.4 + 0.6 * normalized  # Range [0.4, 1.0]
+                # Replace NaN with default opacity
+                opacities = np.where(np.isfinite(opacities), opacities, 0.7)
             else:
-                opacities = [0.7] * len(df)
+                opacities = np.full(len(df), 0.7)
             opacities = opacities.tolist()
         else:
             opacities = 0.7
@@ -1447,8 +1449,14 @@ class GradioVisualizer:
                 colors = ["#1f77b4"] * len(slice_df)
 
             # Opacity based on sigma (high sigma = more transparent)
-            opacity = 0.4 + 0.5 * (1 - (np.log(sigma) - np.log(min(model_data.sigma_levels))) /
-                                   (np.log(max(model_data.sigma_levels)) - np.log(min(model_data.sigma_levels)) + 1e-8))
+            sigma_min = min(model_data.sigma_levels)
+            sigma_max = max(model_data.sigma_levels)
+            if sigma_min > 0 and sigma_max > sigma_min and np.isfinite(sigma):
+                opacity = 0.4 + 0.5 * (1 - (np.log(sigma) - np.log(sigma_min)) /
+                                       (np.log(sigma_max) - np.log(sigma_min) + 1e-8))
+                opacity = float(np.clip(opacity, 0.3, 1.0))
+            else:
+                opacity = 0.7
 
             # Store original df indices for click handling
             slice_indices = slice_df.index.tolist()
