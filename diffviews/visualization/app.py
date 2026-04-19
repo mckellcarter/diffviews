@@ -10,9 +10,9 @@ import argparse
 import json
 
 import gradio as gr
+import torch
 
 from diffviews.utils.device import get_device
-from diffviews.visualization.visualizer import _sigma_to_noise_level
 
 # Re-exports for backward compatibility
 from .models import ModelData
@@ -382,7 +382,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                 if model_data.is_3d_mode:
                     noise_val = sample['conditioning_sigma']  # Already noise_level
                 else:
-                    noise_val = _sigma_to_noise_level(sample['conditioning_sigma'])
+                    # Load adapter and use native_to_noise_level for conversion
+                    adapter = visualizer.load_adapter(model_name)
+                    noise_val = float(adapter.native_to_noise_level(torch.tensor(sample['conditioning_sigma'])))
                 details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
             else:
                 details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
@@ -436,7 +438,9 @@ def create_gradio_app(visualizer: GradioVisualizer) -> gr.Blocks:
                     if model_data.is_3d_mode:
                         noise_val = sample['conditioning_sigma']  # Already noise_level
                     else:
-                        noise_val = _sigma_to_noise_level(sample['conditioning_sigma'])
+                        # Load adapter and use native_to_noise_level for conversion
+                        adapter = visualizer.load_adapter(model_name)
+                        noise_val = float(adapter.native_to_noise_level(torch.tensor(sample['conditioning_sigma'])))
                     details += f"noise = {noise_val:.1f}%  ({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"
                 else:
                     details += f"({sample['umap_x']:.2f}, {sample['umap_y']:.2f})"

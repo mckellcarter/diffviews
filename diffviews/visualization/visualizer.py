@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
 
 import plotly.graph_objects as go
@@ -30,47 +31,6 @@ from adapt_diff import get_adapter, unflatten_activation
 from diffviews.data.cloud_adapter import get_cloud_adapter, cloud_enabled
 from .models import ModelData
 from .gpu_ops import _extract_layer_on_gpu
-
-
-def _native_to_noise_level(native_value: float, adapter) -> float:
-    """Convert native sigma/timestep to noise_level (0-100) using adapter.
-
-    Args:
-        native_value: Native sigma (EDM/DMD2) or timestep (DDPM/SD)
-        adapter: GeneratorAdapter with native_to_noise_level method
-
-    Returns:
-        noise_level: 0-100 scale (100=pure noise, 0=clean), clamped to valid range
-    """
-    import torch
-    # Clamp input to avoid log(0) = -inf for sigma=0 at final step
-    native_clamped = max(native_value, 1e-8)
-    native_tensor = torch.tensor([native_clamped], dtype=torch.float32)
-    noise_level = adapter.native_to_noise_level(native_tensor)
-    # Clamp output to valid range
-    return max(0.0, min(100.0, float(noise_level[0].item())))
-
-
-def _sigma_to_noise_level(sigma: float, sigma_max: float = 80.0, sigma_min: float = 0.002) -> float:
-    """Convert Karras sigma to noise_level (0-100) using log scale.
-
-    Used for 3D visualization where data is stored in Karras sigma format
-    regardless of the underlying model's native format.
-
-    Args:
-        sigma: Karras sigma value
-        sigma_max: Maximum sigma (default 80.0)
-        sigma_min: Minimum sigma (default 0.002)
-
-    Returns:
-        noise_level: 0-100 scale
-    """
-    import math
-    sigma = max(sigma, sigma_min)
-    sigma = min(sigma, sigma_max)
-    log_range = math.log(sigma_max / sigma_min)
-    noise_level = 100.0 * math.log(sigma / sigma_min) / log_range
-    return max(0.0, min(100.0, noise_level))
 
 
 class GradioVisualizer:
@@ -332,9 +292,10 @@ class GradioVisualizer:
             if "conditioning_sigma" in model_data.df.columns:
                 sigma_min_data = model_data.df["conditioning_sigma"].min()
                 sigma_max_data = model_data.df["conditioning_sigma"].max()
-                # Convert to noise_level (0-100) using log scale
-                model_data.noise_min = _sigma_to_noise_level(sigma_min_data)
-                model_data.noise_max = _sigma_to_noise_level(sigma_max_data)
+                # Load adapter and use native_to_noise_level for conversion
+                adapter = self.load_adapter(model_name)
+                model_data.noise_min = float(adapter.native_to_noise_level(torch.tensor(sigma_min_data)))
+                model_data.noise_max = float(adapter.native_to_noise_level(torch.tensor(sigma_max_data)))
                 print(f"  Noise range from data: {model_data.noise_min:.1f}% - {model_data.noise_max:.1f}%")
 
         elif model_data.activations is not None:
@@ -1433,15 +1394,20 @@ class GradioVisualizer:
 
         fig = go.Figure()
 
-        # Plot each sigma slice as a separate trace
-        for sigma in model_data.sigma_levels:
-            slice_mask = df["sigma"] == sigma
+        # Load adapter for noise_level_to_native conversion
+        import torch
+        adapter = self.load_adapter(model_name)
+
+        for noise_level in model_data.sigma_levels:
+            slice_mask = df["sigma"] == noise_level
             slice_df = df[slice_mask]
 
             if slice_df.empty:
                 continue
 
-            z_val = np.log(sigma + 1e-8)  # Log-scale for Z
+            # Convert noise_level to native sigma for Z-axis
+            actual_sigma = float(adapter.noise_level_to_native(torch.tensor(noise_level)))
+            z_val = np.log(actual_sigma + 1e-8)  # Log-scale for Z
 
             # Colors by class
             if "class_label" in slice_df.columns:
@@ -1449,24 +1415,18 @@ class GradioVisualizer:
             else:
                 colors = ["#1f77b4"] * len(slice_df)
 
-            # Opacity based on sigma (high sigma = more transparent)
-            # Filter out NaN/inf from sigma_levels, use minimum threshold to avoid log(0)
-            MIN_SIGMA = 1e-6
-            valid_sigmas = [max(s, MIN_SIGMA) for s in model_data.sigma_levels if np.isfinite(s)]
-            sigma_safe = max(sigma, MIN_SIGMA) if np.isfinite(sigma) else MIN_SIGMA
-            if valid_sigmas:
-                sigma_min = min(valid_sigmas)
-                sigma_max = max(valid_sigmas)
-                if sigma_max > sigma_min:
-                    opacity = 0.4 + 0.5 * (1 - (np.log(sigma_safe) - np.log(sigma_min)) /
-                                           (np.log(sigma_max) - np.log(sigma_min) + 1e-8))
+            # Opacity based on noise_level (high noise = more transparent)
+            valid_levels = [nl for nl in model_data.sigma_levels if np.isfinite(nl)]
+            if valid_levels:
+                nl_min = min(valid_levels)
+                nl_max = max(valid_levels)
+                if nl_max > nl_min:
+                    # Normalize: high noise_level -> low opacity
+                    opacity = 0.4 + 0.5 * (1 - (noise_level - nl_min) / (nl_max - nl_min + 1e-8))
                     opacity = float(np.clip(opacity, 0.3, 1.0))
                 else:
                     opacity = 0.7
             else:
-                opacity = 0.7
-            # Final safeguard: ensure opacity is a valid Python float
-            if not np.isfinite(opacity):
                 opacity = 0.7
 
             # Store original df indices for click handling
@@ -1479,8 +1439,8 @@ class GradioVisualizer:
                 mode="markers",
                 marker=dict(size=4, color=colors, opacity=opacity),
                 customdata=slice_indices,
-                hovertemplate=f"{ts_label}={sigma:.2f}<br>%{{customdata}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
-                name=f"{ts_label}={sigma:.2f}",
+                hovertemplate=f"{ts_label}={actual_sigma:.3f}<br>%{{customdata}}<br>(%{{x:.2f}}, %{{y:.2f}})<extra></extra>",
+                name=f"{ts_label}={actual_sigma:.3f}",
                 showlegend=True,
             ))
 
@@ -1490,7 +1450,8 @@ class GradioVisualizer:
             class_df = df[class_mask]
             if not class_df.empty:
                 class_color = color_map.get(str(int(highlighted_class)), "#888888")
-                z_vals = [np.log(s + 1e-8) for s in class_df["sigma"]]
+                # Convert noise_level (stored in sigma column) to native sigma for Z-axis
+                z_vals = [np.log(float(adapter.noise_level_to_native(torch.tensor(s))) + 1e-8) for s in class_df["sigma"]]
                 fig.add_trace(go.Scatter3d(
                     x=class_df["umap_x"].tolist(),
                     y=class_df["umap_y"].tolist(),
@@ -1507,7 +1468,8 @@ class GradioVisualizer:
         # Selected point highlight
         if selected_idx is not None and selected_idx in df.index:
             sel_row = df.loc[selected_idx]
-            z_val = np.log(sel_row.get("sigma", 1.0) + 1e-8)
+            # Convert noise_level to native sigma for Z-axis
+            z_val = np.log(float(adapter.noise_level_to_native(torch.tensor(sel_row.get("sigma", 1.0)))) + 1e-8)
             fig.add_trace(go.Scatter3d(
                 x=[float(sel_row["umap_x"])],
                 y=[float(sel_row["umap_y"])],
@@ -1530,7 +1492,8 @@ class GradioVisualizer:
 
             traj_x = [t[0] for t in traj]
             traj_y = [t[1] for t in traj]
-            traj_z = [np.log(t[2] + 1e-8) for t in traj]  # noise_level -> log for z-axis
+            # t[2] is noise_level (0-100), convert to native sigma for Z-axis
+            traj_z = [np.log(float(adapter.noise_level_to_native(torch.tensor(t[2]))) + 1e-8) for t in traj]
             # Use native_ts (element[3]) for hover display if available, else noise_level (element[2])
             traj_native = [t[3] if len(t) > 3 else t[2] for t in traj]
 
@@ -1712,31 +1675,18 @@ class GradioVisualizer:
         # Load adapter to get native_to_noise_level conversion
         adapter = self.load_adapter(model_name)
         if adapter is not None:
-            # Choose native column and conversion method based on data format
-            # The 3D data is always computed using Karras sigma values (from conditioning_sigma).
-            # For sigma-based adapters: use sigma column with adapter conversion
-            # For timestep-based adapters: if timestep column exists use it, else use sigma-based conversion
+            # Choose native column based on adapter type
+            # The 3D data uses Karras sigma values (from conditioning_sigma)
             native_label = adapter.timestep_label  # "σ" for sigma, "t" for timestep
 
             if native_label == "t" and "timestep" in df.columns:
-                # DDPM-based with timestep column: use adapter's conversion
                 native_col = "timestep"
-                use_sigma_conversion = False
-            elif native_label == "t":
-                # DDPM-based but no timestep column: data is in sigma format, use sigma conversion
-                native_col = "sigma"
-                use_sigma_conversion = True
             else:
-                # Sigma-based: use sigma column with adapter conversion
                 native_col = "sigma"
-                use_sigma_conversion = False
 
-            if use_sigma_conversion:
-                def to_noise(val):
-                    return _sigma_to_noise_level(val)
-            else:
-                def to_noise(val):
-                    return _native_to_noise_level(val, adapter)
+            # Use adapter's native_to_noise_level for conversion
+            def to_noise(val):
+                return float(adapter.native_to_noise_level(torch.tensor(val)))
 
             # Convert original sigma_levels directly (preserve order/mapping)
             converted_levels = [to_noise(s) for s in sigma_levels]
