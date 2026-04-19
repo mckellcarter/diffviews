@@ -30,7 +30,7 @@ gpu_image = (
         "umap-learn>=0.5.0",
         "scikit-learn>=1.0.0",
     )
-    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@2741393")
+    .pip_install("diffviews @ git+https://github.com/mckellcarter/diffviews.git@4c967b1")
 )
 
 # Volume for checkpoints only
