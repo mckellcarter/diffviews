@@ -202,15 +202,22 @@ def _deserialize_dict(d):
 def _extract_layer_on_gpu(model_name, layer_name, batch_size=32):
     """Extract layer activations on GPU.
 
-    In hybrid mode: not supported (lightweight GPU worker doesn't have extract).
-    Pre-seed all layers to R2 to avoid this.
+    In hybrid mode: dispatches to remote GPU worker.
     Otherwise, runs locally with _app_visualizer.
     """
-    # Hybrid mode: lightweight GPU worker doesn't support extraction
+    import numpy as np
+
+    # Hybrid mode: dispatch to remote GPU worker
     if _remote_gpu_worker is not None:
-        print(f"[gpu_ops] Layer extraction not supported in hybrid mode.")
-        print(f"[gpu_ops] Pre-seed layer '{layer_name}' to R2 to use it.")
-        return None
+        print(f"[gpu_ops] Extracting {layer_name} on remote GPU...")
+        result = _remote_gpu_worker.extract_layer_activations.remote(
+            model_name, layer_name, batch_size
+        )
+        if result is None:
+            print(f"[gpu_ops] Remote extraction failed for {layer_name}")
+            return None
+        # Convert from nested list back to numpy
+        return np.array(result, dtype=np.float32)
 
     # Local mode: run on this machine's GPU
     return _app_visualizer.extract_layer_activations(model_name, layer_name, batch_size)

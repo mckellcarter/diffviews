@@ -198,6 +198,106 @@ class GPUWorker:
         return self._layer_shapes.get(model_name)
 
     @modal.method()
+    def extract_layer_activations(
+        self, model_name: str, layer_name: str, batch_size: int = 32
+    ) -> Optional[List]:
+        """Extract activations for a single layer across all samples.
+
+        Runs batched forward passes, returns flattened (N, D) as nested list.
+        """
+        import json
+        import numpy as np
+        import torch
+        from PIL import Image
+        from adapt_diff import ActivationExtractor
+
+        print(f"[GPU] extract_layer_activations: model={model_name}, layer={layer_name}")
+
+        adapter = self._get_or_load_adapter(model_name)
+        if adapter is None:
+            return None
+
+        # Load metadata from volume
+        config_path = DATA_DIR / model_name / "config.json"
+        if not config_path.exists():
+            print(f"[GPU] No config.json for {model_name}")
+            return None
+
+        with open(config_path) as f:
+            config = json.load(f)
+        dataset_type = config.get("dataset_type", "imagenet_real")
+
+        metadata_path = DATA_DIR / model_name / "metadata" / dataset_type / "dataset_info.json"
+        if not metadata_path.exists():
+            print(f"[GPU] No metadata at {metadata_path}")
+            return None
+
+        with open(metadata_path) as f:
+            dataset_info = json.load(f)
+        samples = dataset_info["samples"]
+
+        n_samples = len(samples)
+        num_classes = adapter.num_classes
+        n_batches = (n_samples + batch_size - 1) // batch_size
+        print(f"[GPU] Extracting {layer_name} for {n_samples} samples ({n_batches} batches)")
+
+        all_activations = []
+        extractor = ActivationExtractor(adapter, [layer_name])
+
+        with extractor:
+            for batch_start in range(0, n_samples, batch_size):
+                batch_end = min(batch_start + batch_size, n_samples)
+                batch_samples = samples[batch_start:batch_end]
+
+                # Load images from PNG paths
+                images = []
+                sigmas = []
+                labels = []
+                for sample in batch_samples:
+                    img_path = DATA_DIR / model_name / sample["image_path"]
+                    img = np.array(Image.open(img_path))  # (H, W, 3) uint8
+                    images.append(img.transpose(2, 0, 1))  # -> (3, H, W)
+                    sigmas.append(sample["conditioning_sigma"])
+                    labels.append(int(sample.get("class_label", 0)))
+
+                # Build tensors
+                img_tensor = torch.from_numpy(np.stack(images)).float().to(self.device)
+                img_tensor = (img_tensor / 127.5) - 1.0
+                sigma_tensor = torch.tensor(sigmas, dtype=torch.float32, device=self.device)
+                x_noisy = img_tensor * sigma_tensor.view(-1, 1, 1, 1)
+
+                # One-hot class labels
+                label_tensor = None
+                if num_classes > 0:
+                    label_tensor = torch.zeros(len(labels), num_classes, device=self.device)
+                    for i, lbl in enumerate(labels):
+                        if 0 <= lbl < num_classes:
+                            label_tensor[i, lbl] = 1.0
+
+                # Forward pass (hooks capture activations)
+                with torch.no_grad():
+                    adapter.forward(x_noisy, sigma_tensor, label_tensor)
+
+                # Grab and flatten
+                act = extractor.get_activations().get(layer_name)
+                if act is not None:
+                    if act.dim() > 2:
+                        act = act.flatten(1)  # (B, C*H*W)
+                    all_activations.append(act.cpu().numpy())
+                extractor.clear()
+
+                batch_idx = batch_start // batch_size
+                if batch_idx % 5 == 0:
+                    print(f"  Batch {batch_idx + 1}/{n_batches}")
+
+        if not all_activations:
+            return None
+
+        result = np.concatenate(all_activations, axis=0)  # (N, D)
+        print(f"[GPU] Extracted {layer_name}: shape {result.shape}")
+        return result.tolist()  # Serialize for Modal
+
+    @modal.method()
     def health_check(self) -> Dict:
         """Check worker health."""
         import torch
