@@ -1408,11 +1408,17 @@ class GradioVisualizer:
                 return float(adapter.noise_level_to_native(torch.tensor(val)))
             return float(val)
 
+        # Debug: show what values we're working with
+        print(f"[3D] sigma_levels: {model_data.sigma_levels}")
+        print(f"[3D] df['sigma'] unique: {sorted(df['sigma'].unique())}")
+
         for sigma_or_noise in model_data.sigma_levels:
-            slice_mask = df["sigma"] == sigma_or_noise
+            # Use isclose for float comparison (CSV serialization can cause precision issues)
+            slice_mask = np.isclose(df["sigma"], sigma_or_noise, rtol=1e-5)
             slice_df = df[slice_mask]
 
             if slice_df.empty:
+                print(f"[3D] Warning: no samples found for sigma={sigma_or_noise}")
                 continue
 
             # Convert to actual sigma for Z-axis
